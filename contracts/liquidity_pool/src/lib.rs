@@ -18,7 +18,7 @@ pub enum Error {
     Unauthorized = 7,
 }
 
-// Event structures for state-changing operations
+/// Event emitted when liquidity is deposited into the pool.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DepositEvent {
@@ -28,6 +28,7 @@ pub struct DepositEvent {
     pub shares_minted: i128,
 }
 
+/// Event emitted after a swap between token A and token B.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SwapEvent {
@@ -38,6 +39,7 @@ pub struct SwapEvent {
     pub amount_out: i128,
 }
 
+/// Event emitted when liquidity is withdrawn from the pool.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WithdrawEvent {
@@ -81,6 +83,11 @@ pub struct LiquidityPool;
 
 #[contractimpl]
 impl LiquidityPool {
+    /// Initialize the pool with the two token addresses. Must be called once before any other
+    /// operation. Sets reserves and total shares to zero.
+    ///
+    /// # Errors
+    /// Returns [`Error::AlreadyInitialized`] if the pool was already set up.
     pub fn initialize(e: Env, token_a: Address, token_b: Address) -> Result<(), Error> {
         if e.storage().instance().has(&DataKey::TokenA) {
             return Err(Error::AlreadyInitialized);
@@ -93,6 +100,19 @@ impl LiquidityPool {
         Ok(())
     }
 
+    /// Add balanced liquidity and mint pool share tokens to `to`.
+    ///
+    /// # Arguments
+    /// * `to` - Account that provides both tokens and receives LP shares.
+    /// * `amount_a` / `amount_b` - Amounts of token A and token B to deposit.
+    ///
+    /// # Returns
+    /// The number of LP shares minted.
+    ///
+    /// # Errors
+    /// - [`Error::NotInitialized`] if the pool was not initialized.
+    /// - [`Error::InsufficientLiquidity`] if math overflows or reserves are zero when required.
+    /// - [`Error::Unauthorized`] if caller did not authorize (propagated via `require_auth`).
     pub fn deposit(e: Env, to: Address, amount_a: i128, amount_b: i128) -> Result<i128, Error> {
         to.require_auth();
 
@@ -184,6 +204,21 @@ impl LiquidityPool {
         Ok(shares)
     }
 
+    /// Swap one token for the other using constant-product pricing.
+    ///
+    /// # Arguments
+    /// * `to` - Account executing the swap; supplies `token_in` and receives `token_out`.
+    /// * `buy_a` - `true` to buy token A with token B, `false` to buy token B with token A.
+    /// * `out` - Desired amount of output token.
+    /// * `in_max` - Maximum acceptable input amount (slippage bound).
+    ///
+    /// # Returns
+    /// The actual amount of input tokens spent.
+    ///
+    /// # Errors
+    /// - [`Error::InsufficientLiquidity`] if the pool cannot satisfy `out`.
+    /// - [`Error::SlippageExceeded`] if required input exceeds `in_max`.
+    /// - [`Error::NotInitialized`] if the pool was not initialized.
     pub fn swap(e: Env, to: Address, buy_a: bool, out: i128, in_max: i128) -> Result<i128, Error> {
         to.require_auth();
 
@@ -265,6 +300,18 @@ impl LiquidityPool {
         Ok(amount_in)
     }
 
+    /// Burn LP shares from `to` and return the proportional token amounts.
+    ///
+    /// # Arguments
+    /// * `to` - Account that owns the shares and receives withdrawn tokens.
+    /// * `share_amount` - Number of LP shares to burn.
+    ///
+    /// # Returns
+    /// Tuple of `(amount_a, amount_b)` paid out to the user.
+    ///
+    /// # Errors
+    /// - [`Error::InsufficientShares`] if the user tries to burn more than they own.
+    /// - [`Error::NotInitialized`] if the pool was not initialized.
     pub fn withdraw(e: Env, to: Address, share_amount: i128) -> Result<(i128, i128), Error> {
         to.require_auth();
 
