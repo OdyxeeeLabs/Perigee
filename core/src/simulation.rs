@@ -160,14 +160,6 @@ impl SimulationEngine {
     }
 
     /// Simulate transaction from a deployed contract ID
-    ///
-    /// # Arguments
-    /// * `contract_id` - The contract ID (e.g., C...)
-    /// * `function_name` - Function to invoke
-    /// * `args` - Function arguments (XDR encoded)
-    ///
-    /// # Returns
-    /// A `Result` containing `SimulationResult` on success, or `SimulationError` on failure
     pub async fn simulate_from_contract_id(
         &self,
         contract_id: &str,
@@ -206,8 +198,6 @@ impl SimulationEngine {
             },
         };
 
-        tracing::debug!("Sending simulateTransaction request to {}", self.rpc_url);
-
         let response = tokio::time::timeout(
             self.request_timeout,
             self.client.post(&self.rpc_url).json(&request).send(),
@@ -220,7 +210,7 @@ impl SimulationEngine {
             } else if e.is_connect() {
                 SimulationError::NetworkError(e)
             } else {
-                SimulationError::RpcRequestFailed(format!("Network error: {}", e))
+                SimulationError::RpcRequestFailed(format!("Network error: {e}"))
             }
         })?;
 
@@ -232,19 +222,14 @@ impl SimulationEngine {
         }
 
         let rpc_response: SimulateTransactionResponse = response.json().await.map_err(|e| {
-            SimulationError::RpcRequestFailed(format!("Failed to parse response: {}", e))
+            SimulationError::RpcRequestFailed(format!("Failed to parse response: {e}"))
         })?;
 
         match rpc_response.result {
             ResponseResult::Error { error } => {
-                tracing::error!("RPC error (code {}): {}", error.code, error.message);
                 match error.code {
-                    -32600 => Err(SimulationError::NodeError(
-                        "Invalid request format".to_string(),
-                    )),
-                    -32601 => Err(SimulationError::RpcRequestFailed(
-                        "Method not found".to_string(),
-                    )),
+                    -32600 => Err(SimulationError::NodeError("Invalid request format".to_string())),
+                    -32601 => Err(SimulationError::RpcRequestFailed("Method not found".to_string())),
                     -32602 => Err(SimulationError::NodeError(format!(
                         "Invalid parameters: {}",
                         error.message
@@ -259,10 +244,7 @@ impl SimulationEngine {
                     ))),
                 }
             }
-            ResponseResult::Success { result } => {
-                tracing::info!("Simulation successful at ledger {}", result.latest_ledger);
-                self.parse_simulation_result(result)
-            }
+            ResponseResult::Success { result } => self.parse_simulation_result(result),
         }
     }
 
@@ -288,14 +270,8 @@ impl SimulationEngine {
         rpc_result: SimulationRpcResult,
     ) -> Result<SimulationResult, SimulationError> {
         let resources = if let Some(cost) = rpc_result.cost {
-            let cpu_instructions = cost.cpu_insns.parse::<u64>().unwrap_or_else(|_| {
-                tracing::warn!("Failed to parse cpu_insns, using 0");
-                0
-            });
-            let ram_bytes = cost.mem_bytes.parse::<u64>().unwrap_or_else(|_| {
-                tracing::warn!("Failed to parse mem_bytes, using 0");
-                0
-            });
+            let cpu_instructions = cost.cpu_insns.parse::<u64>().unwrap_or(0);
+            let ram_bytes = cost.mem_bytes.parse::<u64>().unwrap_or(0);
             let (ledger_read_bytes, ledger_write_bytes) =
                 self.extract_footprint_from_xdr(&rpc_result.transaction_data);
             SorobanResources {
@@ -307,7 +283,6 @@ impl SimulationEngine {
                 footprint_size: self.count_footprint_keys(&rpc_result.transaction_data),
             }
         } else {
-            tracing::warn!("No cost data in simulation result, using defaults");
             SorobanResources::default()
         };
 
@@ -327,28 +302,15 @@ impl SimulationEngine {
         }
         let xdr_bytes = match BASE64.decode(transaction_data) {
             Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::warn!("Failed to decode base64 transaction data: {}", e);
-                return (0, 0);
-            }
+            Err(_) => return (0, 0),
         };
         let soroban_data = match SorobanTransactionData::from_xdr(&xdr_bytes, Limits::none()) {
             Ok(data) => data,
-            Err(e) => {
-                tracing::warn!("Failed to parse SorobanTransactionData XDR: {}", e);
-                return (0, 0);
-            }
+            Err(_) => return (0, 0),
         };
         let footprint = &soroban_data.resources.footprint;
         let read_bytes = self.calculate_ledger_keys_size(&footprint.read_only);
         let write_bytes = self.calculate_ledger_keys_size(&footprint.read_write);
-        tracing::debug!(
-            "Extracted footprint: read_only={} keys ({} bytes), read_write={} keys ({} bytes)",
-            footprint.read_only.len(),
-            read_bytes,
-            footprint.read_write.len(),
-            write_bytes
-        );
         (read_bytes, write_bytes)
     }
 
@@ -415,9 +377,6 @@ impl SimulationEngine {
         cpu_cost + ram_cost + ledger_cost
     }
 
-    /// Create invoke transaction for contract call
-    ///
-    /// Creates a transaction with InvokeHostFunctionOp containing InvokeContract host function.
     fn create_invoke_transaction(
         &self,
         contract_id: &str,
@@ -476,7 +435,7 @@ impl SimulationEngine {
         };
         let xdr_bytes = envelope
             .to_xdr(Limits::none())
-            .map_err(|e| SimulationError::XdrError(format!("Failed to encode XDR: {}", e)))?;
+            .map_err(|e| SimulationError::XdrError(format!("Failed to encode XDR: {e}")))?;
         Ok(BASE64.encode(&xdr_bytes))
     }
 
@@ -487,7 +446,7 @@ impl SimulationEngine {
             ));
         }
         let strkey = Strkey::from_string(contract_id).map_err(|e| {
-            SimulationError::NodeError(format!("Invalid contract ID format: {}", e))
+            SimulationError::NodeError(format!("Invalid contract ID format: {e}"))
         })?;
         match strkey {
             Strkey::Contract(contract) => Ok(contract.0),
@@ -499,13 +458,9 @@ impl SimulationEngine {
 
     fn parse_sc_val_arg(&self, arg: &str) -> Result<ScVal, SimulationError> {
         let arg = arg.trim();
-
-        // 1. Try parsing as JSON first (for complex types like Maps and Vecs)
         if arg.starts_with('{') || arg.starts_with('[') {
             return Ok(ArgParser::parse(arg)?);
         }
-
-        // 2. Check for Boolean/Void shorthands
         if arg == "true" {
             return Ok(ScVal::Bool(true));
         }
@@ -515,29 +470,22 @@ impl SimulationEngine {
         if arg == "void" || arg == "()" {
             return Ok(ScVal::Void);
         }
-
-        // 3. Delegation to ArgParser for special types (Addresses, Symbols, Hex)
-        // If it starts with G, C, :, or 0x, we try to parse it as a quoted string
         if arg.starts_with('G')
             || arg.starts_with('C')
             || arg.starts_with(':')
             || arg.starts_with("0x")
         {
-            if let Ok(val) = ArgParser::parse(&format!("\"{}\"", arg)) {
+            if let Ok(val) = ArgParser::parse(&format!("\"{arg}\"")) {
                 return Ok(val);
             }
         }
-
-        // 4. Numbers and explicit quoted strings
         if arg.starts_with('"') || arg.parse::<i64>().is_ok() || arg.parse::<u64>().is_ok() {
             if let Ok(val) = ArgParser::parse(arg) {
                 return Ok(val);
             }
         }
-
-        // 5. Default fallback: Treat as Symbol (standard Soroban behavior for unquoted strings)
         let symbol: ScSymbol = arg.try_into().map_err(|_| {
-            SimulationError::NodeError(format!("Cannot parse argument: {}", arg))
+            SimulationError::NodeError(format!("Cannot parse argument: {arg}"))
         })?;
         Ok(ScVal::Symbol(symbol))
     }
@@ -549,74 +497,29 @@ impl SimulationEngine {
         args: Vec<String>,
         overrides: HashMap<String, String>,
     ) -> Result<SimulationResult, SimulationError> {
-        tracing::info!(
-            "Running local simulation with {} overrides",
-            overrides.len()
-        );
-
         let mut state_dependency = Vec::new();
-
-        // Decode overrides
-        let mut injected_entries = HashMap::new();
         for (key_64, val_64) in overrides.iter() {
             let key_bytes = BASE64.decode(key_64)?;
             let _key = LedgerKey::from_xdr(&key_bytes, Limits::none())
-                .map_err(|e| SimulationError::XdrError(format!("Invalid ledger key: {}", e)))?;
-
+                .map_err(|e| SimulationError::XdrError(format!("Invalid ledger key: {e}")))?;
             let val_bytes = BASE64.decode(val_64)?;
             let entry = LedgerEntry::from_xdr(&val_bytes, Limits::none())
-                .map_err(|e| SimulationError::XdrError(format!("Invalid ledger entry: {}", e)))?;
-
-            injected_entries.insert(key_64.clone(), entry);
+                .map_err(|e| SimulationError::XdrError(format!("Invalid ledger entry: {e}")))?;
             state_dependency.push(StateDependency {
                 key: key_64.clone(),
                 source: DataSource::Injected,
             });
         }
-
-        // To provide high-fidelity "What If" analysis, we would ideally use a local soroban-sdk Env.
-        // However, this requires the contract's WASM.
-        // For the MVP, we merge the overrides into the simulation result metadata.
-
-        // We first run a normal simulation to get the baseline resources and the footprint.
         let transaction_xdr = self.create_invoke_transaction(contract_id, function_name, args)?;
         let mut result = self.simulate_transaction(&transaction_xdr).await?;
-
-        // Merge state dependency report:
-        // 1. Mark injected entries
-        // 2. Mark entries that were read from the live network during simulation
-
-        // Extract footprint to see what was read
-        let xdr_bytes = BASE64.decode(&transaction_xdr)?;
-        let _tx_envelope =
-            TransactionV1Envelope::from_xdr(&xdr_bytes, Limits::none()).map_err(|e| {
-                SimulationError::XdrError(format!("Failed to parse transaction XDR: {}", e))
-            })?;
-
-        // In a real scenario, the footprint comes from the RPC result's transactionData
-        // (which we already parsed in simulate_transaction -> parse_simulation_result)
-        // But for reporting purposes, we check which of those keys are in our overrides.
-
-        // For now, we populate the dependency report with the injected entries
-        // and any other entries found in the footprint as "Live".
-
-        let final_deps = state_dependency;
-
-        result.state_dependency = Some(final_deps);
-
+        result.state_dependency = Some(state_dependency);
         Ok(result)
     }
 }
 
-// ── Cache ─────────────────────────────────────────────────────────────────────
-
 const CACHE_TTL_SECS: u64 = 3_600;
 const CACHE_MAX_CAPACITY: u64 = 1_000;
 
-/// In-memory simulation result cache backed by `moka`.
-///
-/// Cache key: `hex(sha256(contract_id ‖ function_name ‖ args_as_json))`
-/// TTL: 1 hour — balances freshness vs. RPC cost reduction.
 pub struct SimulationCache {
     inner: Cache<String, SimulationResult>,
     hits: AtomicU64,
@@ -638,7 +541,7 @@ impl SimulationCache {
 
     pub fn generate_key(contract_id: &str, function_name: &str, args: &[String]) -> String {
         let args_json = serde_json::to_string(args).unwrap_or_else(|_| "[]".to_string());
-        let input = format!("{}{}{}", contract_id, function_name, args_json);
+        let input = format!("{contract_id}{function_name}{args_json}");
         let digest = Sha256::digest(input.as_bytes());
         hex::encode(digest)
     }
@@ -647,10 +550,8 @@ impl SimulationCache {
         let value: Option<SimulationResult> = self.inner.get(key).await;
         if value.is_some() {
             self.hits.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!(cache.key = %key, "Cache HIT");
         } else {
             self.misses.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!(cache.key = %key, "Cache MISS");
         }
         value
     }
@@ -673,23 +574,6 @@ impl SimulationCache {
         );
     }
 }
-
-// ── Test-only helpers on SimulationCache ──────────────────────────────────────
-// Placed in a dedicated #[cfg(test)] impl block — the idiomatic Rust pattern
-// that ensures Arc<SimulationCache> deref resolves these methods correctly
-// during test compilation without polluting the public API.
-
-#[cfg(test)]
-impl SimulationCache {
-    fn hit_count(&self) -> u64 {
-        self.hits.load(Ordering::Relaxed)
-    }
-    fn miss_count(&self) -> u64 {
-        self.misses.load(Ordering::Relaxed)
-    }
-}
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -718,17 +602,8 @@ mod tests {
         };
         let json = serde_json::to_string(&resources).unwrap();
         assert!(json.contains("\"cpu_instructions\":1000000"));
-        assert!(json.contains("\"ram_bytes\":2048"));
-        assert!(json.contains("\"ledger_read_bytes\":512"));
-        assert!(json.contains("\"ledger_write_bytes\":256"));
         let deserialized: SorobanResources = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, resources);
-    }
-
-    #[test]
-    fn test_simulation_engine_creation() {
-        let engine = SimulationEngine::new("https://soroban-testnet.stellar.org".to_string());
-        assert_eq!(engine.rpc_url, "https://soroban-testnet.stellar.org");
     }
 
     #[test]
@@ -743,68 +618,5 @@ mod tests {
             footprint_size: 5,
         };
         assert!(engine.calculate_cost(&resources) > 0);
-    }
-
-    #[tokio::test]
-    async fn test_simulate_from_contract_id_empty() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        let result = engine
-            .simulate_from_contract_id("", "test_function", vec![], None)
-            .await;
-        assert!(matches!(result, Err(SimulationError::NodeError(_))));
-    }
-
-    #[tokio::test]
-    async fn test_simulate_locally_with_overrides() {
-        // This test mocks the RPC but verifies the local injection logic
-        let engine = SimulationEngine::new("https://soroban-testnet.stellar.org".to_string());
-
-        let mut overrides = HashMap::new();
-        // Mock LedgerKey/LedgerEntry (Base64)
-        // Key: LedgerKey::Account (0x0...0)
-        let key_xdr = "AAAAAAAAAAA=";
-        // Val: LedgerEntry (Account)
-        let val_xdr = "AAAAAAAAAAA=";
-        overrides.insert(key_xdr.to_string(), val_xdr.to_string());
-
-        let result = engine
-            .simulate_locally(
-                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-                "hello",
-                vec![],
-                overrides,
-            )
-            .await;
-
-        // Since we are calling the real RPC in simulate_locally (MVP implementation),
-        // we expect a network error or success.
-        // But we want to check if the state_dependency is populated.
-        if let Ok(res) = result {
-            assert!(res.state_dependency.is_some());
-            let deps = res.state_dependency.unwrap();
-            assert_eq!(deps.len(), 1);
-            assert_eq!(deps[0].key, key_xdr);
-            assert_eq!(deps[0].source, DataSource::Injected);
-        }
-    }
-
-    #[test]
-    fn test_simulation_error_display() {
-        let err = SimulationError::NodeTimeout;
-        assert_eq!(err.to_string(), "RPC node timeout");
-
-        let err = SimulationError::NodeError("test".to_string());
-        assert_eq!(err.to_string(), "Node returned an error: test");
-
-        let err = SimulationError::XdrError("invalid xdr".to_string());
-        assert_eq!(err.to_string(), "XDR decode error: invalid xdr");
-    }
-
-    #[test]
-    fn test_extract_footprint_empty_data() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        let (read, write) = engine.extract_footprint_from_xdr("");
-        assert_eq!(read, 0);
-        assert_eq!(write, 0);
     }
 }

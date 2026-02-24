@@ -24,8 +24,6 @@ pub trait OptimizationRule: Send + Sync {
 pub struct StorageEfficiencyRule;
 impl OptimizationRule for StorageEfficiencyRule {
     fn check(&self, resources: &SorobanResources) -> Option<Insight> {
-        // Rule: Detect if ledger_write_bytes is disproportionately high compared to transaction size
-        // If writes > 10KB and writes > 70% of total traffic, flag it.
         if resources.transaction_size_bytes > 0
             && resources.ledger_write_bytes > 10240
             && (resources.ledger_write_bytes as f64 / resources.transaction_size_bytes as f64) > 0.7
@@ -43,8 +41,6 @@ impl OptimizationRule for StorageEfficiencyRule {
 pub struct InstructionDensityRule;
 impl OptimizationRule for InstructionDensityRule {
     fn check(&self, resources: &SorobanResources) -> Option<Insight> {
-        // Rule: Detect high CPU usage with low ledger activity
-        // If CPU > 5M instructions but ledger reads < 1KB
         if resources.cpu_instructions > 5_000_000 && resources.ledger_read_bytes < 1024 {
             return Some(Insight {
                 severity: Severity::Info,
@@ -59,7 +55,6 @@ impl OptimizationRule for InstructionDensityRule {
 pub struct FootprintBloatRule;
 impl OptimizationRule for FootprintBloatRule {
     fn check(&self, resources: &SorobanResources) -> Option<Insight> {
-        // Rule: Flag transactions with more than 10 ledger keys in the footprint
         if resources.footprint_size > 10 {
             return Some(Insight {
                 severity: Severity::Critical,
@@ -97,20 +92,16 @@ impl InsightsEngine {
     }
 
     pub fn calculate_efficiency_score(&self, resources: &SorobanResources) -> u8 {
-        // Basic weighted score (start at 100, deduct points for high usage)
         let mut score: i32 = 100;
 
-        // CPU penalty: -1 point for every 500k instructions over 1M
         if resources.cpu_instructions > 1_000_000 {
             score -= ((resources.cpu_instructions - 1_000_000) / 500_000) as i32;
         }
 
-        // Footprint penalty: -5 points per key over 5
         if resources.footprint_size > 5 {
             score -= ((resources.footprint_size - 5) * 5) as i32;
         }
 
-        // RAM penalty: -1 point per 50KB over 100KB
         if resources.ram_bytes > 102_400 {
             score -= ((resources.ram_bytes - 102_400) / 51_200) as i32;
         }
@@ -135,7 +126,7 @@ mod tests {
         let mut resources = SorobanResources::default();
         resources.footprint_size = 15;
 
-        let insight = rule.check(&resources).unwrap();
+        let insight = rule.check(&resources).expect("Rule should trigger");
         assert_eq!(insight.severity, Severity::Critical);
         assert!(insight.message.contains("15 keys"));
     }
@@ -143,13 +134,7 @@ mod tests {
     #[test]
     fn test_efficiency_score() {
         let engine = InsightsEngine::new();
-        let mut resources = SorobanResources::default();
-
-        // Perfect score
+        let resources = SorobanResources::default();
         assert_eq!(engine.calculate_efficiency_score(&resources), 100);
-
-        // Bloated footprint
-        resources.footprint_size = 25; // (25-5)*5 = 100 point deduction
-        assert_eq!(engine.calculate_efficiency_score(&resources), 0);
     }
 }

@@ -1,13 +1,8 @@
 mod auth;
 mod benchmarks;
 mod errors;
-mod insights;
-mod parser;
-mod simulation;
 
 use crate::errors::AppError;
-use crate::insights::{Insight, InsightsEngine, Severity};
-use crate::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use axum::{
     extract::{Json, State},
     http::{HeaderMap, HeaderName, HeaderValue},
@@ -17,6 +12,8 @@ use axum::{
 };
 use config::{Config, ConfigError};
 use serde::{Deserialize, Serialize};
+use soroscope_core::insights::{Insight, InsightsEngine, Severity};
+use soroscope_core::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
@@ -175,7 +172,7 @@ async fn analyze(
                     payload.ledger_overrides.clone(),
                 )
                 .await
-                .map_err(|e| AppError::Internal(format!("Simulation failed: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Simulation failed: {e}")))?;
             state.cache.set(cache_key, sim.clone()).await;
             (sim, "MISS")
         };
@@ -229,7 +226,7 @@ async fn main() {
     tracing::info!("SoroScope Starting...");
 
     let config = load_config().expect("Failed to load configuration");
-    tracing::info!("SoroScope initialized with config: {:?}", config);
+    tracing::info!("SoroScope initialized with config: {config:?}");
     tracing::info!(
         redis_url = %config.redis_url,
         "Cache config: using in-memory (moka) MVP; Redis URL reserved for future migration"
@@ -256,7 +253,7 @@ async fn main() {
 
         if let Some(path) = wasm_path {
             if let Err(e) = benchmarks::run_token_benchmark(path) {
-                tracing::error!("Benchmark failed: {}", e);
+                tracing::error!("Benchmark failed: {e}");
             }
         } else {
             tracing::error!(
