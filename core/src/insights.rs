@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::simulation::SorobanResources;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
@@ -26,8 +26,10 @@ impl OptimizationRule for StorageEfficiencyRule {
     fn check(&self, resources: &SorobanResources) -> Option<Insight> {
         // Rule: Detect if ledger_write_bytes is disproportionately high compared to transaction size
         // If writes > 10KB and writes > 70% of total traffic, flag it.
-        if resources.ledger_write_bytes > 10240 && 
-           (resources.ledger_write_bytes as f64 / resources.transaction_size_bytes as f64) > 0.7 {
+        if resources.transaction_size_bytes > 0
+            && resources.ledger_write_bytes > 10240
+            && (resources.ledger_write_bytes as f64 / resources.transaction_size_bytes as f64) > 0.7
+        {
             return Some(Insight {
                 severity: Severity::Warning,
                 message: "High ledger write volume detected relative to transaction size.".to_string(),
@@ -61,7 +63,10 @@ impl OptimizationRule for FootprintBloatRule {
         if resources.footprint_size > 10 {
             return Some(Insight {
                 severity: Severity::Critical,
-                message: format!("Footprint contains {} keys, exceeding recommended limit (10).", resources.footprint_size),
+                message: format!(
+                    "Footprint contains {} keys, exceeding recommended limit (10).",
+                    resources.footprint_size
+                ),
                 suggested_fix: "Consolidate related data into fewer LedgerEntries or use Instance storage for shared configuration.".to_string(),
             });
         }
@@ -85,7 +90,8 @@ impl InsightsEngine {
     }
 
     pub fn get_insights(&self, resources: &SorobanResources) -> Vec<Insight> {
-        self.rules.iter()
+        self.rules
+            .iter()
             .filter_map(|rule| rule.check(resources))
             .collect()
     }
@@ -113,6 +119,12 @@ impl InsightsEngine {
     }
 }
 
+impl Default for InsightsEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,7 +134,7 @@ mod tests {
         let rule = FootprintBloatRule;
         let mut resources = SorobanResources::default();
         resources.footprint_size = 15;
-        
+
         let insight = rule.check(&resources).unwrap();
         assert_eq!(insight.severity, Severity::Critical);
         assert!(insight.message.contains("15 keys"));
@@ -132,7 +144,7 @@ mod tests {
     fn test_efficiency_score() {
         let engine = InsightsEngine::new();
         let mut resources = SorobanResources::default();
-        
+
         // Perfect score
         assert_eq!(engine.calculate_efficiency_score(&resources), 100);
 

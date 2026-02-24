@@ -6,7 +6,7 @@ mod parser;
 mod simulation;
 
 use crate::errors::AppError;
-use crate::insights::{InsightsEngine, Insight};
+use crate::insights::{Insight, InsightsEngine, Severity};
 use crate::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use axum::{
     extract::{Json, State},
@@ -195,7 +195,7 @@ async fn analyze(
 #[openapi(
     paths(analyze, auth::challenge_handler, auth::verify_handler),
     components(schemas(
-        AnalyzeRequest, ResourceReport, insights::Insight, insights::Severity,
+        AnalyzeRequest, ResourceReport, Insight, Severity,
         auth::ChallengeRequest, auth::ChallengeResponse,
         auth::VerifyRequest, auth::VerifyResponse
     )),
@@ -305,7 +305,7 @@ async fn main() {
         .layer(Extension(auth_state))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .with_state(app_state); // ← thread AppState through all handlers
+        .with_state(app_state);
 
     let bind_addr = format!("0.0.0.0:{}", config.server_port);
     let listener = tokio::net::TcpListener::bind(&bind_addr)

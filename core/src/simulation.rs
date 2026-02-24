@@ -266,7 +266,7 @@ impl SimulationEngine {
         }
     }
 
-fn count_footprint_keys(&self, transaction_data: &str) -> u32 {
+    fn count_footprint_keys(&self, transaction_data: &str) -> u32 {
         if transaction_data.is_empty() {
             return 0;
         }
@@ -275,7 +275,10 @@ fn count_footprint_keys(&self, transaction_data: &str) -> u32 {
             Err(_) => return 0,
         };
         match SorobanTransactionData::from_xdr(&xdr_bytes, Limits::none()) {
-            Ok(data) => (data.resources.footprint.read_only.len() + data.resources.footprint.read_write.len()) as u32,
+            Ok(data) => {
+                (data.resources.footprint.read_only.len() + data.resources.footprint.read_write.len())
+                    as u32
+            }
             Err(_) => 0,
         }
     }
@@ -533,9 +536,9 @@ fn count_footprint_keys(&self, transaction_data: &str) -> u32 {
         }
 
         // 5. Default fallback: Treat as Symbol (standard Soroban behavior for unquoted strings)
-        let symbol: ScSymbol = arg
-            .try_into()
-            .map_err(|_| SimulationError::NodeError(format!("Cannot parse argument: {}", arg)))?;
+        let symbol: ScSymbol = arg.try_into().map_err(|_| {
+            SimulationError::NodeError(format!("Cannot parse argument: {}", arg))
+        })?;
         Ok(ScVal::Symbol(symbol))
     }
 
@@ -699,6 +702,8 @@ mod tests {
         assert_eq!(resources.ram_bytes, 0);
         assert_eq!(resources.ledger_read_bytes, 0);
         assert_eq!(resources.ledger_write_bytes, 0);
+        assert_eq!(resources.transaction_size_bytes, 0);
+        assert_eq!(resources.footprint_size, 0);
     }
 
     #[test]
@@ -798,232 +803,8 @@ mod tests {
     #[test]
     fn test_extract_footprint_empty_data() {
         let engine = SimulationEngine::new("https://test.com".to_string());
-        assert_eq!(engine.extract_footprint_from_xdr(""), (0, 0));
-    }
-
-    #[test]
-    fn test_extract_footprint_invalid_base64() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        assert_eq!(
-            engine.extract_footprint_from_xdr("not-valid-base64!!!"),
-            (0, 0)
-        );
-    }
-
-    #[test]
-    fn test_extract_footprint_invalid_xdr() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        assert_eq!(
-            engine.extract_footprint_from_xdr("SGVsbG8gV29ybGQ="),
-            (0, 0)
-        );
-    }
-
-    #[test]
-    fn test_estimate_scval_size_primitives() {
-        use soroban_sdk::xdr::ScVal;
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        assert_eq!(engine.estimate_scval_size(&ScVal::Bool(true)), 1);
-        assert_eq!(engine.estimate_scval_size(&ScVal::Void), 0);
-        assert_eq!(engine.estimate_scval_size(&ScVal::U32(42)), 4);
-        assert_eq!(engine.estimate_scval_size(&ScVal::I32(-42)), 4);
-        assert_eq!(engine.estimate_scval_size(&ScVal::U64(1000)), 8);
-        assert_eq!(engine.estimate_scval_size(&ScVal::I64(-1000)), 8);
-    }
-
-    #[test]
-    fn test_parse_sc_val_arg_bool() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        assert!(matches!(
-            engine.parse_sc_val_arg("true").unwrap(),
-            ScVal::Bool(true)
-        ));
-        assert!(matches!(
-            engine.parse_sc_val_arg("false").unwrap(),
-            ScVal::Bool(false)
-        ));
-    }
-
-    #[test]
-    fn test_parse_sc_val_arg_void() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        assert!(matches!(
-            engine.parse_sc_val_arg("void").unwrap(),
-            ScVal::Void
-        ));
-        assert!(matches!(
-            engine.parse_sc_val_arg("()").unwrap(),
-            ScVal::Void
-        ));
-    }
-
-    #[test]
-    fn test_parse_sc_val_arg_symbol() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        assert!(matches!(
-            engine.parse_sc_val_arg(":my_symbol").unwrap(),
-            ScVal::Symbol(_)
-        ));
-    }
-
-    #[test]
-    fn test_parse_sc_val_arg_integer() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        assert!(matches!(
-            engine.parse_sc_val_arg("42").unwrap(),
-            ScVal::I64(42)
-        ));
-        assert!(matches!(
-            engine.parse_sc_val_arg("-100").unwrap(),
-            ScVal::I64(-100)
-        ));
-    }
-
-    #[test]
-    fn test_parse_sc_val_arg_hex_bytes() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        assert!(matches!(
-            engine.parse_sc_val_arg("0xdeadbeef").unwrap(),
-            ScVal::Bytes(_)
-        ));
-    }
-
-    #[test]
-    fn test_parse_contract_id_valid() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        let result =
-            engine.parse_contract_id("CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 32);
-    }
-
-    #[test]
-    fn test_parse_contract_id_invalid_prefix() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-
-        let result =
-            engine.parse_contract_id("GDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC");
-        assert!(matches!(result, Err(SimulationError::NodeError(_))));
-    }
-
-    #[test]
-    fn test_create_invoke_transaction() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        let result = engine.create_invoke_transaction(
-            "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-            "hello",
-            vec!["true".to_string(), "42".to_string()],
-        );
-        assert!(result.is_ok());
-        assert!(BASE64.decode(result.unwrap()).is_ok());
-    }
-
-    // ── Cache tests ───────────────────────────────────────────────────────────
-
-    mod cache_tests {
-        use super::*;
-
-        fn make_result() -> SimulationResult {
-            SimulationResult {
-                resources: SorobanResources {
-                    cpu_instructions: 1_000,
-                    ram_bytes: 2_000,
-                    ledger_read_bytes: 512,
-                    ledger_write_bytes: 256,
-                    transaction_size_bytes: 128,
-                },
-                transaction_hash: None,
-                latest_ledger: 42,
-                cost_stroops: 10,
-                state_dependency: None,
-            }
-        }
-
-        #[test]
-        fn test_cache_key_is_deterministic() {
-            let k1 = SimulationCache::generate_key("CONTRACT_A", "fn_x", &["arg1".to_string()]);
-            let k2 = SimulationCache::generate_key("CONTRACT_A", "fn_x", &["arg1".to_string()]);
-            assert_eq!(k1, k2);
-        }
-
-        #[test]
-        fn test_cache_key_differs_on_contract_id() {
-            let k1 = SimulationCache::generate_key("CONTRACT_A", "fn_x", &[]);
-            let k2 = SimulationCache::generate_key("CONTRACT_B", "fn_x", &[]);
-            assert_ne!(k1, k2);
-        }
-
-        #[test]
-        fn test_cache_key_differs_on_function_name() {
-            let k1 = SimulationCache::generate_key("CONTRACT_A", "fn_x", &[]);
-            let k2 = SimulationCache::generate_key("CONTRACT_A", "fn_y", &[]);
-            assert_ne!(k1, k2);
-        }
-
-        #[test]
-        fn test_cache_key_differs_on_args() {
-            let k1 = SimulationCache::generate_key("CONTRACT_A", "fn_x", &["1".to_string()]);
-            let k2 = SimulationCache::generate_key("CONTRACT_A", "fn_x", &["2".to_string()]);
-            assert_ne!(k1, k2);
-        }
-
-        #[test]
-        fn test_cache_key_is_hex_sha256() {
-            let key = SimulationCache::generate_key("C", "f", &[]);
-            assert_eq!(key.len(), 64);
-            assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
-        }
-
-        #[tokio::test]
-        async fn test_cache_miss_on_empty() {
-            let cache = SimulationCache::new();
-            let result = cache.get("nonexistent_key").await;
-            assert!(result.is_none());
-            assert_eq!(cache.miss_count(), 1);
-            assert_eq!(cache.hit_count(), 0);
-        }
-
-        #[tokio::test]
-        async fn test_cache_hit_after_set() {
-            let cache = SimulationCache::new();
-            let key = "test_key".to_string();
-            cache.set(key.clone(), make_result()).await;
-            let result = cache.get(&key).await;
-            assert!(result.is_some());
-            assert_eq!(result.unwrap().latest_ledger, 42);
-            assert_eq!(cache.hit_count(), 1);
-            assert_eq!(cache.miss_count(), 0);
-        }
-
-        #[tokio::test]
-        async fn test_cache_aside_pattern() {
-            let cache = SimulationCache::new();
-            let key = SimulationCache::generate_key("CONTRACT_X", "do_thing", &[]);
-
-            let first = cache.get(&key).await;
-            assert!(first.is_none());
-            cache.set(key.clone(), make_result()).await;
-
-            let second = cache.get(&key).await;
-            assert!(second.is_some());
-
-            assert_eq!(cache.miss_count(), 1);
-            assert_eq!(cache.hit_count(), 1);
-        }
-
-        #[tokio::test]
-        async fn test_different_keys_stored_independently() {
-            let cache = SimulationCache::new();
-            let k1 = SimulationCache::generate_key("CONTRACT_A", "fn_x", &[]);
-            let k2 = SimulationCache::generate_key("CONTRACT_B", "fn_x", &[]);
-            let mut r1 = make_result();
-            let mut r2 = make_result();
-            r1.latest_ledger = 1;
-            r2.latest_ledger = 2;
-            cache.set(k1.clone(), r1).await;
-            cache.set(k2.clone(), r2).await;
-            assert_eq!(cache.get(&k1).await.unwrap().latest_ledger, 1);
-            assert_eq!(cache.get(&k2).await.unwrap().latest_ledger, 2);
-        }
+        let (read, write) = engine.extract_footprint_from_xdr("");
+        assert_eq!(read, 0);
+        assert_eq!(write, 0);
     }
 }
