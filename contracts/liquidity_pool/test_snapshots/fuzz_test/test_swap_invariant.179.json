@@ -59,7 +59,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 306691531030684247
+                    "lo": 705852797722407505
                   }
                 }
               ]
@@ -84,7 +84,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 63070874828821703
+                    "lo": 558103382793344766
                   }
                 }
               ]
@@ -109,13 +109,13 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 306691531030684247
+                    "lo": 705852797722407505
                   }
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 63070874828821703
+                    "lo": 558103382793344766
                   }
                 }
               ]
@@ -137,7 +137,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 306691531030684247
+                        "lo": 705852797722407505
                       }
                     }
                   ]
@@ -160,7 +160,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 63070874828821703
+                        "lo": 558103382793344766
                       }
                     }
                   ]
@@ -222,65 +222,6 @@
         }
       ]
     ],
-    [
-      [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-        {
-          "function": {
-            "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
-              "function_name": "swap",
-              "args": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                },
-                {
-                  "bool": false
-                },
-                {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 10681911482454475
-                  }
-                },
-                {
-                  "i128": {
-                    "hi": 2,
-                    "lo": 13106511852580896768
-                  }
-                }
-              ]
-            }
-          },
-          "sub_invocations": [
-            {
-              "function": {
-                "contract_fn": {
-                  "contract_address": "CBEPDNVYXQGWB5YUBXKJWYJA7OXTZW5LFLNO5JRRGE6Z6C5OSUZPCCEL",
-                  "function_name": "transfer",
-                  "args": [
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
-                    },
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
-                    },
-                    {
-                      "i128": {
-                        "hi": 0,
-                        "lo": 62721407440530413
-                      }
-                    }
-                  ]
-                }
-              },
-              "sub_invocations": []
-            }
-          ]
-        }
-      ]
-    ],
-    [],
     []
   ],
   "ledger": {
@@ -585,7 +526,7 @@
                 "val": {
                   "i128": {
                     "hi": 0,
-                    "lo": 139080204071952573
+                    "lo": 627645468527434003
                   }
                 }
               }
@@ -656,7 +597,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 369412938471214660
+                            "lo": 705852797722407505
                           }
                         }
                       },
@@ -671,7 +612,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 52388963346367228
+                            "lo": 558103382793344766
                           }
                         }
                       },
@@ -710,7 +651,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 139080204071952573
+                            "lo": 627645468527434003
                           }
                         }
                       }
@@ -746,39 +687,6 @@
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 2032731177588607455
-                  }
-                },
-                "durability": "temporary",
-                "val": "void"
-              }
-            },
-            "ext": "v0"
-          },
-          6311999
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-            "key": {
-              "ledger_key_nonce": {
-                "nonce": 6277191135259896685
-              }
-            },
-            "durability": "temporary"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
-                "key": {
-                  "ledger_key_nonce": {
-                    "nonce": 6277191135259896685
                   }
                 },
                 "durability": "temporary",
@@ -834,7 +742,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 369412938471214660
+                          "lo": 705852797722407505
                         }
                       }
                     },
@@ -980,7 +888,7 @@
                       "val": {
                         "i128": {
                           "hi": 2,
-                          "lo": 13043790445140366355
+                          "lo": 13106511852580896768
                         }
                       }
                     },
@@ -1165,7 +1073,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 52388963346367228
+                          "lo": 558103382793344766
                         }
                       }
                     },
@@ -1311,7 +1219,7 @@
                       "val": {
                         "i128": {
                           "hi": 2,
-                          "lo": 13117193764063351243
+                          "lo": 13106511852580896768
                         }
                       }
                     },

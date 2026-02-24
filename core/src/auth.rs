@@ -1,11 +1,5 @@
 use crate::errors::AppError;
-use axum::{
-    extract::Request,
-    http::header,
-    middleware::Next,
-    response::Response,
-    Extension, Json,
-};
+use axum::{extract::Request, http::header, middleware::Next, response::Response, Extension, Json};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
@@ -17,9 +11,9 @@ use soroban_sdk::xdr::{
     Preconditions, ReadXdr, SequenceNumber, SignatureHint, TimeBounds, TimePoint, Transaction,
     TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, WriteXdr,
 };
-use stellar_strkey::Strkey;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use stellar_strkey::Strkey;
 use utoipa::ToSchema;
 
 const CHALLENGE_EXPIRY_SECS: u64 = 300;
@@ -186,10 +180,7 @@ fn build_challenge_envelope(
     Ok(BASE64.encode(&xdr))
 }
 
-fn verify_challenge_envelope(
-    state: &AuthState,
-    signed_xdr_b64: &str,
-) -> Result<String, AppError> {
+fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str) -> Result<String, AppError> {
     let raw = BASE64
         .decode(signed_xdr_b64)
         .map_err(|_| AppError::BadRequest("Invalid base64".into()))?;
@@ -199,15 +190,17 @@ fn verify_challenge_envelope(
 
     let inner = match envelope {
         TransactionEnvelope::Tx(inner) => inner,
-        _ => return Err(AppError::BadRequest("Expected TransactionV1 envelope".into())),
+        _ => {
+            return Err(AppError::BadRequest(
+                "Expected TransactionV1 envelope".into(),
+            ))
+        }
     };
 
     let tx = &inner.tx;
 
     if tx.seq_num.0 != 0 {
-        return Err(AppError::BadRequest(
-            "Non-zero sequence number".into(),
-        ));
+        return Err(AppError::BadRequest("Non-zero sequence number".into()));
     }
 
     let source_key = match &tx.source_account {
@@ -257,11 +250,7 @@ fn verify_challenge_envelope(
                 return Err(AppError::BadRequest("Invalid manage_data key".into()));
             }
         }
-        _ => {
-            return Err(AppError::BadRequest(
-                "Expected ManageData operation".into(),
-            ))
-        }
+        _ => return Err(AppError::BadRequest("Expected ManageData operation".into())),
     }
 
     let net_id = network_id(&state.network_passphrase);

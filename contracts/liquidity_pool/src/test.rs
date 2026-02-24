@@ -369,12 +369,18 @@ fn test_events() {
 
     // Verify deposit event data
     let (contract_addr, topics, data) = &deposit_events[0];
-    assert_eq!(contract_addr, &contract_id, "Event should be emitted from liquidity pool contract");
-    
+    assert_eq!(
+        contract_addr, &contract_id,
+        "Event should be emitted from liquidity pool contract"
+    );
+
     // Convert topic Val to Address for comparison
     let topic_user: Address = topics.get(1).unwrap().try_into_val(&e).unwrap();
-    assert_eq!(topic_user, user1, "Deposit event should contain user1 address in topics");
-    
+    assert_eq!(
+        topic_user, user1,
+        "Deposit event should contain user1 address in topics"
+    );
+
     // Convert data Val to DepositEvent
     let deposit_event: DepositEvent = data.try_into_val(&e).unwrap();
     assert_eq!(deposit_event.user, user1);
@@ -406,12 +412,18 @@ fn test_events() {
 
     // Verify swap event data
     let (contract_addr, topics, data) = &swap_events[0];
-    assert_eq!(contract_addr, &contract_id, "Event should be emitted from liquidity pool contract");
-    
+    assert_eq!(
+        contract_addr, &contract_id,
+        "Event should be emitted from liquidity pool contract"
+    );
+
     // Convert topic Val to Address for comparison
     let topic_user: Address = topics.get(1).unwrap().try_into_val(&e).unwrap();
-    assert_eq!(topic_user, user2, "Swap event should contain user2 address in topics");
-    
+    assert_eq!(
+        topic_user, user2,
+        "Swap event should contain user2 address in topics"
+    );
+
     // Convert data Val to SwapEvent
     let swap_event: SwapEvent = data.try_into_val(&e).unwrap();
     assert_eq!(swap_event.user, user2);
@@ -444,12 +456,18 @@ fn test_events() {
 
     // Verify withdraw event data
     let (contract_addr, topics, data) = &withdraw_events[0];
-    assert_eq!(contract_addr, &contract_id, "Event should be emitted from liquidity pool contract");
-    
+    assert_eq!(
+        contract_addr, &contract_id,
+        "Event should be emitted from liquidity pool contract"
+    );
+
     // Convert topic Val to Address for comparison
     let topic_user: Address = topics.get(1).unwrap().try_into_val(&e).unwrap();
-    assert_eq!(topic_user, user1, "Withdraw event should contain user1 address in topics");
-    
+    assert_eq!(
+        topic_user, user1,
+        "Withdraw event should contain user1 address in topics"
+    );
+
     // Convert data Val to WithdrawEvent
     let withdraw_event: WithdrawEvent = data.try_into_val(&e).unwrap();
     assert_eq!(withdraw_event.user, user1);
@@ -861,8 +879,12 @@ fn test_get_fee_default() {
     let client = LiquidityPoolClient::new(&e, &contract_id);
 
     let admin = Address::generate(&e);
-    let token_a = e.register_stellar_asset_contract_v2(admin.clone()).address();
-    let token_b = e.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     client.initialize(&admin, &token_a, &token_b);
 
@@ -879,8 +901,12 @@ fn test_set_fee_valid() {
     let client = LiquidityPoolClient::new(&e, &contract_id);
 
     let admin = Address::generate(&e);
-    let token_a = e.register_stellar_asset_contract_v2(admin.clone()).address();
-    let token_b = e.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     client.initialize(&admin, &token_a, &token_b);
 
@@ -907,8 +933,12 @@ fn test_set_fee_above_max() {
     let client = LiquidityPoolClient::new(&e, &contract_id);
 
     let admin = Address::generate(&e);
-    let token_a = e.register_stellar_asset_contract_v2(admin.clone()).address();
-    let token_b = e.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     client.initialize(&admin, &token_a, &token_b);
 
@@ -925,8 +955,12 @@ fn test_burn() {
     let client = LiquidityPoolClient::new(&e, &contract_id);
 
     let admin = Address::generate(&e);
-    let token_a = e.register_stellar_asset_contract_v2(admin.clone()).address();
-    let token_b = e.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let token_a_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_a);
     let token_b_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_b);
@@ -965,8 +999,12 @@ fn test_burn_insufficient_shares() {
     let client = LiquidityPoolClient::new(&e, &contract_id);
 
     let admin = Address::generate(&e);
-    let token_a = e.register_stellar_asset_contract_v2(admin.clone()).address();
-    let token_b = e.register_stellar_asset_contract_v2(admin.clone()).address();
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
 
     let token_a_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_a);
     let token_b_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_b);
@@ -1019,12 +1057,22 @@ fn test_deposit_zero_amount() {
     // --- Scenario 1: First deposit with both amounts = 0 ---
     // sqrt(0 * 0) = 0, so 0 shares should be minted without panicking.
     let shares = client.deposit(&user, &0, &0);
-    assert_eq!(shares, 0, "Depositing (0, 0) as first liquidity must mint 0 shares");
-    assert_eq!(client.total_supply(), 0, "Total supply must remain 0 after zero deposit");
+    assert_eq!(
+        shares, 0,
+        "Depositing (0, 0) as first liquidity must mint 0 shares"
+    );
+    assert_eq!(
+        client.total_supply(),
+        0,
+        "Total supply must remain 0 after zero deposit"
+    );
 
     // --- Scenario 2: Seed the pool with real liquidity, then deposit zero ---
     let initial_shares = client.deposit(&user, &1000, &1000);
-    assert_eq!(initial_shares, 1000, "Initial deposit should mint sqrt(1000*1000) = 1000 shares");
+    assert_eq!(
+        initial_shares, 1000,
+        "Initial deposit should mint sqrt(1000*1000) = 1000 shares"
+    );
 
     let token_a_client = soroban_sdk::token::Client::new(&e, &token_a);
     let token_b_client = soroban_sdk::token::Client::new(&e, &token_b);
@@ -1034,7 +1082,10 @@ fn test_deposit_zero_amount() {
     // Deposit 0 of each into a pool that already has reserves
     // Proportional formula: min(0 * total / reserve_a, 0 * total / reserve_b) = 0
     let zero_shares = client.deposit(&user, &0, &0);
-    assert_eq!(zero_shares, 0, "Depositing (0, 0) into funded pool must mint 0 shares");
+    assert_eq!(
+        zero_shares, 0,
+        "Depositing (0, 0) into funded pool must mint 0 shares"
+    );
     assert_eq!(
         client.total_supply(),
         initial_shares,

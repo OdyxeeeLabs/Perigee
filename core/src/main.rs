@@ -4,7 +4,7 @@ mod errors;
 
 use crate::errors::AppError;
 use axum::{
-    extract::Json,
+    extract::{Json, Multipart},
     middleware,
     routing::{get, post},
     Extension, Router,
@@ -12,15 +12,20 @@ use axum::{
 use config::{Config, ConfigError};
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tempfile::NamedTempFile;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
-#[derive(Debug, Deserialize)]
+use soroscope_core::comparison::{run_comparison, CompareMode, RegressionReport};
+use soroscope_core::simulation::SimulationEngine;
+
+#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 struct AppConfig {
     server_port: u16,
@@ -94,11 +99,151 @@ async fn analyze(Json(payload): Json<AnalyzeRequest>) -> Result<Json<ResourceRep
     Ok(Json(report))
 }
 
+#[derive(Serialize, ToSchema)]
+struct CompareApiResponse {
+    report: RegressionReport,
+}
+
+#[derive(ToSchema)]
+#[allow(dead_code)]
+struct CompareApiMultipartRequest {
+    #[schema(example = "local_vs_local")]
+    mode: String,
+    #[schema(value_type = String, format = Binary)]
+    current_wasm: String,
+    #[schema(value_type = String, format = Binary)]
+    base_wasm: Option<String>,
+    #[schema(example = "C1234...")]
+    contract_id: Option<String>,
+    #[schema(example = "hello")]
+    function_name: Option<String>,
+    #[schema(example = "[\"arg1\", \"12\"]")]
+    args: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/analyze/compare",
+    request_body(content = CompareApiMultipartRequest, content_type = "multipart/form-data", description = "Multipart form with mode, current_wasm, and base_wasm/contract details"),
+    responses(
+        (status = 200, description = "Comparison successful", body = CompareApiResponse),
+        (status = 400, description = "Bad request"),
+        (status = 500, description = "Simulation failed")
+    ),
+    tag = "Analysis"
+)]
+
+async fn compare_handler(
+    Extension(config): Extension<Arc<AppConfig>>,
+    mut multipart: Multipart,
+) -> Result<Json<CompareApiResponse>, AppError> {
+    let mut mode = String::new();
+    let mut current_wasm: Option<NamedTempFile> = None;
+    let mut base_wasm: Option<NamedTempFile> = None;
+    let mut contract_id = String::new();
+    let mut function_name = String::new();
+    let mut args_raw = String::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(e.to_string()))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+
+        match name.as_str() {
+            "mode" => {
+                mode = field.text().await.unwrap_or_default();
+            }
+            "contract_id" => {
+                contract_id = field.text().await.unwrap_or_default();
+            }
+            "function_name" => {
+                function_name = field.text().await.unwrap_or_default();
+            }
+            "args" => {
+                args_raw = field.text().await.unwrap_or_default();
+            }
+            "current_wasm" => {
+                let data = field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::BadRequest(e.to_string()))?;
+                let mut temp_file =
+                    NamedTempFile::new().map_err(|e| AppError::Internal(e.to_string()))?;
+                temp_file
+                    .write_all(&data)
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+                current_wasm = Some(temp_file);
+            }
+            "base_wasm" => {
+                let data = field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::BadRequest(e.to_string()))?;
+                let mut temp_file =
+                    NamedTempFile::new().map_err(|e| AppError::Internal(e.to_string()))?;
+                temp_file
+                    .write_all(&data)
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+                base_wasm = Some(temp_file);
+            }
+            _ => {}
+        }
+    }
+
+    let current_wasm_path = current_wasm
+        .ok_or_else(|| AppError::BadRequest("Missing current_wasm".to_string()))?
+        .into_temp_path()
+        .to_path_buf();
+
+    let compare_mode = match mode.as_str() {
+        "local_vs_local" => {
+            let base_wasm_path = base_wasm
+                .ok_or_else(|| AppError::BadRequest("Missing base_wasm".to_string()))?
+                .into_temp_path()
+                .to_path_buf();
+            CompareMode::LocalVsLocal {
+                current_wasm_path,
+                base_wasm_path,
+            }
+        }
+        "local_vs_deployed" => {
+            if contract_id.is_empty() || function_name.is_empty() {
+                return Err(AppError::BadRequest(
+                    "Missing contract_id or function_name".to_string(),
+                ));
+            }
+            let args = if args_raw.is_empty() {
+                vec![]
+            } else {
+                args_raw.split(',').map(|s| s.trim().to_string()).collect()
+            };
+            CompareMode::LocalVsDeployed {
+                current_wasm_path,
+                contract_id,
+                function_name,
+                args,
+            }
+        }
+        _ => return Err(AppError::BadRequest("Invalid mode".to_string())),
+    };
+
+    let engine = SimulationEngine::new(config.soroban_rpc_url.clone());
+
+    let report = run_comparison(&engine, compare_mode)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    Ok(Json(CompareApiResponse { report }))
+}
+
 #[derive(OpenApi)]
 #[openapi(
-    paths(analyze, auth::challenge_handler, auth::verify_handler),
+    paths(analyze, compare_handler, auth::challenge_handler, auth::verify_handler),
     components(schemas(
         AnalyzeRequest, ResourceReport,
+        CompareApiMultipartRequest, CompareApiResponse, RegressionReport, soroscope_core::comparison::ResourceDelta, soroscope_core::comparison::RegressionFlag,
         auth::ChallengeRequest, auth::ChallengeResponse,
         auth::VerifyRequest, auth::VerifyResponse
     )),
@@ -176,6 +321,77 @@ async fn main() {
         return;
     }
 
+    if args.len() > 1 && args[1] == "compare" {
+        if args.len() < 4 {
+            tracing::error!(
+                "Usage: cargo run -p soroscope-core -- compare path/to/v1.wasm path/to/v2.wasm"
+            );
+            return;
+        }
+        tracing::info!("Starting SoroScope Compare...");
+
+        let path1 = PathBuf::from(&args[2]);
+        let path2 = PathBuf::from(&args[3]);
+
+        if !path1.exists() {
+            tracing::error!("File not found: {:?}", path1);
+            return;
+        }
+        if !path2.exists() {
+            tracing::error!("File not found: {:?}", path2);
+            return;
+        }
+
+        let engine = SimulationEngine::new(config.soroban_rpc_url.clone());
+        let mode = CompareMode::LocalVsLocal {
+            current_wasm_path: path1,
+            base_wasm_path: path2,
+        };
+
+        // Create a local async runtime for the CLI
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        match rt.block_on(run_comparison(&engine, mode)) {
+            Ok(report) => {
+                println!("\n=== Regression Report ===");
+                println!("Summary: {}", report.summary);
+
+                println!("\nMetrics (Current vs Base):");
+                println!(
+                    "CPU Instructions: {} vs {} ({:+.1}%)",
+                    report.current.cpu_instructions,
+                    report.base.cpu_instructions,
+                    report.deltas.cpu_instructions
+                );
+                println!(
+                    "RAM Bytes: {} vs {} ({:+.1}%)",
+                    report.current.ram_bytes, report.base.ram_bytes, report.deltas.ram_bytes
+                );
+                println!(
+                    "Ledger Read Bytes: {} vs {} ({:+.1}%)",
+                    report.current.ledger_read_bytes,
+                    report.base.ledger_read_bytes,
+                    report.deltas.ledger_read_bytes
+                );
+                println!(
+                    "Ledger Write Bytes: {} vs {} ({:+.1}%)",
+                    report.current.ledger_write_bytes,
+                    report.base.ledger_write_bytes,
+                    report.deltas.ledger_write_bytes
+                );
+                println!(
+                    "TX Size Bytes: {} vs {} ({:+.1}%)",
+                    report.current.transaction_size_bytes,
+                    report.base.transaction_size_bytes,
+                    report.deltas.transaction_size_bytes
+                );
+            }
+            Err(e) => {
+                tracing::error!("Comparison failed: {}", e);
+            }
+        }
+        return;
+    }
+
     // -------------------------------
     // Web Server Setup
     // -------------------------------
@@ -195,6 +411,7 @@ async fn main() {
 
     let protected = Router::new()
         .route("/analyze", post(analyze))
+        .route("/analyze/compare", post(compare_handler))
         .route_layer(middleware::from_fn(auth::auth_middleware));
 
     let app = Router::new()
@@ -214,6 +431,7 @@ async fn main() {
         .route("/auth/verify", post(auth::verify_handler))
         .merge(protected)
         .layer(Extension(auth_state))
+        .layer(Extension(Arc::new(config.clone())))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 

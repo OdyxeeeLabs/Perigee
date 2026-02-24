@@ -1,14 +1,19 @@
+use serde_json::Value;
 use soroban_sdk::xdr::{
-    Hash, ScAddress, ScMap, ScMapEntry, ScSymbol, ScVal, StringM, Uint256, VecM, WriteXdr, Limits, ScVec, ScString
+    Hash, Limits, ScAddress, ScMap, ScMapEntry, ScString, ScSymbol, ScVal, ScVec, StringM, Uint256,
+    VecM, WriteXdr,
 };
 use stellar_strkey::Strkey;
-use serde_json::Value;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ParserError {
     #[error("Invalid JSON type at {location}: expected {expected}, found {found}")]
-    InvalidType { location: String, expected: String, found: String },
+    InvalidType {
+        location: String,
+        expected: String,
+        found: String,
+    },
 
     #[error("Invalid address at {location}: {details}")]
     InvalidAddress { location: String, details: String },
@@ -31,12 +36,10 @@ pub struct ArgParser;
 impl ArgParser {
     /// Parse a JSON string into an ScVal
     pub fn parse(json: &str) -> Result<ScVal, ParserError> {
-        let value: Value = serde_json::from_str(json).map_err(|e| {
-            ParserError::InvalidType {
-                location: "$".to_string(),
-                expected: "valid JSON".to_string(),
-                found: e.to_string(),
-            }
+        let value: Value = serde_json::from_str(json).map_err(|e| ParserError::InvalidType {
+            location: "$".to_string(),
+            expected: "valid JSON".to_string(),
+            found: e.to_string(),
         })?;
         Self::parse_value(&value, "$")
     }
@@ -69,10 +72,11 @@ impl ArgParser {
 
                 // Symbol detection (prefixed with :)
                 if let Some(sym_str) = s.strip_prefix(':') {
-                    let sym: ScSymbol = sym_str.try_into().map_err(|_| ParserError::InvalidSymbol {
-                        location: path.to_string(),
-                        details: "Symbol must be 1-32 characters".to_string(),
-                    })?;
+                    let sym: ScSymbol =
+                        sym_str.try_into().map_err(|_| ParserError::InvalidSymbol {
+                            location: path.to_string(),
+                            details: "Symbol must be 1-32 characters".to_string(),
+                        })?;
                     return Ok(ScVal::Symbol(sym));
                 }
 
@@ -82,18 +86,24 @@ impl ArgParser {
                         location: path.to_string(),
                         details: e.to_string(),
                     })?;
-                    return Ok(ScVal::Bytes(bytes.try_into().map_err(|_| ParserError::InvalidHex {
-                        location: path.to_string(),
-                        details: "Bytes exceed maximum allowed size".to_string(),
+                    return Ok(ScVal::Bytes(bytes.try_into().map_err(|_| {
+                        ParserError::InvalidHex {
+                            location: path.to_string(),
+                            details: "Bytes exceed maximum allowed size".to_string(),
+                        }
                     })?));
                 }
 
                 // Default: Treat as String
-                let string_m: StringM = s.as_bytes().to_vec().try_into().map_err(|_| ParserError::InvalidType {
-                    location: path.to_string(),
-                    expected: "shorter string".to_string(),
-                    found: "string length exceeds limit".to_string(),
-                })?;
+                let string_m: StringM =
+                    s.as_bytes()
+                        .to_vec()
+                        .try_into()
+                        .map_err(|_| ParserError::InvalidType {
+                            location: path.to_string(),
+                            expected: "shorter string".to_string(),
+                            found: "string length exceeds limit".to_string(),
+                        })?;
                 Ok(ScVal::String(ScString(string_m)))
             }
             Value::Array(arr) => {
@@ -111,10 +121,13 @@ impl ArgParser {
             Value::Object(obj) => {
                 let mut entries = Vec::new();
                 for (k, v) in obj {
-                    let key_sym: ScSymbol = k.as_str().try_into().map_err(|_| ParserError::InvalidSymbol {
-                        location: format!("{}.{}", path, k),
-                        details: "Key name too long for symbol".to_string(),
-                    })?;
+                    let key_sym: ScSymbol =
+                        k.as_str()
+                            .try_into()
+                            .map_err(|_| ParserError::InvalidSymbol {
+                                location: format!("{}.{}", path, k),
+                                details: "Key name too long for symbol".to_string(),
+                            })?;
                     let key = ScVal::Symbol(key_sym);
                     let val = Self::parse_value(v, &format!("{}.{}", path, k))?;
                     entries.push(ScMapEntry { key, val });
@@ -126,11 +139,12 @@ impl ArgParser {
                     a_bytes.cmp(&b_bytes)
                 });
 
-                let map_m: VecM<ScMapEntry> = entries.try_into().map_err(|_| ParserError::InvalidType {
-                    location: path.to_string(),
-                    expected: "smaller map".to_string(),
-                    found: "map size exceeds limit".to_string(),
-                })?;
+                let map_m: VecM<ScMapEntry> =
+                    entries.try_into().map_err(|_| ParserError::InvalidType {
+                        location: path.to_string(),
+                        expected: "smaller map".to_string(),
+                        found: "map size exceeds limit".to_string(),
+                    })?;
                 Ok(ScVal::Map(Some(ScMap(map_m))))
             }
         }
@@ -159,10 +173,19 @@ mod tests {
     #[test]
     fn test_parse_primitives() {
         assert!(matches!(ArgParser::parse("null").unwrap(), ScVal::Void));
-        assert!(matches!(ArgParser::parse("true").unwrap(), ScVal::Bool(true)));
-        assert!(matches!(ArgParser::parse("false").unwrap(), ScVal::Bool(false)));
+        assert!(matches!(
+            ArgParser::parse("true").unwrap(),
+            ScVal::Bool(true)
+        ));
+        assert!(matches!(
+            ArgParser::parse("false").unwrap(),
+            ScVal::Bool(false)
+        ));
         assert!(matches!(ArgParser::parse("123").unwrap(), ScVal::I64(123)));
-        assert!(matches!(ArgParser::parse("-456").unwrap(), ScVal::I64(-456)));
+        assert!(matches!(
+            ArgParser::parse("-456").unwrap(),
+            ScVal::I64(-456)
+        ));
     }
 
     #[test]
@@ -172,7 +195,7 @@ mod tests {
             ScVal::String(st) => {
                 let bytes: Vec<u8> = st.0.into();
                 assert_eq!(String::from_utf8(bytes).unwrap(), "hello");
-            },
+            }
             _ => panic!("Expected String variant"),
         }
 
@@ -181,7 +204,7 @@ mod tests {
             ScVal::Symbol(s) => {
                 let bytes: Vec<u8> = s.0.into();
                 assert_eq!(String::from_utf8(bytes).unwrap(), "my_sym");
-            },
+            }
             _ => panic!("Expected Symbol variant"),
         }
     }
@@ -191,7 +214,7 @@ mod tests {
         // Valid strkeys from snapshots
         let account = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGO6V";
         let contract = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
-        
+
         let result = ArgParser::parse(&format!("\"{}\"", account)).unwrap();
         assert!(matches!(result, ScVal::Address(ScAddress::Account(_))));
 
