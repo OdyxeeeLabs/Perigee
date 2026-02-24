@@ -6,6 +6,8 @@
 /node_modules
 **/node_modules
 
+contracts/liquidity_pool/test_snapshots/
+
 # Misc
 .DS_Store
 .env
