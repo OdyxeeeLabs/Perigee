@@ -1,6 +1,7 @@
 # Rust
 /target
 **/target
+test_snapshots/
 
 # Node
 /node_modules
