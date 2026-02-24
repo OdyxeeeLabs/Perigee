@@ -57,6 +57,7 @@ pub struct SorobanResources {
     pub ledger_read_bytes: u64,
     pub ledger_write_bytes: u64,
     pub transaction_size_bytes: u64,
+    pub footprint_size: u32,
 }
 
 /// Complete simulation result including resources and metadata
@@ -265,6 +266,20 @@ impl SimulationEngine {
         }
     }
 
+fn count_footprint_keys(&self, transaction_data: &str) -> u32 {
+        if transaction_data.is_empty() {
+            return 0;
+        }
+        let xdr_bytes = match BASE64.decode(transaction_data) {
+            Ok(bytes) => bytes,
+            Err(_) => return 0,
+        };
+        match SorobanTransactionData::from_xdr(&xdr_bytes, Limits::none()) {
+            Ok(data) => (data.resources.footprint.read_only.len() + data.resources.footprint.read_write.len()) as u32,
+            Err(_) => 0,
+        }
+    }
+
     fn parse_simulation_result(
         &self,
         rpc_result: SimulationRpcResult,
@@ -286,6 +301,7 @@ impl SimulationEngine {
                 ledger_read_bytes,
                 ledger_write_bytes,
                 transaction_size_bytes: rpc_result.transaction_data.len() as u64,
+                footprint_size: self.count_footprint_keys(&rpc_result.transaction_data),
             }
         } else {
             tracing::warn!("No cost data in simulation result, using defaults");
@@ -693,6 +709,7 @@ mod tests {
             ledger_read_bytes: 512,
             ledger_write_bytes: 256,
             transaction_size_bytes: 1024,
+            footprint_size: 5,
         };
         let json = serde_json::to_string(&resources).unwrap();
         assert!(json.contains("\"cpu_instructions\":1000000"));
@@ -718,6 +735,7 @@ mod tests {
             ledger_read_bytes: 512,
             ledger_write_bytes: 512,
             transaction_size_bytes: 1024,
+            footprint_size: 5,
         };
         assert!(engine.calculate_cost(&resources) > 0);
     }

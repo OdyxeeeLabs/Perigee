@@ -1,10 +1,12 @@
 mod auth;
 mod benchmarks;
 mod errors;
+mod insights;
 mod parser;
 mod simulation;
 
 use crate::errors::AppError;
+use crate::insights::{InsightsEngine, Insight};
 use crate::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use axum::{
     extract::{Json, State},
@@ -59,6 +61,7 @@ fn load_config() -> Result<AppConfig, ConfigError> {
 struct AppState {
     #[allow(dead_code)] // will be used when RPC simulation is wired into analyze handler
     engine: SimulationEngine,
+    insights_engine: InsightsEngine,
     cache: Arc<SimulationCache>,
 }
 
@@ -91,6 +94,14 @@ pub struct ResourceReport {
     /// Transaction size in bytes
     #[schema(example = 450)]
     pub transaction_size_bytes: u64,
+    /// Number of ledger keys in the footprint
+    #[schema(example = 5)]
+    pub footprint_size: u32,
+    /// Potential optimization insights
+    pub insights: Vec<Insight>,
+    /// Score (0-100) representing contract resource efficiency
+    #[schema(example = 85)]
+    pub efficiency_score: u8,
     /// Report showing which data was injected vs live
     pub state_dependency: Option<Vec<StateDependencyReport>>,
 }
@@ -102,13 +113,16 @@ pub struct StateDependencyReport {
 }
 
 /// Convert a `SimulationResult` (library type) into the API `ResourceReport`.
-fn to_report(result: &SimulationResult) -> ResourceReport {
+fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine) -> ResourceReport {
     ResourceReport {
         cpu_instructions: result.resources.cpu_instructions,
         ram_bytes: result.resources.ram_bytes,
         ledger_read_bytes: result.resources.ledger_read_bytes,
         ledger_write_bytes: result.resources.ledger_write_bytes,
         transaction_size_bytes: result.resources.transaction_size_bytes,
+        footprint_size: result.resources.footprint_size,
+        insights: insights_engine.get_insights(&result.resources),
+        efficiency_score: insights_engine.calculate_efficiency_score(&result.resources),
         state_dependency: result.state_dependency.as_ref().map(|deps| {
             deps.iter()
                 .map(|d| StateDependencyReport {
@@ -174,14 +188,14 @@ async fn analyze(
         HeaderValue::from_static(cache_status),
     );
 
-    Ok((headers, Json(to_report(&result))))
+    Ok((headers, Json(to_report(&result, &state.insights_engine))))
 }
 
 #[derive(OpenApi)]
 #[openapi(
     paths(analyze, auth::challenge_handler, auth::verify_handler),
     components(schemas(
-        AnalyzeRequest, ResourceReport,
+        AnalyzeRequest, ResourceReport, insights::Insight, insights::Severity,
         auth::ChallengeRequest, auth::ChallengeResponse,
         auth::VerifyRequest, auth::VerifyResponse
     )),
@@ -266,6 +280,7 @@ async fn main() {
     );
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::new(config.soroban_rpc_url.clone()),
+        insights_engine: InsightsEngine::new(),
         cache: SimulationCache::new(),
     });
 
