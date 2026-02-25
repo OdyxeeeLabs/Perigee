@@ -203,7 +203,9 @@ async fn submit_job(
         "Received job submission request"
     );
 
-    let response = state.job_queue.submit_job(payload)
+    let response = state
+        .job_queue
+        .submit_job(payload)
         .map_err(|e| AppError::Internal(format!("Job submission failed: {}", e)))?;
 
     Ok(Json(response))
@@ -233,7 +235,9 @@ async fn get_job(
         "Received job status request"
     );
 
-    let response = state.job_queue.get_job(&job_id)
+    let response = state
+        .job_queue
+        .get_job(&job_id)
         .map_err(|e| AppError::Internal(format!("Job retrieval failed: {}", e)))?;
 
     Ok(Json(response))
@@ -335,7 +339,10 @@ async fn main() {
     });
 
     // Start the background cleanup task for expired jobs
-    let _cleanup_handle = tokio::spawn(jobs::start_cleanup_task((*app_state.job_queue).clone(), 3600));
+    let _cleanup_handle = tokio::spawn(jobs::start_cleanup_task(
+        (*app_state.job_queue).clone(),
+        3600,
+    ));
 
     let cors = CorsLayer::new().allow_origin(Any);
 

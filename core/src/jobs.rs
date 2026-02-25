@@ -57,7 +57,7 @@ impl JobQueue {
 
     pub fn submit_job(&self, request: SubmitJobRequest) -> Result<JobResponse, AppError> {
         let job_id = Uuid::new_v4().to_string();
-        
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| AppError::Internal(format!("Time error: {}", e)))?
@@ -87,9 +87,10 @@ impl JobQueue {
     }
 
     pub async fn get_job(&self, job_id: &str) -> Result<JobResponse, AppError> {
-        let job = self.jobs.get(job_id).ok_or_else(|| {
-            AppError::NotFound(format!("Job with ID {} not found", job_id))
-        })?;
+        let job = self
+            .jobs
+            .get(job_id)
+            .ok_or_else(|| AppError::NotFound(format!("Job with ID {} not found", job_id)))?;
 
         Ok(JobResponse {
             job_id: job.id.clone(),
@@ -99,9 +100,13 @@ impl JobQueue {
         })
     }
 
-
-
-    pub fn update_job_status(&self, job_id: &str, status: JobStatus, result: Option<serde_json::Value>, error: Option<String>) -> Result<(), AppError> {
+    pub fn update_job_status(
+        &self,
+        job_id: &str,
+        status: JobStatus,
+        result: Option<serde_json::Value>,
+        error: Option<String>,
+    ) -> Result<(), AppError> {
         if let Some(mut job) = self.jobs.get_mut(job_id) {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -112,7 +117,7 @@ impl JobQueue {
             job.updated_at = now;
             job.result = result;
             job.error = error;
-            
+
             // If job is completed, trigger webhook if callback URL exists
             if matches!(job.status, JobStatus::Completed | JobStatus::Failed) {
                 if let Some(callback_url) = &job.callback_url {
@@ -123,14 +128,22 @@ impl JobQueue {
                 }
             }
         } else {
-            return Err(AppError::NotFound(format!("Job with ID {} not found", job_id)));
+            return Err(AppError::NotFound(format!(
+                "Job with ID {} not found",
+                job_id
+            )));
         }
 
         Ok(())
     }
 
     pub fn cancel_job(&self, job_id: &str) -> Result<(), AppError> {
-        self.update_job_status(job_id, JobStatus::Cancelled, None, Some("Job cancelled".to_string()))
+        self.update_job_status(
+            job_id,
+            JobStatus::Cancelled,
+            None,
+            Some("Job cancelled".to_string()),
+        )
     }
 
     pub fn cleanup_expired_jobs(&self) {
@@ -155,35 +168,55 @@ impl JobQueue {
             "completed_at": job.updated_at
         });
 
-        match timeout(Duration::from_secs(30), client.post(callback_url).json(&payload).send()).await {
+        match timeout(
+            Duration::from_secs(30),
+            client.post(callback_url).json(&payload).send(),
+        )
+        .await
+        {
             Ok(Ok(response)) => {
                 if response.status().is_success() {
-                    tracing::info!("Webhook sent successfully to {} for job {}", callback_url, job.id);
+                    tracing::info!(
+                        "Webhook sent successfully to {} for job {}",
+                        callback_url,
+                        job.id
+                    );
                 } else {
-                    tracing::warn!("Webhook failed with status {} for job {} at {}", response.status(), job.id, callback_url);
+                    tracing::warn!(
+                        "Webhook failed with status {} for job {} at {}",
+                        response.status(),
+                        job.id,
+                        callback_url
+                    );
                 }
             }
             Ok(Err(e)) => {
                 tracing::error!("Failed to send webhook for job {}: {}", job.id, e);
             }
             Err(_) => {
-                tracing::error!("Webhook request timed out for job {} at {}", job.id, callback_url);
+                tracing::error!(
+                    "Webhook request timed out for job {} at {}",
+                    job.id,
+                    callback_url
+                );
             }
         }
     }
 
     pub fn get_job_result(&self, job_id: &str) -> Result<Option<serde_json::Value>, AppError> {
-        let job = self.jobs.get(job_id).ok_or_else(|| {
-            AppError::NotFound(format!("Job with ID {} not found", job_id))
-        })?;
+        let job = self
+            .jobs
+            .get(job_id)
+            .ok_or_else(|| AppError::NotFound(format!("Job with ID {} not found", job_id)))?;
 
         Ok(job.result.clone())
     }
 
     pub fn is_job_expired(&self, job_id: &str) -> Result<bool, AppError> {
-        let job = self.jobs.get(job_id).ok_or_else(|| {
-            AppError::NotFound(format!("Job with ID {} not found", job_id))
-        })?;
+        let job = self
+            .jobs
+            .get(job_id)
+            .ok_or_else(|| AppError::NotFound(format!("Job with ID {} not found", job_id)))?;
 
         match job.expires_at {
             Some(expiry) => {
@@ -191,7 +224,7 @@ impl JobQueue {
                     .duration_since(UNIX_EPOCH)
                     .map_err(|e| AppError::Internal(format!("Time error: {}", e)))?
                     .as_secs();
-                
+
                 Ok(now > expiry)
             }
             None => Ok(false),
