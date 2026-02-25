@@ -110,21 +110,24 @@ impl InsightsEngine {
         // Penalty for high CPU instructions (base allowance: 1M)
         if resources.cpu_instructions > 1_000_000 {
             let cpu_over = resources.cpu_instructions.saturating_sub(1_000_000);
-            let penalty = (cpu_over / 500_000).min(50) as i32;
+            // 5 points penalty for every 500k instructions over 1M.
+            let penalty = ((cpu_over / 500_000) * 5).min(40) as i32;
             score -= penalty;
         }
 
         // Penalty for high footprint size (base allowance: 5 keys)
         if resources.footprint_size > 5 {
             let fp_over = resources.footprint_size.saturating_sub(5);
-            let penalty = (fp_over * 5).min(50) as i32;
+            // 10 points penalty for every key over 5.
+            let penalty = (fp_over * 10).min(40) as i32;
             score -= penalty;
         }
 
         // Penalty for high RAM usage (base allowance: 100KB)
         if resources.ram_bytes > 102_400 {
             let ram_over = resources.ram_bytes.saturating_sub(102_400);
-            let penalty = (ram_over / 51_200).min(30) as i32;
+            // 5 points penalty for every 64KB over 100KB.
+            let penalty = ((ram_over / 65_536) * 5).min(20) as i32;
             score -= penalty;
         }
 
@@ -157,18 +160,24 @@ mod tests {
     fn test_efficiency_score_calculation() {
         let engine = InsightsEngine::new();
         let resources = SorobanResources::default();
-        // Base score should be 100
         assert_eq!(engine.calculate_efficiency_score(&resources), 100);
 
-        let heavy_resources = SorobanResources {
-            cpu_instructions: 3_000_000, // 2M over -> 4 * 500k -> 50% max penalty? No, my logic is (2M / 500k) = 4 units.
-            footprint_size: 10,         // 5 over -> 5 * 5 = 25 penalty
-            ram_bytes: 204_800,        // 100k over -> 2 * 51k -> 2 * units?
+        let moderate_heavy = SorobanResources {
+            cpu_instructions: 2_000_000, // 1M over -> 2 * 5 penalty = 10
+            footprint_size: 7,          // 2 over -> 2 * 10 penalty = 20
+            ram_bytes: 50_000,          // Under limit
             ..Default::default()
         };
-        // CPU: (2M / 500k) = 4 units -> 4 units -> wait, let's re-check the math.
-        // cpu_over = 2M. 2M / 500k = 4. penalty = 4. score = 100 - 4 = 96.
-        // Oh, the penalty units are small. That's fine.
-        assert!(engine.calculate_efficiency_score(&heavy_resources) < 100);
+        // Expected score: 100 - 10 - 20 = 70
+        assert_eq!(engine.calculate_efficiency_score(&moderate_heavy), 70);
+
+        let very_heavy = SorobanResources {
+            cpu_instructions: 10_000_000, // Max CPU penalty (40)
+            footprint_size: 20,          // Max Footprint penalty (40)
+            ram_bytes: 1_000_000,        // Max RAM penalty (20)
+            ..Default::default()
+        };
+        // Expected score: 100 - 40 - 40 - 20 = 0
+        assert_eq!(engine.calculate_efficiency_score(&very_heavy), 0);
     }
 }
