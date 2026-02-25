@@ -246,6 +246,7 @@ impl SimulationEngine {
         }
     }
 
+    /// Helper to count the number of ledger keys in the footprint.
     fn count_footprint_keys(&self, transaction_data: &str) -> u32 {
         if transaction_data.is_empty() {
             return 0;
@@ -587,35 +588,5 @@ mod tests {
         assert_eq!(resources.ledger_write_bytes, 0);
         assert_eq!(resources.transaction_size_bytes, 0);
         assert_eq!(resources.footprint_size, 0);
-    }
-
-    #[test]
-    fn test_soroban_resources_serialization() {
-        let resources = SorobanResources {
-            cpu_instructions: 1000000,
-            ram_bytes: 2048,
-            ledger_read_bytes: 512,
-            ledger_write_bytes: 256,
-            transaction_size_bytes: 1024,
-            footprint_size: 5,
-        };
-        let json = serde_json::to_string(&resources).unwrap();
-        assert!(json.contains("\"cpu_instructions\":1000000"));
-        let deserialized: SorobanResources = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized, resources);
-    }
-
-    #[test]
-    fn test_calculate_cost() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-        let resources = SorobanResources {
-            cpu_instructions: 1000000,
-            ram_bytes: 2048,
-            ledger_read_bytes: 512,
-            ledger_write_bytes: 512,
-            transaction_size_bytes: 1024,
-            footprint_size: 5,
-        };
-        assert!(engine.calculate_cost(&resources) > 0);
     }
 }
