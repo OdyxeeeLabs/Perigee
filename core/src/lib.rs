@@ -1,8 +1,6 @@
-use serde::Serialize;
-
-// Export simulation module for RPC-based contract simulation
-pub mod comparison;
+pub mod insights;
 pub mod parser;
+pub mod rpc_provider;
 pub mod simulation;
 
 /// Resource report containing profiling information for a Soroban contract

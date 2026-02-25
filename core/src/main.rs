@@ -1,8 +1,15 @@
 mod auth;
 mod benchmarks;
 mod errors;
+pub mod insights;
+mod parser;
+pub mod rpc_provider;
+mod simulation;
 
 use crate::errors::AppError;
+use crate::insights::InsightsEngine;
+use crate::rpc_provider::{ProviderRegistry, RpcProvider};
+use crate::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use axum::{
     extract::{Json, Multipart},
     middleware,
@@ -31,9 +38,32 @@ use soroscope_core::simulation::SimulationEngine;
 struct AppConfig {
     server_port: u16,
     rust_log: String,
+    /// Primary RPC URL — used as a single-provider fallback when
+    /// `RPC_PROVIDERS` is not set.
     soroban_rpc_url: String,
     jwt_secret: String,
     network_passphrase: String,
+    /// Redis URL reserved for the distributed cache migration (issue #65).
+    /// Unused in the MVP in-memory implementation — present so the config
+    /// surface is stable when Redis is wired in.
+    redis_url: String,
+    /// JSON-encoded array of RPC provider objects.  Example:
+    /// ```json
+    /// [
+    ///   {"name":"stellar-testnet","url":"https://soroban-testnet.stellar.org"},
+    ///   {"name":"blockdaemon","url":"https://soroban.blockdaemon.com","auth_header":"X-API-Key","auth_value":"KEY"}
+    /// ]
+    /// ```
+    /// When empty or absent the engine falls back to `soroban_rpc_url`.
+    #[serde(default)]
+    rpc_providers: String,
+    /// Health-check interval in seconds (default 30).
+    #[serde(default = "default_health_check_interval")]
+    health_check_interval_secs: u64,
+}
+
+fn default_health_check_interval() -> u64 {
+    30
 }
 
 fn load_config() -> Result<AppConfig, ConfigError> {
@@ -47,9 +77,44 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("soroban_rpc_url", "https://soroban-testnet.stellar.org")?
         .set_default("jwt_secret", "dev-secret-change-in-production")?
         .set_default("network_passphrase", "Test SDF Network ; September 2015")?
+        .set_default("redis_url", "redis://127.0.0.1:6379")?
+        .set_default("rpc_providers", "")?
+        .set_default("health_check_interval_secs", 30)?
         .build()?;
 
     settings.try_deserialize()
+}
+
+/// Parse the `RPC_PROVIDERS` env var (JSON array) or fall back to wrapping the
+/// single `SOROBAN_RPC_URL` into a one-element provider list.
+fn build_providers(config: &AppConfig) -> Vec<RpcProvider> {
+    if !config.rpc_providers.is_empty() {
+        match serde_json::from_str::<Vec<RpcProvider>>(&config.rpc_providers) {
+            Ok(providers) if !providers.is_empty() => {
+                tracing::info!(
+                    count = providers.len(),
+                    "Loaded RPC providers from RPC_PROVIDERS"
+                );
+                return providers;
+            }
+            Ok(_) => {
+                tracing::warn!("RPC_PROVIDERS is empty array, falling back to SOROBAN_RPC_URL");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to parse RPC_PROVIDERS, falling back to SOROBAN_RPC_URL"
+                );
+            }
+        }
+    }
+
+    vec![RpcProvider {
+        name: "default".to_string(),
+        url: config.soroban_rpc_url.clone(),
+        auth_header: None,
+        auth_value: None,
+    }]
 }
 
 /// Shared application state injected into every Axum handler via [`State`].
@@ -57,6 +122,7 @@ struct AppState {
     #[allow(dead_code)] // will be used when RPC simulation is wired into analyze handler
     engine: SimulationEngine,
     cache: Arc<SimulationCache>,
+    insights_engine: InsightsEngine,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -84,6 +150,26 @@ struct ResourceReport {
     pub transaction_size_bytes: u64,
     /// Report showing which data was injected vs live
     pub state_dependency: Option<Vec<StateDependencyReport>>,
+    /// Efficiency score (0–100) and optimisation insights.
+    pub nutrition: NutritionReport,
+}
+
+/// "Nutrition label" for the contract invocation.
+#[derive(Serialize, ToSchema)]
+pub struct NutritionReport {
+    /// Weighted efficiency score (0 = poor, 100 = optimal).
+    pub efficiency_score: u32,
+    /// Actionable optimisation insights.
+    pub insights: Vec<InsightEntry>,
+}
+
+/// A single optimisation insight.
+#[derive(Serialize, ToSchema)]
+pub struct InsightEntry {
+    pub severity: String,
+    pub rule: String,
+    pub message: String,
+    pub suggested_fix: String,
 }
 
 #[derive(Serialize, ToSchema, Debug)]
@@ -93,7 +179,9 @@ pub struct StateDependencyReport {
 }
 
 /// Convert a `SimulationResult` (library type) into the API `ResourceReport`.
-fn to_report(result: &SimulationResult) -> ResourceReport {
+fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine) -> ResourceReport {
+    let insights_report = insights_engine.analyze(&result.resources);
+
     ResourceReport {
         cpu_instructions: result.resources.cpu_instructions,
         ram_bytes: result.resources.ram_bytes,
@@ -108,6 +196,19 @@ fn to_report(result: &SimulationResult) -> ResourceReport {
                 })
                 .collect()
         }),
+        nutrition: NutritionReport {
+            efficiency_score: insights_report.efficiency_score,
+            insights: insights_report
+                .insights
+                .into_iter()
+                .map(|i| InsightEntry {
+                    severity: format!("{:?}", i.severity),
+                    rule: i.rule,
+                    message: i.message,
+                    suggested_fix: i.suggested_fix,
+                })
+                .collect(),
+        },
     }
 }
 
@@ -197,91 +298,7 @@ async fn compare_handler(
     {
         let name = field.name().unwrap_or_default().to_string();
 
-        match name.as_str() {
-            "mode" => {
-                mode = field.text().await.unwrap_or_default();
-            }
-            "contract_id" => {
-                contract_id = field.text().await.unwrap_or_default();
-            }
-            "function_name" => {
-                function_name = field.text().await.unwrap_or_default();
-            }
-            "args" => {
-                args_raw = field.text().await.unwrap_or_default();
-            }
-            "current_wasm" => {
-                let data = field
-                    .bytes()
-                    .await
-                    .map_err(|e| AppError::BadRequest(e.to_string()))?;
-                let mut temp_file =
-                    NamedTempFile::new().map_err(|e| AppError::Internal(e.to_string()))?;
-                temp_file
-                    .write_all(&data)
-                    .map_err(|e| AppError::Internal(e.to_string()))?;
-                current_wasm = Some(temp_file);
-            }
-            "base_wasm" => {
-                let data = field
-                    .bytes()
-                    .await
-                    .map_err(|e| AppError::BadRequest(e.to_string()))?;
-                let mut temp_file =
-                    NamedTempFile::new().map_err(|e| AppError::Internal(e.to_string()))?;
-                temp_file
-                    .write_all(&data)
-                    .map_err(|e| AppError::Internal(e.to_string()))?;
-                base_wasm = Some(temp_file);
-            }
-            _ => {}
-        }
-    }
-
-    let current_wasm_path = current_wasm
-        .ok_or_else(|| AppError::BadRequest("Missing current_wasm".to_string()))?
-        .into_temp_path()
-        .to_path_buf();
-
-    let compare_mode = match mode.as_str() {
-        "local_vs_local" => {
-            let base_wasm_path = base_wasm
-                .ok_or_else(|| AppError::BadRequest("Missing base_wasm".to_string()))?
-                .into_temp_path()
-                .to_path_buf();
-            CompareMode::LocalVsLocal {
-                current_wasm_path,
-                base_wasm_path,
-            }
-        }
-        "local_vs_deployed" => {
-            if contract_id.is_empty() || function_name.is_empty() {
-                return Err(AppError::BadRequest(
-                    "Missing contract_id or function_name".to_string(),
-                ));
-            }
-            let args = if args_raw.is_empty() {
-                vec![]
-            } else {
-                args_raw.split(',').map(|s| s.trim().to_string()).collect()
-            };
-            CompareMode::LocalVsDeployed {
-                current_wasm_path,
-                contract_id,
-                function_name,
-                args,
-            }
-        }
-        _ => return Err(AppError::BadRequest("Invalid mode".to_string())),
-    };
-
-    let engine = SimulationEngine::new(config.soroban_rpc_url.clone());
-
-    let report = run_comparison(&engine, compare_mode)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    Ok(Json(CompareApiResponse { report }))
+    Ok((headers, Json(to_report(&result, &state.insights_engine))))
 }
 
 #[derive(OpenApi)]
@@ -452,6 +469,26 @@ async fn main() {
         "SEP-10 server account: {}",
         auth_state.server_stellar_address()
     );
+    // ── Multi-node RPC setup ────────────────────────────────────────────
+    let providers = build_providers(&config);
+    let provider_names: Vec<&str> = providers.iter().map(|p| p.name.as_str()).collect();
+    tracing::info!(providers = ?provider_names, "RPC provider pool");
+
+    let registry = ProviderRegistry::new(providers);
+
+    // Spawn background health checker.
+    let health_interval = std::time::Duration::from_secs(config.health_check_interval_secs);
+    let _health_handle = registry.spawn_health_checker(health_interval);
+    tracing::info!(
+        interval_secs = config.health_check_interval_secs,
+        "Background RPC health checker started"
+    );
+
+    let app_state = Arc::new(AppState {
+        engine: SimulationEngine::with_registry(Arc::clone(&registry)),
+        cache: SimulationCache::new(),
+        insights_engine: InsightsEngine::new(),
+    });
 
     let cors = CorsLayer::new().allow_origin(Any);
 
