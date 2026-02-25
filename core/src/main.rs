@@ -1,8 +1,13 @@
 mod auth;
 mod benchmarks;
 mod errors;
+mod insights;
+mod parser;
+mod simulation;
 
 use crate::errors::AppError;
+use crate::insights::{Insight, InsightsEngine, Severity};
+use crate::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use axum::{
     extract::{Json, State},
     http::{HeaderMap, HeaderName, HeaderValue},
@@ -12,8 +17,6 @@ use axum::{
 };
 use config::{Config, ConfigError};
 use serde::{Deserialize, Serialize};
-use soroscope_core::insights::{Insight, InsightsEngine, Severity};
-use soroscope_core::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
@@ -124,7 +127,7 @@ fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine) -> Res
             deps.iter()
                 .map(|d| StateDependencyReport {
                     key: d.key.clone(),
-                    source: format!("{:?}", d.source),
+                    source: format!("{d:?}"),
                 })
                 .collect()
         }),

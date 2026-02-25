@@ -94,19 +94,28 @@ impl InsightsEngine {
     pub fn calculate_efficiency_score(&self, resources: &SorobanResources) -> u8 {
         let mut score: i32 = 100;
 
+        // CPU Instructions penalty
         if resources.cpu_instructions > 1_000_000 {
-            score -= ((resources.cpu_instructions - 1_000_000) / 500_000) as i32;
+            let cpu_over = resources.cpu_instructions.saturating_sub(1_000_000);
+            let penalty = (cpu_over / 500_000).min(50) as i32;
+            score -= penalty;
         }
 
+        // Footprint size penalty
         if resources.footprint_size > 5 {
-            score -= ((resources.footprint_size - 5) * 5) as i32;
+            let fp_over = resources.footprint_size.saturating_sub(5);
+            let penalty = (fp_over * 5).min(50) as i32;
+            score -= penalty;
         }
 
+        // RAM penalty
         if resources.ram_bytes > 102_400 {
-            score -= ((resources.ram_bytes - 102_400) / 51_200) as i32;
+            let ram_over = resources.ram_bytes.saturating_sub(102_400);
+            let penalty = (ram_over / 51_200).min(30) as i32;
+            score -= penalty;
         }
 
-        score.clamp(0, 100) as u8
+        score.max(0).min(100) as u8
     }
 }
 

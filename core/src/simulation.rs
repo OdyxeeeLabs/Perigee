@@ -226,24 +226,22 @@ impl SimulationEngine {
         })?;
 
         match rpc_response.result {
-            ResponseResult::Error { error } => {
-                match error.code {
-                    -32600 => Err(SimulationError::NodeError("Invalid request format".to_string())),
-                    -32601 => Err(SimulationError::RpcRequestFailed("Method not found".to_string())),
-                    -32602 => Err(SimulationError::NodeError(format!(
-                        "Invalid parameters: {}",
-                        error.message
-                    ))),
-                    -32603 => Err(SimulationError::RpcRequestFailed(format!(
-                        "Internal error: {}",
-                        error.message
-                    ))),
-                    _ => Err(SimulationError::RpcRequestFailed(format!(
-                        "RPC error {}: {}",
-                        error.code, error.message
-                    ))),
-                }
-            }
+            ResponseResult::Error { error } => match error.code {
+                -32600 => Err(SimulationError::NodeError("Invalid request format".to_string())),
+                -32601 => Err(SimulationError::RpcRequestFailed("Method not found".to_string())),
+                -32602 => Err(SimulationError::NodeError(format!(
+                    "Invalid parameters: {}",
+                    error.message
+                ))),
+                -32603 => Err(SimulationError::RpcRequestFailed(format!(
+                    "Internal error: {}",
+                    error.message
+                ))),
+                _ => Err(SimulationError::RpcRequestFailed(format!(
+                    "RPC error {}: {}",
+                    error.code, error.message
+                ))),
+            },
             ResponseResult::Success { result } => self.parse_simulation_result(result),
         }
     }
@@ -269,11 +267,12 @@ impl SimulationEngine {
         &self,
         rpc_result: SimulationRpcResult,
     ) -> Result<SimulationResult, SimulationError> {
+        let (ledger_read_bytes, ledger_write_bytes) =
+            self.extract_footprint_from_xdr(&rpc_result.transaction_data);
+
         let resources = if let Some(cost) = rpc_result.cost {
             let cpu_instructions = cost.cpu_insns.parse::<u64>().unwrap_or(0);
             let ram_bytes = cost.mem_bytes.parse::<u64>().unwrap_or(0);
-            let (ledger_read_bytes, ledger_write_bytes) =
-                self.extract_footprint_from_xdr(&rpc_result.transaction_data);
             SorobanResources {
                 cpu_instructions,
                 ram_bytes,
