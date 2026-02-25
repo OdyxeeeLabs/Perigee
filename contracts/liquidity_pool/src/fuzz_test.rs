@@ -1,4 +1,3 @@
-
 use crate::LiquidityPoolClient;
 use proptest::prelude::*;
 use soroban_sdk::{testutils::Address as _, Address, Env};

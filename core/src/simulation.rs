@@ -1,16 +1,16 @@
+use crate::parser::ArgParser;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use soroban_sdk::xdr::{
     Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, LedgerKey, Limits, Memo,
     MuxedAccount, Operation, OperationBody, Preconditions, ReadXdr, ScAddress, ScSymbol, ScVal,
-    SequenceNumber, SorobanAuthorizationEntry, SorobanTransactionData, Transaction,
-    TransactionExt, TransactionV1Envelope, Uint256, VecM, WriteXdr,
+    SequenceNumber, SorobanAuthorizationEntry, SorobanTransactionData, Transaction, TransactionExt,
+    TransactionV1Envelope, Uint256, VecM, WriteXdr,
 };
 use std::path::Path;
 use stellar_strkey::Strkey;
 use thiserror::Error;
-use crate::parser::ArgParser;
 use tokio::fs;
 
 /// Errors that can occur during simulation
@@ -659,7 +659,11 @@ impl SimulationEngine {
 
         // 3. Delegation to ArgParser for special types (Addresses, Symbols, Hex)
         // If it starts with G, C, :, or 0x, we try to parse it as a quoted string
-        if arg.starts_with('G') || arg.starts_with('C') || arg.starts_with(':') || arg.starts_with("0x") {
+        if arg.starts_with('G')
+            || arg.starts_with('C')
+            || arg.starts_with(':')
+            || arg.starts_with("0x")
+        {
             if let Ok(val) = ArgParser::parse(&format!("\"{}\"", arg)) {
                 return Ok(val);
             }
@@ -673,29 +677,10 @@ impl SimulationEngine {
         }
 
         // 5. Default fallback: Treat as Symbol (standard Soroban behavior for unquoted strings)
-        let symbol: ScSymbol = arg
-            .try_into()
-            .map_err(|_| SimulationError::InvalidContract(format!("Cannot parse argument: {}", arg)))?;
-        Ok(ScVal::Symbol(symbol))
-    }
-
-    /// Parse an address string to ScAddress
-    fn parse_address(&self, address: &str) -> Result<ScAddress, SimulationError> {
-        let strkey = Strkey::from_string(address).map_err(|e| {
-            SimulationError::InvalidContract(format!("Invalid address format: {}", e))
+        let symbol: ScSymbol = arg.try_into().map_err(|_| {
+            SimulationError::InvalidContract(format!("Cannot parse argument: {}", arg))
         })?;
-
-        match strkey {
-            Strkey::Contract(contract) => Ok(ScAddress::Contract(Hash(contract.0))),
-            Strkey::PublicKeyEd25519(pubkey) => {
-                Ok(ScAddress::Account(soroban_sdk::xdr::AccountId(
-                    soroban_sdk::xdr::PublicKey::PublicKeyTypeEd25519(Uint256(pubkey.0)),
-                )))
-            }
-            _ => Err(SimulationError::InvalidContract(
-                "Address must be a contract (C...) or account (G...) address".to_string(),
-            )),
-        }
+        Ok(ScVal::Symbol(symbol))
     }
 }
 
@@ -908,26 +893,6 @@ mod tests {
         let result =
             engine.parse_contract_id("GDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC");
         assert!(matches!(result, Err(SimulationError::InvalidContract(_))));
-    }
-
-    #[test]
-    fn test_parse_address_contract() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-
-        let contract_id = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-        let result = engine.parse_address(contract_id);
-        assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), ScAddress::Contract(_)));
-    }
-
-    #[test]
-    fn test_parse_address_account() {
-        let engine = SimulationEngine::new("https://test.com".to_string());
-
-        let account_id = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7";
-        let result = engine.parse_address(account_id);
-        assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), ScAddress::Account(_)));
     }
 
     #[test]

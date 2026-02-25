@@ -15,7 +15,7 @@ serde_json = "1.0"
 thiserror = "1.0"
 dotenvy = "0.15"
 config = "0.14"
-axum = "0.7"
+axum = { version = "0.7", features = ["multipart"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower = "0.4"
@@ -30,3 +30,4 @@ jsonwebtoken = "9"
 ed25519-dalek = "2"
 sha2 = "0.10"
 rand = "0.8"
+tempfile = "3"
