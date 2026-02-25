@@ -30,4 +30,6 @@ jsonwebtoken = "9"
 ed25519-dalek = "2"
 sha2 = "0.10"
 rand = "0.8"
+dashmap = "5.5"
 moka = { version = "0.12", features = ["future"] }
+uuid = { version = "1.0", features = ["v4"] }

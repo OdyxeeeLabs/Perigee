@@ -1,10 +1,12 @@
 mod auth;
 mod benchmarks;
 mod errors;
+mod jobs;
 mod parser;
 mod simulation;
 
 use crate::errors::AppError;
+use crate::jobs::{JobQueue, JobResponse, SubmitJobRequest};
 use crate::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use axum::{
     extract::{Json, State},
@@ -60,6 +62,7 @@ struct AppState {
     #[allow(dead_code)] // will be used when RPC simulation is wired into analyze handler
     engine: SimulationEngine,
     cache: Arc<SimulationCache>,
+    job_queue: Arc<JobQueue>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -177,17 +180,78 @@ async fn analyze(
     Ok((headers, Json(to_report(&result))))
 }
 
+#[utoipa::path(
+    post,
+    path = "/jobs/submit",
+    request_body = SubmitJobRequest,
+    responses(
+        (status = 200, description = "Job submitted successfully", body = JobResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Submission failed")
+    ),
+    security(
+        ("jwt" = [])
+    ),
+    tag = "Jobs"
+)]
+async fn submit_job(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<SubmitJobRequest>,
+) -> Result<Json<JobResponse>, AppError> {
+    tracing::info!(
+        callback_url = ?payload.callback_url,
+        "Received job submission request"
+    );
+
+    let response = state.job_queue.submit_job(payload)
+        .map_err(|e| AppError::Internal(format!("Job submission failed: {}", e)))?;
+
+    Ok(Json(response))
+}
+
+#[utoipa::path(
+    get,
+    path = "/jobs/{id}",
+    params(("id" = String, description = "Job ID")),
+    responses(
+        (status = 200, description = "Job status retrieved successfully", body = JobResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Job not found"),
+        (status = 500, description = "Retrieval failed")
+    ),
+    security(
+        ("jwt" = [])
+    ),
+    tag = "Jobs"
+)]
+async fn get_job(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+) -> Result<Json<JobResponse>, AppError> {
+    tracing::info!(
+        job_id = %job_id,
+        "Received job status request"
+    );
+
+    let response = state.job_queue.get_job(&job_id)
+        .map_err(|e| AppError::Internal(format!("Job retrieval failed: {}", e)))?;
+
+    Ok(Json(response))
+}
+
 #[derive(OpenApi)]
 #[openapi(
-    paths(analyze, auth::challenge_handler, auth::verify_handler),
+    paths(analyze, auth::challenge_handler, auth::verify_handler, submit_job, get_job),
     components(schemas(
         AnalyzeRequest, ResourceReport,
         auth::ChallengeRequest, auth::ChallengeResponse,
-        auth::VerifyRequest, auth::VerifyResponse
+        auth::VerifyRequest, auth::VerifyResponse,
+        jobs::SubmitJobRequest, jobs::JobResponse
     )),
     tags(
         (name = "Analysis", description = "Soroban contract resource analysis endpoints"),
-        (name = "Auth", description = "SEP-10 wallet authentication")
+        (name = "Auth", description = "SEP-10 wallet authentication"),
+        (name = "Jobs", description = "Background job processing endpoints")
     ),
     info(
         title = "SoroScope API",
@@ -267,12 +331,18 @@ async fn main() {
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::new(config.soroban_rpc_url.clone()),
         cache: SimulationCache::new(),
+        job_queue: Arc::new(JobQueue::new()),
     });
+
+    // Start the background cleanup task for expired jobs
+    let _cleanup_handle = tokio::spawn(jobs::start_cleanup_task((*app_state.job_queue).clone(), 3600));
 
     let cors = CorsLayer::new().allow_origin(Any);
 
     let protected = Router::new()
         .route("/analyze", post(analyze))
+        .route("/jobs/submit", post(submit_job))
+        .route("/jobs/:id", get(get_job))
         .route_layer(middleware::from_fn(auth::auth_middleware));
 
     let app = Router::new()
