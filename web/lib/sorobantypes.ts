@@ -22,9 +22,10 @@ export interface InvocationResult {
   resourceCost?: {
     fee?: string;
     cpu_instructions: number;
-    memory_bytes: number;
+    ram_bytes: number;
     ledger_read_bytes: number;
     ledger_write_bytes: number;
+    transaction_size_bytes: number;
   };
   timestamp: number;
   success: boolean;
@@ -80,9 +81,10 @@ export function generateMockResult(functionName: string, inputs: Record<string, 
 export function generateMockResourceCost() {
   return {
     fee: (Math.random() * 0.05).toFixed(5),
-    cpuInstructions: Math.floor(Math.random() * 50_000_000) + 1_000_000,
-    ramBytes: Math.floor(Math.random() * 20 * 1024 * 1024) + 1024 * 1024,
-    ledgerReadBytes: Math.floor(Math.random() * 10 * 1024),
-    ledgerWriteBytes: Math.floor(Math.random() * 5 * 1024),
+    cpu_instructions: Math.floor(Math.random() * 50_000_000) + 1_000_000,
+    ram_bytes: Math.floor(Math.random() * 20 * 1024 * 1024) + 1024 * 1024,
+    ledger_read_bytes: Math.floor(Math.random() * 10 * 1024),
+    ledger_write_bytes: Math.floor(Math.random() * 5 * 1024),
+    transaction_size_bytes: Math.floor(Math.random() * 2 * 1024),
   };
 }

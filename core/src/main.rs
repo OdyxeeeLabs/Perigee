@@ -1,10 +1,18 @@
 mod auth;
 mod benchmarks;
 mod errors;
+mod parser;
+mod simulation;
 
 use crate::errors::AppError;
+use crate::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use axum::{
+<<<<<<< HEAD
     extract::{Json, Multipart},
+=======
+    extract::{Json, State},
+    http::{HeaderMap, HeaderName, HeaderValue},
+>>>>>>> origin/main
     middleware,
     routing::{get, post},
     Extension, Router,
@@ -33,10 +41,13 @@ struct AppConfig {
     soroban_rpc_url: String,
     jwt_secret: String,
     network_passphrase: String,
+    /// Redis URL reserved for the distributed cache migration (issue #65).
+    /// Unused in the MVP in-memory implementation — present so the config
+    /// surface is stable when Redis is wired in.
+    redis_url: String,
 }
 
 fn load_config() -> Result<AppConfig, ConfigError> {
-    // Load .env file if present
     dotenvy::dotenv().ok();
 
     let settings = Config::builder()
@@ -46,9 +57,17 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("soroban_rpc_url", "https://soroban-testnet.stellar.org")?
         .set_default("jwt_secret", "dev-secret-change-in-production")?
         .set_default("network_passphrase", "Test SDF Network ; September 2015")?
+        .set_default("redis_url", "redis://127.0.0.1:6379")?
         .build()?;
 
     settings.try_deserialize()
+}
+
+/// Shared application state injected into every Axum handler via [`State`].
+struct AppState {
+    #[allow(dead_code)] // will be used when RPC simulation is wired into analyze handler
+    engine: SimulationEngine,
+    cache: Arc<SimulationCache>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -60,15 +79,33 @@ struct AnalyzeRequest {
 }
 
 #[derive(Serialize, ToSchema)]
-struct ResourceReport {
-    #[schema(example = 1000)]
-    cpu_instructions: u64,
-    #[schema(example = 2048)]
-    memory_bytes: u64,
+pub struct ResourceReport {
+    /// CPU instructions consumed
+    #[schema(example = 1500)]
+    pub cpu_instructions: u64,
+    /// RAM bytes consumed
+    #[schema(example = 3000)]
+    pub ram_bytes: u64,
+    /// Ledger read bytes
+    #[schema(example = 1024)]
+    pub ledger_read_bytes: u64,
+    /// Ledger write bytes
     #[schema(example = 512)]
-    ledger_read_bytes: u64,
-    #[schema(example = 256)]
-    ledger_write_bytes: u64,
+    pub ledger_write_bytes: u64,
+    /// Transaction size in bytes
+    #[schema(example = 450)]
+    pub transaction_size_bytes: u64,
+}
+
+/// Convert a `SimulationResult` (library type) into the API `ResourceReport`.
+fn to_report(result: &SimulationResult) -> ResourceReport {
+    ResourceReport {
+        cpu_instructions: result.resources.cpu_instructions,
+        ram_bytes: result.resources.ram_bytes,
+        ledger_read_bytes: result.resources.ledger_read_bytes,
+        ledger_write_bytes: result.resources.ledger_write_bytes,
+        transaction_size_bytes: result.resources.transaction_size_bytes,
+    }
 }
 
 #[utoipa::path(
@@ -77,26 +114,50 @@ struct ResourceReport {
     request_body = AnalyzeRequest,
     responses(
         (status = 200, description = "Resource analysis successful", body = ResourceReport),
+        (status = 401, description = "Unauthorized"),
         (status = 500, description = "Analysis failed")
+    ),
+    security(
+        ("jwt" = [])
     ),
     tag = "Analysis"
 )]
-async fn analyze(Json(payload): Json<AnalyzeRequest>) -> Result<Json<ResourceReport>, AppError> {
+async fn analyze(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<AnalyzeRequest>,
+) -> Result<(HeaderMap, Json<ResourceReport>), AppError> {
     tracing::info!(
-        "Analyzing request for contract: {}, function: {}",
-        payload.contract_id,
-        payload.function_name
+        contract_id = %payload.contract_id,
+        function_name = %payload.function_name,
+        "Received analyze request"
     );
 
-    // Placeholder: This will eventually call SimulationEngine
-    // For now, we return a success response that matches the expected frontend structure
-    let report = ResourceReport {
-        cpu_instructions: 1500,
-        memory_bytes: 3000,
-        ledger_read_bytes: 1024,
-        ledger_write_bytes: 512,
-    };
-    Ok(Json(report))
+    let args: Vec<String> = vec![];
+    let cache_key =
+        SimulationCache::generate_key(&payload.contract_id, &payload.function_name, &args);
+
+    let (result, cache_status): (SimulationResult, &'static str) =
+        if let Some(cached) = state.cache.get(&cache_key).await {
+            (cached, "HIT")
+        } else {
+            let sim = state
+                .engine
+                .simulate_from_contract_id(&payload.contract_id, &payload.function_name, args)
+                .await
+                .map_err(|e| AppError::Internal(format!("Simulation failed: {}", e)))?;
+            state.cache.set(cache_key, sim.clone()).await;
+            (sim, "MISS")
+        };
+
+    state.cache.log_stats();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("x-soroscope-cache"),
+        HeaderValue::from_static(cache_status),
+    );
+
+    Ok((headers, Json(to_report(&result))))
 }
 
 #[derive(Serialize, ToSchema)]
@@ -265,9 +326,6 @@ async fn health_check() -> &'static str {
 
 #[tokio::main]
 async fn main() {
-    // -------------------------------
-    // Initialize Tracing / Logging
-    // -------------------------------
     if env::var("RUST_LOG").is_err() {
         env::set_var("RUST_LOG", "info");
     }
@@ -279,15 +337,13 @@ async fn main() {
 
     tracing::info!("SoroScope Starting...");
 
-    // -------------------------------
-    // Load configuration
-    // -------------------------------
     let config = load_config().expect("Failed to load configuration");
     tracing::info!("SoroScope initialized with config: {:?}", config);
+    tracing::info!(
+        redis_url = %config.redis_url,
+        "Cache config: using in-memory (moka) MVP; Redis URL reserved for future migration"
+    );
 
-    // -------------------------------
-    // CLI Argument Handling (Benchmark)
-    // -------------------------------
     let args: Vec<String> = env::args().collect();
 
     if args.len() > 1 && args[1] == "benchmark" {
@@ -299,7 +355,6 @@ async fn main() {
         ];
 
         let mut wasm_path = None;
-
         for p in possible_paths {
             let path = PathBuf::from(p);
             if path.exists() {
@@ -321,6 +376,7 @@ async fn main() {
         return;
     }
 
+<<<<<<< HEAD
     if args.len() > 1 && args[1] == "compare" {
         if args.len() < 4 {
             tracing::error!(
@@ -395,6 +451,8 @@ async fn main() {
     // -------------------------------
     // Web Server Setup
     // -------------------------------
+=======
+>>>>>>> origin/main
     tracing::info!("Starting SoroScope API Server...");
 
     let auth_state = Arc::new(auth::AuthState::new(
@@ -406,6 +464,10 @@ async fn main() {
         "SEP-10 server account: {}",
         auth_state.server_stellar_address()
     );
+    let app_state = Arc::new(AppState {
+        engine: SimulationEngine::new(config.soroban_rpc_url.clone()),
+        cache: SimulationCache::new(),
+    });
 
     let cors = CorsLayer::new().allow_origin(Any);
 
@@ -423,21 +485,15 @@ async fn main() {
             }),
         )
         .route("/health", get(health_check))
-        .route(
-            "/error",
-            get(|| async { Err::<&str, AppError>(AppError::BadRequest("Test error".to_string())) }),
-        )
         .route("/auth/challenge", post(auth::challenge_handler))
         .route("/auth/verify", post(auth::verify_handler))
         .merge(protected)
         .layer(Extension(auth_state))
         .layer(Extension(Arc::new(config.clone())))
         .layer(cors)
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        .with_state(app_state); // ← thread AppState through all handlers
 
-    // -------------------------------
-    // Run Server
-    // -------------------------------
     let bind_addr = format!("0.0.0.0:{}", config.server_port);
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await

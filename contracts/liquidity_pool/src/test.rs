@@ -624,7 +624,7 @@ fn test_transfer_from() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn test_transfer_from_insufficient_allowance() {
     let e = Env::default();
     e.mock_all_auths();

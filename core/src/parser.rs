@@ -7,6 +7,7 @@ use stellar_strkey::Strkey;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum ParserError {
     #[error("Invalid JSON type at {location}: expected {expected}, found {found}")]
     InvalidType {
@@ -14,21 +15,18 @@ pub enum ParserError {
         expected: String,
         found: String,
     },
+<<<<<<< HEAD
 
     #[error("Invalid address at {location}: {details}")]
     InvalidAddress { location: String, details: String },
+=======
+>>>>>>> origin/main
 
     #[error("Invalid symbol at {location}: {details}")]
     InvalidSymbol { location: String, details: String },
 
     #[error("Invalid hex bytes at {location}: {details}")]
     InvalidHex { location: String, details: String },
-
-    #[error("Map key must be a string or symbol at {location}")]
-    InvalidMapKey { location: String },
-
-    #[error("Serialization error at {0}: {1}")]
-    SerializationError(String, #[source] soroban_sdk::xdr::Error),
 }
 
 pub struct ArgParser;

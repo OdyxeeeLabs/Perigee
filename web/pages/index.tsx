@@ -241,9 +241,10 @@ export default function Home() {
                     <div className="mt-4">
                       <NutritionLabel
                         cpu_instructions={currentResult.resourceCost.cpu_instructions}
-                        memory_bytes={currentResult.resourceCost.memory_bytes}
+                        ram_bytes={currentResult.resourceCost.ram_bytes}
                         ledger_read_bytes={currentResult.resourceCost.ledger_read_bytes}
                         ledger_write_bytes={currentResult.resourceCost.ledger_write_bytes}
+                        transaction_size_bytes={currentResult.resourceCost.transaction_size_bytes}
                       />
                     </div>
                   )}

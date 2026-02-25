@@ -12,16 +12,18 @@ interface ResourceMetric {
 
 interface NutritionLabelProps {
     cpu_instructions: number;
-    memory_bytes: number;
+    ram_bytes: number;
     ledger_read_bytes: number;
     ledger_write_bytes: number;
+    transaction_size_bytes: number;
 }
 
 export const NutritionLabel: React.FC<NutritionLabelProps> = ({
     cpu_instructions,
-    memory_bytes,
+    ram_bytes,
     ledger_read_bytes,
     ledger_write_bytes,
+    transaction_size_bytes,
 }) => {
     // Soroban Limits (Approximate / Configurable)
     const LIMITS = {
@@ -29,6 +31,7 @@ export const NutritionLabel: React.FC<NutritionLabelProps> = ({
         RAM: 40 * 1024 * 1024, // 40MB
         LEDGER_READ: 64 * 1024, // 64KB
         LEDGER_WRITE: 64 * 1024, // 64KB
+        TX_SIZE: 128 * 1024, // 128KB
     };
 
     const metrics: ResourceMetric[] = [
@@ -42,7 +45,7 @@ export const NutritionLabel: React.FC<NutritionLabelProps> = ({
         },
         {
             label: 'Memory (RAM)',
-            value: memory_bytes,
+            value: ram_bytes,
             max: LIMITS.RAM,
             unit: 'bytes',
             color: '#eab308', // Yellow-500
@@ -63,6 +66,14 @@ export const NutritionLabel: React.FC<NutritionLabelProps> = ({
             unit: 'bytes',
             color: '#10b981', // Emerald-500
             icon: HardDrive,
+        },
+        {
+            label: 'Transaction Size',
+            value: transaction_size_bytes,
+            max: LIMITS.TX_SIZE,
+            unit: 'bytes',
+            color: '#a371f7', // Purple-500
+            icon: Activity, // Reuse icon or find another
         },
     ];
 
