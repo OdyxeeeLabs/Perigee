@@ -9,7 +9,6 @@ mod simulation;
 use crate::errors::AppError;
 use crate::jobs::{JobQueue, JobResponse, SubmitJobRequest};
 use crate::rpc_provider::{ProviderRegistry, RpcProvider};
-use crate::network_config::NetworkConfig;
 use crate::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use axum::{
     extract::{Json, State},
