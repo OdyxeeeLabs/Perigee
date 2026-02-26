@@ -21,7 +21,6 @@ pub enum Error {
     Unauthorized = 7,
     InvalidFee = 8,
     Paused = 9,
-    InsufficientAllowance = 10,
 }
 
 // Event structures for state-changing operations
@@ -712,7 +711,7 @@ impl LiquidityPool {
         // Check allowance
         let current_allowance = Self::allowance(e.clone(), from.clone(), spender.clone());
         if current_allowance < amount {
-            return Err(Error::InsufficientAllowance);
+            return Err(Error::InsufficientBalance);
         }
 
         // Update allowance (decrement by amount)

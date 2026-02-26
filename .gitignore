@@ -2,6 +2,10 @@
 /target
 **/target
 
+# Snapshots
+/contracts/liquidity_pool/test_snapshots
+**/contracts/liquidity_pool/test_snapshots
+
 # Node
 /node_modules
 **/node_modules
