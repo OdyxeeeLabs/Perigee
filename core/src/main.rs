@@ -293,6 +293,7 @@ async fn get_job(
     let response = state
         .job_queue
         .get_job(&job_id)
+        .await
         .map_err(|e| AppError::Internal(format!("Job retrieval failed: {}", e)))?;
 
     Ok(Json(response))

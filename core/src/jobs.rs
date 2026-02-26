@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{timeout, Duration};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::errors::AppError;
@@ -28,14 +29,14 @@ pub struct JobMetadata {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SubmitJobRequest {
     pub callback_url: Option<String>,
     pub expires_in_seconds: Option<u64>,
     pub job_data: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct JobResponse {
     pub job_id: String,
     pub status: JobStatus,
@@ -120,10 +121,12 @@ impl JobQueue {
 
             // If job is completed, trigger webhook if callback URL exists
             if matches!(job.status, JobStatus::Completed | JobStatus::Failed) {
-                if let Some(callback_url) = &job.callback_url {
-                    let job_clone = job.clone();
+                if let Some(ref callback_url) = job.callback_url.clone() {
+                    // Clone into fully-owned values so the async task is 'static
+                    let owned_url: String = callback_url.clone();
+                    let job_snapshot: JobMetadata = job.clone();
                     tokio::spawn(async move {
-                        Self::trigger_webhook(callback_url, &job_clone).await;
+                        Self::trigger_webhook(owned_url, job_snapshot).await;
                     });
                 }
             }
@@ -158,7 +161,7 @@ impl JobQueue {
         });
     }
 
-    pub async fn trigger_webhook(callback_url: &str, job: &JobMetadata) {
+    pub async fn trigger_webhook(callback_url: String, job: JobMetadata) {
         let client = reqwest::Client::new();
         let payload = serde_json::json!({
             "job_id": job.id,
@@ -170,7 +173,7 @@ impl JobQueue {
 
         match timeout(
             Duration::from_secs(30),
-            client.post(callback_url).json(&payload).send(),
+            client.post(&callback_url).json(&payload).send(),
         )
         .await
         {

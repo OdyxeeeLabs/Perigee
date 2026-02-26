@@ -8,6 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Prevent utoipa-swagger-ui build script from hitting the network.
+  # The "vendored" Cargo feature bundles assets; this env var is a belt-and-
+  # suspenders guard in case any older path still attempts a fetch.
+  SWAGGER_UI_DOWNLOAD_URL: ""
 
 jobs:
   # ------------------------------------------------------------------
@@ -22,6 +26,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - name: Cache Cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-fmt-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-fmt-
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
@@ -38,6 +51,15 @@ jobs:
         with:
           components: clippy
           target: wasm32-unknown-unknown
+      - name: Cache Cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-clippy-
       - name: Install System Dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libdbus-1-dev libudev-dev
       - name: Install Soroban CLI
@@ -57,12 +79,21 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           target: wasm32-unknown-unknown
+      - name: Cache Cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
       - name: Install System Dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libdbus-1-dev libudev-dev
       - name: Install Soroban CLI
         run: cargo install soroban-cli
       - name: Run Tests
-        run: cargo test
+        run: cargo test --workspace
 
   # ------------------------------------------------------------------
   # Job 4: Frontend (Lint & Typecheck)
