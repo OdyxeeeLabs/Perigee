@@ -3,10 +3,13 @@ mod benchmarks;
 mod errors;
 mod jobs;
 mod parser;
+pub mod rpc_provider;
 mod simulation;
 
 use crate::errors::AppError;
 use crate::jobs::{JobQueue, JobResponse, SubmitJobRequest};
+use crate::rpc_provider::{ProviderRegistry, RpcProvider};
+use crate::network_config::NetworkConfig;
 use crate::simulation::{SimulationCache, SimulationEngine, SimulationResult};
 use axum::{
     extract::{Json, State},
@@ -32,6 +35,8 @@ use utoipa_swagger_ui::SwaggerUi;
 struct AppConfig {
     server_port: u16,
     rust_log: String,
+    /// Primary RPC URL — used as a single-provider fallback when
+    /// `RPC_PROVIDERS` is not set.
     soroban_rpc_url: String,
     jwt_secret: String,
     network_passphrase: String,
@@ -39,6 +44,23 @@ struct AppConfig {
     /// Unused in the MVP in-memory implementation — present so the config
     /// surface is stable when Redis is wired in.
     redis_url: String,
+    /// JSON-encoded array of RPC provider objects.  Example:
+    /// ```json
+    /// [
+    ///   {"name":"stellar-testnet","url":"https://soroban-testnet.stellar.org"},
+    ///   {"name":"blockdaemon","url":"https://soroban.blockdaemon.com","auth_header":"X-API-Key","auth_value":"KEY"}
+    /// ]
+    /// ```
+    /// When empty or absent the engine falls back to `soroban_rpc_url`.
+    #[serde(default)]
+    rpc_providers: String,
+    /// Health-check interval in seconds (default 30).
+    #[serde(default = "default_health_check_interval")]
+    health_check_interval_secs: u64,
+}
+
+fn default_health_check_interval() -> u64 {
+    30
 }
 
 fn load_config() -> Result<AppConfig, ConfigError> {
@@ -52,9 +74,43 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("jwt_secret", "dev-secret-change-in-production")?
         .set_default("network_passphrase", "Test SDF Network ; September 2015")?
         .set_default("redis_url", "redis://127.0.0.1:6379")?
+        .set_default("rpc_providers", "")?
+        .set_default("health_check_interval_secs", 30)?
         .build()?;
 
     settings.try_deserialize()
+}
+
+/// Parse the `RPC_PROVIDERS` env var (JSON array) or fall back to wrapping the
+/// single `SOROBAN_RPC_URL` into a one-element provider list.
+fn build_providers(config: &AppConfig) -> Vec<RpcProvider> {
+    if !config.rpc_providers.is_empty() {
+        match serde_json::from_str::<Vec<RpcProvider>>(&config.rpc_providers) {
+            Ok(providers) if !providers.is_empty() => {
+                tracing::info!(
+                    count = providers.len(),
+                    "Loaded RPC providers from RPC_PROVIDERS"
+                );
+                return providers;
+            }
+            Ok(_) => {
+                tracing::warn!("RPC_PROVIDERS is empty array, falling back to SOROBAN_RPC_URL");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to parse RPC_PROVIDERS, falling back to SOROBAN_RPC_URL"
+                );
+            }
+        }
+    }
+
+    vec![RpcProvider {
+        name: "default".to_string(),
+        url: config.soroban_rpc_url.clone(),
+        auth_header: None,
+        auth_value: None,
+    }]
 }
 
 /// Shared application state injected into every Axum handler via [`State`].
@@ -332,8 +388,23 @@ async fn main() {
         "SEP-10 server account: {}",
         auth_state.server_stellar_address()
     );
+    // ── Multi-node RPC setup ────────────────────────────────────────────
+    let providers = build_providers(&config);
+    let provider_names: Vec<&str> = providers.iter().map(|p| p.name.as_str()).collect();
+    tracing::info!(providers = ?provider_names, "RPC provider pool");
+
+    let registry = ProviderRegistry::new(providers);
+
+    // Spawn background health checker.
+    let health_interval = std::time::Duration::from_secs(config.health_check_interval_secs);
+    let _health_handle = registry.spawn_health_checker(health_interval);
+    tracing::info!(
+        interval_secs = config.health_check_interval_secs,
+        "Background RPC health checker started"
+    );
+
     let app_state = Arc::new(AppState {
-        engine: SimulationEngine::new(config.soroban_rpc_url.clone()),
+        engine: SimulationEngine::with_registry(Arc::clone(&registry)),
         cache: SimulationCache::new(),
         job_queue: Arc::new(JobQueue::new()),
     });

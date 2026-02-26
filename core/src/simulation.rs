@@ -1,4 +1,5 @@
 use crate::parser::ArgParser;
+use crate::rpc_provider::ProviderRegistry;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -144,17 +145,33 @@ struct ResourceCost {
 }
 
 pub struct SimulationEngine {
+    /// Kept for single-provider backward compatibility; empty when using registry.
     rpc_url: String,
     client: Client,
     request_timeout: std::time::Duration,
+    /// When set, the engine will iterate healthy providers and failover automatically.
+    registry: Option<Arc<ProviderRegistry>>,
 }
 
 impl SimulationEngine {
+    /// Create an engine backed by a single RPC URL (backward-compatible).
+    #[allow(dead_code)]
     pub fn new(rpc_url: String) -> Self {
         Self {
             rpc_url,
             client: Client::new(),
             request_timeout: std::time::Duration::from_secs(30),
+            registry: None,
+        }
+    }
+
+    /// Create an engine backed by a `ProviderRegistry` for multi-node failover.
+    pub fn with_registry(registry: Arc<ProviderRegistry>) -> Self {
+        Self {
+            rpc_url: String::new(),
+            client: Client::new(),
+            request_timeout: std::time::Duration::from_secs(30),
+            registry: Some(registry),
         }
     }
 
@@ -192,8 +209,112 @@ impl SimulationEngine {
         self.simulate_transaction(&transaction_xdr).await
     }
 
+    /// Top-level simulate dispatcher: uses the provider registry when available,
+    /// otherwise falls back to the single `rpc_url`.
     async fn simulate_transaction(
         &self,
+        transaction_xdr: &str,
+    ) -> Result<SimulationResult, SimulationError> {
+        match &self.registry {
+            Some(registry) => {
+                self.simulate_transaction_with_failover(registry, transaction_xdr)
+                    .await
+            }
+            None => {
+                self.simulate_transaction_single(&self.rpc_url, None, None, transaction_xdr)
+                    .await
+            }
+        }
+    }
+
+    /// Try each healthy provider in priority order until one succeeds or all
+    /// are exhausted.
+    async fn simulate_transaction_with_failover(
+        &self,
+        registry: &Arc<ProviderRegistry>,
+        transaction_xdr: &str,
+    ) -> Result<SimulationResult, SimulationError> {
+        let providers = registry.healthy_providers().await;
+
+        if providers.is_empty() {
+            return Err(SimulationError::RpcRequestFailed(
+                "All RPC providers are unavailable (circuit breaker tripped)".to_string(),
+            ));
+        }
+
+        let mut last_error: Option<SimulationError> = None;
+
+        for provider in &providers {
+            tracing::debug!(
+                provider = %provider.name,
+                url = %provider.url,
+                "Attempting simulation request"
+            );
+
+            let auth = provider
+                .auth_header
+                .as_deref()
+                .zip(provider.auth_value.as_deref());
+
+            match self
+                .simulate_transaction_single(
+                    &provider.url,
+                    auth.map(|(h, _)| h),
+                    auth.map(|(_, v)| v),
+                    transaction_xdr,
+                )
+                .await
+            {
+                Ok(result) => {
+                    registry.report_success(&provider.url).await;
+                    return Ok(result);
+                }
+                Err(e) => {
+                    let should_retry = match &e {
+                        SimulationError::NodeTimeout | SimulationError::NetworkError(_) => true,
+                        SimulationError::RpcRequestFailed(msg)
+                            if msg.starts_with("HTTP error:") =>
+                        {
+                            // Extract status code from "HTTP error: <code>"
+                            msg.split_whitespace()
+                                .last()
+                                .and_then(|s| s.parse::<u16>().ok())
+                                .map(ProviderRegistry::is_retryable_status)
+                                .unwrap_or(false)
+                        }
+                        _ => false,
+                    };
+
+                    registry.report_failure(&provider.url).await;
+
+                    if should_retry {
+                        tracing::warn!(
+                            provider = %provider.name,
+                            error = %e,
+                            "Provider failed with retryable error, trying next"
+                        );
+                        last_error = Some(e);
+                        continue;
+                    }
+
+                    // Non-retryable error (e.g. bad request) — don't bother
+                    // trying other providers; the request itself is bad.
+                    return Err(e);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            SimulationError::RpcRequestFailed("All providers exhausted".to_string())
+        }))
+    }
+
+    /// Send a `simulateTransaction` JSON-RPC call to a single endpoint.
+    async fn simulate_transaction_single(
+        &self,
+        url: &str,
+        auth_header: Option<&str>,
+        auth_value: Option<&str>,
         transaction_xdr: &str,
     ) -> Result<SimulationResult, SimulationError> {
         let request = SimulateTransactionRequest {
@@ -205,23 +326,27 @@ impl SimulationEngine {
             },
         };
 
-        tracing::debug!("Sending simulateTransaction request to {}", self.rpc_url);
+        tracing::debug!("Sending simulateTransaction request to {}", url);
 
-        let response = tokio::time::timeout(
-            self.request_timeout,
-            self.client.post(&self.rpc_url).json(&request).send(),
-        )
-        .await
-        .map_err(|_| SimulationError::NodeTimeout)?
-        .map_err(|e| {
-            if e.is_timeout() {
-                SimulationError::NodeTimeout
-            } else if e.is_connect() {
-                SimulationError::NetworkError(e)
-            } else {
-                SimulationError::RpcRequestFailed(format!("Network error: {}", e))
-            }
-        })?;
+        let mut req_builder = self.client.post(url).json(&request);
+
+        // Attach provider-specific auth header if present.
+        if let (Some(header), Some(value)) = (auth_header, auth_value) {
+            req_builder = req_builder.header(header, value);
+        }
+
+        let response = tokio::time::timeout(self.request_timeout, req_builder.send())
+            .await
+            .map_err(|_| SimulationError::NodeTimeout)?
+            .map_err(|e| {
+                if e.is_timeout() {
+                    SimulationError::NodeTimeout
+                } else if e.is_connect() {
+                    SimulationError::NetworkError(e)
+                } else {
+                    SimulationError::RpcRequestFailed(format!("Network error: {}", e))
+                }
+            })?;
 
         if !response.status().is_success() {
             return Err(SimulationError::RpcRequestFailed(format!(
