@@ -1,23 +1,23 @@
 use crate::parser::ArgParser;
 use crate::rpc_provider::ProviderRegistry;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use moka::future::Cache;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use soroban_sdk::xdr::{
     Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, LedgerEntry, LedgerKey, Limits,
     Memo, MuxedAccount, Operation, OperationBody, Preconditions, ReadXdr, ScAddress, ScSymbol,
     ScVal, SequenceNumber, SorobanAuthorizationEntry, SorobanTransactionData, Transaction,
     TransactionExt, TransactionV1Envelope, Uint256, VecM, WriteXdr,
 };
-use stellar_strkey::Strkey;
-use thiserror::Error;
-
-use moka::future::Cache;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use stellar_strkey::Strkey;
+use thiserror::Error;
+use utoipa::ToSchema;
 
 /// Errors that can occur during simulation
 #[derive(Error, Debug)]
@@ -46,18 +46,43 @@ pub enum SimulationError {
     #[error("XDR decode error: {0}")]
     XdrError(String),
 
+    #[error("Invalid contract: {0}")]
+    InvalidContract(String),
+
     #[error("Parse error: {0}")]
     ParseError(#[from] crate::parser::ParserError),
 }
 
 /// Soroban resource consumption data
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Default)]
 pub struct SorobanResources {
     pub cpu_instructions: u64,
     pub ram_bytes: u64,
     pub ledger_read_bytes: u64,
     pub ledger_write_bytes: u64,
     pub transaction_size_bytes: u64,
+}
+
+/// Optimization report for a resource limit
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct OptimizationBuffer {
+    /// The original RPC estimation
+    pub estimated: u64,
+    /// The absolute minimum found
+    pub absolute_minimum: u64,
+    /// The percentage buffer between estimate and minimum
+    pub buffer_percentage: f64,
+}
+
+/// Complete optimization report for CPU and RAM
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptimizationReport {
+    /// CPU optimization details
+    pub cpu: OptimizationBuffer,
+    /// RAM optimization details
+    pub ram: OptimizationBuffer,
+    /// Recommended limits (including safety margin)
+    pub recommended: SorobanResources,
 }
 
 /// Complete simulation result including resources and metadata
@@ -70,6 +95,8 @@ pub struct SimulationResult {
     pub cost_stroops: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_dependency: Option<Vec<StateDependency>>,
+    /// The SorobanTransactionData XDR returned by the RPC (base64)
+    pub transaction_data: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,6 +233,207 @@ impl SimulationEngine {
         }
 
         let transaction_xdr = self.create_invoke_transaction(contract_id, function_name, args)?;
+        self.simulate_transaction(&transaction_xdr).await
+    }
+
+    /// Optimized limit discovery via binary search
+    #[allow(clippy::too_many_arguments)]
+    pub async fn optimize_limits(
+        &self,
+        contract_id: &str,
+        function_name: &str,
+        args: Vec<String>,
+        safety_margin: f64,
+    ) -> Result<OptimizationReport, SimulationError> {
+        // 1. Get initial estimate
+        let initial_result = self
+            .simulate_from_contract_id(contract_id, function_name, args.clone(), None)
+            .await?;
+        let estimate = initial_result.resources;
+
+        // 2. Perform binary search for CPU and RAM concurrently
+        let cpu_search = self.binary_search_resource(
+            contract_id,
+            function_name,
+            args.clone(),
+            estimate.cpu_instructions / 2,
+            estimate.cpu_instructions,
+            "cpu",
+            &estimate,
+            &initial_result.transaction_data,
+        );
+
+        let ram_search = self.binary_search_resource(
+            contract_id,
+            function_name,
+            args.clone(),
+            estimate.ram_bytes / 2,
+            estimate.ram_bytes,
+            "ram",
+            &estimate,
+            &initial_result.transaction_data,
+        );
+
+        let (min_cpu, min_ram) = tokio::join!(cpu_search, ram_search);
+
+        let min_cpu = min_cpu?;
+        let min_ram = min_ram?;
+
+        // 3. Calculate buffers
+        let cpu_buffer = OptimizationBuffer {
+            estimated: estimate.cpu_instructions,
+            absolute_minimum: min_cpu,
+            buffer_percentage: ((estimate.cpu_instructions as f64 - min_cpu as f64)
+                / estimate.cpu_instructions as f64)
+                * 100.0,
+        };
+
+        let ram_buffer = OptimizationBuffer {
+            estimated: estimate.ram_bytes,
+            absolute_minimum: min_ram,
+            buffer_percentage: ((estimate.ram_bytes as f64 - min_ram as f64)
+                / estimate.ram_bytes as f64)
+                * 100.0,
+        };
+
+        // 4. Calculate recommended limits with safety margin
+        let recommended = SorobanResources {
+            cpu_instructions: (min_cpu as f64 * (1.0 + safety_margin)) as u64,
+            ram_bytes: (min_ram as f64 * (1.0 + safety_margin)) as u64,
+            ledger_read_bytes: estimate.ledger_read_bytes,
+            ledger_write_bytes: estimate.ledger_write_bytes,
+            transaction_size_bytes: estimate.transaction_size_bytes,
+        };
+
+        Ok(OptimizationReport {
+            cpu: cpu_buffer,
+            ram: ram_buffer,
+            recommended,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn binary_search_resource(
+        &self,
+        contract_id: &str,
+        function_name: &str,
+        args: Vec<String>,
+        mut low: u64,
+        mut high: u64,
+        resource_type: &str,
+        base_resources: &SorobanResources,
+        transaction_data_xdr: &str,
+    ) -> Result<u64, SimulationError> {
+        let mut min_success = high;
+
+        while low <= high {
+            let mid = low + (high - low) / 2;
+            let mut test_resources = base_resources.clone();
+
+            if resource_type == "cpu" {
+                test_resources.cpu_instructions = mid;
+            } else {
+                test_resources.ram_bytes = mid;
+            }
+
+            match self
+                .simulate_with_exact_limits(
+                    contract_id,
+                    function_name,
+                    args.clone(),
+                    &test_resources,
+                    transaction_data_xdr,
+                )
+                .await
+            {
+                Ok(_) => {
+                    min_success = mid;
+                    if mid == 0 {
+                        break;
+                    }
+                    high = mid - 1;
+                }
+                Err(_) => {
+                    low = mid + 1;
+                }
+            }
+        }
+
+        Ok(min_success)
+    }
+
+    async fn simulate_with_exact_limits(
+        &self,
+        contract_id: &str,
+        function_name: &str,
+        args: Vec<String>,
+        resources: &SorobanResources,
+        transaction_data_xdr: &str,
+    ) -> Result<SimulationResult, SimulationError> {
+        // 1. Decode the original transaction data to get footprint and other metadata
+        let xdr_bytes = BASE64.decode(transaction_data_xdr).map_err(|e| {
+            SimulationError::XdrError(format!("Failed to decode transaction data: {}", e))
+        })?;
+        let mut soroban_data = SorobanTransactionData::from_xdr(&xdr_bytes, Limits::none())
+            .map_err(|e| {
+                SimulationError::XdrError(format!("Failed to parse SorobanTransactionData: {}", e))
+            })?;
+
+        // 2. Update the resource limits in the transaction data
+        soroban_data.resources.instructions = resources.cpu_instructions as u32;
+
+        // 3. Create the basic host function
+        let contract_hash = self.parse_contract_id(contract_id)?;
+        let contract_address = ScAddress::Contract(Hash(contract_hash));
+        let func_symbol: ScSymbol = function_name
+            .try_into()
+            .map_err(|_| SimulationError::InvalidContract("Invalid function name".to_string()))?;
+        let sc_args: VecM<ScVal> = args
+            .iter()
+            .map(|arg| self.parse_sc_val_arg(arg))
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_| SimulationError::InvalidContract("Too many arguments".to_string()))?;
+
+        let host_function = HostFunction::InvokeContract(InvokeContractArgs {
+            contract_address,
+            function_name: func_symbol,
+            args: sc_args,
+        });
+
+        // 2. Build transaction XDR
+        let invoke_op = InvokeHostFunctionOp {
+            host_function,
+            auth: vec![].try_into().unwrap(),
+        };
+
+        let operation = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(invoke_op),
+        };
+
+        let source_account = MuxedAccount::Ed25519(Uint256([0u8; 32]));
+
+        let tx = Transaction {
+            source_account,
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: vec![operation].try_into().unwrap(),
+            ext: TransactionExt::V1(soroban_data),
+        };
+
+        let envelope = TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        };
+
+        let xdr_bytes = envelope
+            .to_xdr(Limits::none())
+            .map_err(|e| SimulationError::XdrError(format!("Failed to encode XDR: {}", e)))?;
+        let transaction_xdr = BASE64.encode(&xdr_bytes);
+
         self.simulate_transaction(&transaction_xdr).await
     }
 
@@ -424,6 +652,7 @@ impl SimulationEngine {
             latest_ledger: rpc_result.latest_ledger,
             cost_stroops,
             state_dependency: None,
+            transaction_data: rpc_result.transaction_data,
         })
     }
 
@@ -482,6 +711,8 @@ impl SimulationEngine {
         total_bytes
     }
 
+    /// Estimate the size of an ScVal in bytes
+    #[allow(clippy::only_used_in_recursion)]
     fn estimate_scval_size(&self, scval: &soroban_sdk::xdr::ScVal) -> u64 {
         use soroban_sdk::xdr::ScVal;
         match scval {
@@ -586,19 +817,15 @@ impl SimulationEngine {
         Ok(BASE64.encode(&xdr_bytes))
     }
 
-    fn parse_contract_id(&self, contract_id: &str) -> Result<[u8; 32], SimulationError> {
-        if !contract_id.starts_with('C') {
-            return Err(SimulationError::NodeError(
-                "Contract ID must start with 'C'".to_string(),
-            ));
-        }
+    /// Parse a contract ID from strkey format (C...) to raw bytes
+    pub fn parse_contract_id(&self, contract_id: &str) -> Result<[u8; 32], SimulationError> {
         let strkey = Strkey::from_string(contract_id).map_err(|e| {
             SimulationError::NodeError(format!("Invalid contract ID format: {}", e))
         })?;
         match strkey {
             Strkey::Contract(contract) => Ok(contract.0),
-            _ => Err(SimulationError::NodeError(
-                "Expected contract address".to_string(),
+            _ => Err(SimulationError::InvalidContract(
+                "Contract ID must be a C... address".to_string(),
             )),
         }
     }
@@ -641,6 +868,7 @@ impl SimulationEngine {
             }
         }
 
+        // 5. Default fallback: Treat as Symbol (standard Soroban behavior for unquoted strings)
         // 5. Default fallback: Treat as Symbol (standard Soroban behavior for unquoted strings)
         let symbol: ScSymbol = arg
             .try_into()
@@ -1043,6 +1271,7 @@ mod tests {
                 latest_ledger: 42,
                 cost_stroops: 10,
                 state_dependency: None,
+                transaction_data: "AAA=".to_string(),
             }
         }
 
