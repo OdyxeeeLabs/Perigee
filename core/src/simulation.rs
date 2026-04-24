@@ -268,7 +268,7 @@ pub struct SimulationEngine {
 }
 
 impl SimulationEngine {
-    const TTL_WARNING_THRESHOLD_LEDGERS: i64 = 120_000;
+    pub(crate) const TTL_WARNING_THRESHOLD_LEDGERS: i64 = 120_000;
     const TTL_TARGET_LEDGERS_AHEAD: i64 = 360_000;
 
     /// Create an engine backed by a single RPC URL (backward-compatible).
@@ -871,7 +871,7 @@ impl SimulationEngine {
         })
     }
 
-    fn build_extend_ttl_suggestions(
+    pub(crate) fn build_extend_ttl_suggestions(
         touched_entries: &[TtlEntryReport],
         latest_ledger: u64,
     ) -> Vec<ExtendTtlSuggestion> {
@@ -941,7 +941,7 @@ impl SimulationEngine {
         })
     }
 
-    fn extract_footprint_from_xdr(&self, transaction_data: &str) -> (u64, u64) {
+    pub(crate) fn extract_footprint_from_xdr(&self, transaction_data: &str) -> (u64, u64) {
         if transaction_data.is_empty() {
             return (0, 0);
         }
@@ -998,7 +998,7 @@ impl SimulationEngine {
 
     /// Estimate the size of an ScVal in bytes
     #[allow(clippy::only_used_in_recursion)]
-    fn estimate_scval_size(&self, scval: &soroban_sdk::xdr::ScVal) -> u64 {
+    pub(crate) fn estimate_scval_size(&self, scval: &soroban_sdk::xdr::ScVal) -> u64 {
         use soroban_sdk::xdr::ScVal;
         match scval {
             ScVal::Bool(_) => 1,
@@ -1030,7 +1030,7 @@ impl SimulationEngine {
         }
     }
 
-    fn calculate_cost(&self, resources: &SorobanResources) -> u64 {
+    pub(crate) fn calculate_cost(&self, resources: &SorobanResources) -> u64 {
         let cpu_cost = resources.cpu_instructions / 10000;
         let ram_cost = resources.ram_bytes / 1024;
         let ledger_cost = (resources.ledger_read_bytes + resources.ledger_write_bytes) / 1024;
@@ -1115,7 +1115,7 @@ impl SimulationEngine {
         }
     }
 
-    fn parse_sc_val_arg(&self, arg: &str) -> Result<ScVal, SimulationError> {
+    pub(crate) fn parse_sc_val_arg(&self, arg: &str) -> Result<ScVal, SimulationError> {
         let arg = arg.trim();
 
         // 1. Try parsing as JSON first (for complex types like Maps and Vecs)
@@ -2035,6 +2035,7 @@ mod tests {
         };
         let json2 = serde_json::to_string(&signer2).unwrap();
         assert!(json2.contains("pre_signed_xdr"));
+    }
 
     #[test]
     fn test_build_extend_ttl_suggestions_flags_low_ttl_entries() {

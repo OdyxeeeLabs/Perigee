@@ -175,11 +175,10 @@ pub const LOW_VOLATILITY_FEE_BPS: i128 = 40;
 pub const MEDIUM_VOLATILITY_FEE_BPS: i128 = 70;
 pub const HIGH_VOLATILITY_FEE_BPS: i128 = 100;
 
+#[soroban_sdk::contractclient(name = "PriceOracleClient")]
 pub trait PriceOracle {
     fn latest_price(e: Env) -> i128;
 }
-
-soroban_sdk::contractclient!(name = "PriceOracleClient", trait = PriceOracle);
 
 fn check_paused(e: &Env) -> Result<(), Error> {
     let paused: bool = e

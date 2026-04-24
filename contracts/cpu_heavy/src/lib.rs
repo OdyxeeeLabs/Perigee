@@ -105,3 +105,5 @@ impl CpuHeavyContract {
 }
 
 mod test;
+#[cfg(test)]
+mod fuzz_test;

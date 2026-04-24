@@ -10,5 +10,5 @@ members = [
     "contracts/cross_call",
     "contracts/factory",
     "contracts/math",
-    "contracts/typed_data_auth",
+    # "contracts/typed_data_auth",
 ]
