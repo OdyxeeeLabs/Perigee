@@ -11,4 +11,5 @@ members = [
     "contracts/factory",
     "contracts/math",
     "contracts/typed_data_auth",
+    "contracts/multi_yield_vault",
 ]
