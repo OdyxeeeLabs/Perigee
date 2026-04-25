@@ -23,7 +23,7 @@ tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 utoipa = { version = "4", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 base64 = "0.22"
 hex = "0.4"
 stellar-strkey = "0.0.9"
@@ -32,6 +32,9 @@ ed25519-dalek = "2"
 sha2 = "0.10"
 rand = "0.8"
 moka = { version = "0.12", features = ["future"] }
-sqlx = { version = "0.7", features = ["runtime-tokio", "tls-native-tls", "postgres", "sqlite", "uuid", "chrono", "migrate"] }
+sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "sqlite", "uuid", "chrono", "migrate"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+
+# Missing dependencies for DI engine
+async-trait = "0.1"
