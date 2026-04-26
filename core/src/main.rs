@@ -233,12 +233,6 @@ pub struct ResourceReport {
     pub ttl_analysis: Option<TtlAnalysisApiReport>,
     /// Efficiency score (0–100) and optimisation insights.
     pub nutrition: NutritionReport,
-    /// Cross-contract call graph
-    pub call_graph: Option<crate::simulation::CallGraph>,
-    /// Call graph in Mermaid format
-    pub call_graph_mermaid: Option<String>,
-    /// Snapshot of the ledger state used/touched during simulation
-    pub state_snapshot: Option<crate::simulation::SimulationStateSnapshot>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -441,9 +435,6 @@ fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine) -> Res
                 })
                 .collect(),
         },
-        call_graph: result.call_graph.clone(),
-        call_graph_mermaid: result.call_graph.as_ref().map(|g| g.to_mermaid()),
-        state_snapshot: result.state_snapshot.clone(),
     }
 }
 
@@ -1063,87 +1054,6 @@ async fn main() {
             }
             Err(e) => {
                 eprintln!("Error: Comparison failed: {}", e);
-                std::process::exit(1);
-            }
-        }
-
-        return;
-    }
-
-    // ── CLI: export subcommand ──────────────────────────────────────────
-    if args.len() > 1 && args[1] == "export" {
-        if args.len() < 6 {
-            eprintln!("Usage: soroscope-core export <contract_id> <function> <args_json> <output_file>");
-            eprintln!("\nSimulate a transaction and export the touched state to a JSON file.");
-            std::process::exit(1);
-        }
-
-        let contract_id = &args[2];
-        let function = &args[3];
-        let args_json = &args[4];
-        let output_file = &args[5];
-
-        let parsed_args: Vec<String> = serde_json::from_str(args_json).unwrap_or_default();
-
-        let providers = build_providers(&config);
-        let registry = rpc_provider::ProviderRegistry::new(providers);
-        let engine = SimulationEngine::with_registry(std::sync::Arc::clone(&registry));
-
-        match engine.simulate_from_contract_id(contract_id, function, parsed_args, None).await {
-            Ok(result) => {
-                if let Some(snapshot) = result.state_snapshot {
-                    let json = serde_json::to_string_pretty(&snapshot).unwrap();
-                    if let Err(e) = std::fs::write(output_file, json) {
-                        eprintln!("Error: Failed to write snapshot to {}: {}", output_file, e);
-                        std::process::exit(1);
-                    }
-                    println!("State snapshot exported to {}", output_file);
-                } else {
-                    eprintln!("Error: No state snapshot generated.");
-                    std::process::exit(1);
-                }
-            }
-            Err(e) => {
-                eprintln!("Error: Simulation failed: {}", e);
-                std::process::exit(1);
-            }
-        }
-
-        return;
-    }
-
-    // ── CLI: restore subcommand ──────────────────────────────────────────
-    if args.len() > 1 && args[1] == "restore" {
-        if args.len() < 6 {
-            eprintln!("Usage: soroscope-core restore <snapshot_file> <contract_id> <function> <args_json>");
-            eprintln!("\nRestore state from a JSON file and run a simulation.");
-            std::process::exit(1);
-        }
-
-        let snapshot_file = &args[2];
-        let contract_id = &args[3];
-        let function = &args[4];
-        let args_json = &args[5];
-
-        let snapshot_json = std::fs::read_to_string(snapshot_file).expect("Failed to read snapshot file");
-        let snapshot: crate::simulation::SimulationStateSnapshot = serde_json::from_str(&snapshot_json).expect("Failed to parse snapshot JSON");
-
-        let parsed_args: Vec<String> = serde_json::from_str(args_json).unwrap_or_default();
-
-        let providers = build_providers(&config);
-        let registry = rpc_provider::ProviderRegistry::new(providers);
-        let engine = SimulationEngine::with_registry(std::sync::Arc::clone(&registry));
-
-        match engine.simulate_from_contract_id(contract_id, function, parsed_args, Some(snapshot.ledger_entries)).await {
-            Ok(result) => {
-                println!("Simulation successful with restored state.");
-                println!("Resources: {:?}", result.resources);
-                if let Some(deps) = result.state_dependency {
-                    println!("State dependencies: {} entries", deps.len());
-                }
-            }
-            Err(e) => {
-                eprintln!("Error: Simulation failed: {}", e);
                 std::process::exit(1);
             }
         }
