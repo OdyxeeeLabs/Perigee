@@ -38,3 +38,4 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Missing dependencies for DI engine
 async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }

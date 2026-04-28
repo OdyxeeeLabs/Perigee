@@ -6,13 +6,13 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use soroban_sdk::xdr::{
-    AccountId, Hash, HashIdPreimage, HashIdPreimageSorobanAuthorization, HostFunction,
-    InvokeContractArgs, InvokeHostFunctionOp, LedgerEntry, LedgerKey, Limits, Memo, MuxedAccount,
-    Operation, OperationBody, Preconditions, PublicKey, ReadXdr, ScAddress, ScMapEntry, ScSymbol,
-    ScVal, SequenceNumber, SorobanAddressCredentials, SorobanAuthorizationEntry,
-    SorobanAuthorizedFunction, SorobanAuthorizedInvocation, SorobanCredentials,
-    SorobanTransactionData, Transaction, TransactionExt, TransactionV1Envelope, Uint256, VecM,
-    WriteXdr,
+    AccountId, DiagnosticEvent, DiagnosticEventBody, Hash, HashIdPreimage,
+    HashIdPreimageSorobanAuthorization, HostFunction, InvokeContractArgs, InvokeHostFunctionOp,
+    LedgerEntry, LedgerKey, Limits, Memo, MuxedAccount, Operation, OperationBody, Preconditions,
+    PublicKey, ReadXdr, ScAddress, ScMapEntry, ScSymbol, ScVal, SequenceNumber,
+    SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
+    SorobanAuthorizedInvocation, SorobanCredentials, SorobanTransactionData, Transaction,
+    TransactionExt, TransactionV1Envelope, Uint256, VecM, WriteXdr,
 };
 use ed25519_dalek::Signer as Ed25519Signer;
 use std::collections::HashMap;
@@ -103,6 +103,52 @@ pub struct SimulationResult {
     pub ttl_analysis: Option<TtlAnalysisReport>,
     /// The SorobanTransactionData XDR returned by the RPC (base64)
     pub transaction_data: String,
+    /// Cross-contract call graph
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_graph: Option<CallGraph>,
+    /// Snapshot of the ledger state used/touched during simulation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_snapshot: Option<SimulationStateSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallNode {
+    pub contract_id: String,
+    pub function: String,
+    pub children: Vec<CallNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallGraph {
+    pub root: CallNode,
+}
+
+impl CallGraph {
+    /// Export the call graph to Mermaid format
+    pub fn to_mermaid(&self) -> String {
+        let mut mermaid = String::from("graph TD\n");
+        self.append_mermaid_nodes(&self.root, &mut mermaid, &mut 0);
+        mermaid
+    }
+
+    fn append_mermaid_nodes(&self, node: &CallNode, mermaid: &mut String, id_gen: &mut usize) {
+        let current_id = *id_gen;
+        mermaid.push_str(&format!("    n{current_id}[\"{}:{}\"]\n", node.contract_id, node.function));
+        
+        for child in &node.children {
+            *id_gen += 1;
+            let child_id = *id_gen;
+            mermaid.push_str(&format!("    n{current_id} --> n{child_id}\n"));
+            self.append_mermaid_nodes(child, mermaid, id_gen);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimulationStateSnapshot {
+    pub ledger_entries: HashMap<String, String>, // Key-B64 -> Entry-B64
+    pub ttl_entries: HashMap<String, u32>,       // Key-B64 -> LiveUntilLedger
+    pub latest_ledger: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,8 +236,10 @@ struct SimulationRpcResult {
     #[serde(default)]
     cost: Option<ResourceCost>,
     #[serde(default)]
-    #[allow(dead_code)]
     results: Vec<serde_json::Value>,
+    /// Diagnostic events (base64 encoded XDR)
+    #[serde(default)]
+    events: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -729,6 +777,11 @@ impl SimulationEngine {
                 let mut parsed = self.parse_simulation_result(result.clone())?;
                 let touched_keys = self.extract_touched_ledger_keys(&result.transaction_data);
 
+                // Extract call graph from diagnostic events
+                if !result.events.is_empty() {
+                    parsed.call_graph = self.extract_call_graph(&result.events);
+                }
+
                 if !touched_keys.is_empty() {
                     parsed.state_dependency = Some(
                         touched_keys
@@ -750,13 +803,14 @@ impl SimulationEngine {
                         )
                         .await
                     {
-                        Ok(ttl_report) => {
+                        Ok((ttl_report, snapshot)) => {
                             if !ttl_report.touched_entries.is_empty() {
                                 parsed.ttl_analysis = Some(ttl_report);
                             }
+                            parsed.state_snapshot = Some(snapshot);
                         }
                         Err(e) => {
-                            tracing::warn!("TTL analysis skipped due to RPC error: {}", e);
+                            tracing::warn!("State analysis skipped due to RPC error: {}", e);
                         }
                     }
                 }
@@ -764,6 +818,72 @@ impl SimulationEngine {
                 Ok(parsed)
             }
         }
+    }
+
+    fn extract_call_graph(&self, events: &[String]) -> Option<CallGraph> {
+        let mut stack: Vec<CallNode> = Vec::new();
+        let mut root: Option<CallNode> = None;
+
+        for event_b64 in events {
+            let bytes = match BASE64.decode(event_b64) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+
+            let diag_event = match DiagnosticEvent::from_xdr(&bytes, Limits::none()) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            if !diag_event.in_contract_call {
+                continue;
+            }
+
+            let contract_id = match &diag_event.event.contract_id {
+                Some(Hash(h)) => Strkey::Contract(*h).to_string(),
+                None => "Host".to_string(),
+            };
+
+            let (topics, _data) = match &diag_event.event.body {
+                soroban_sdk::xdr::ContractEventBody::V0(v0) => (&v0.topics, &v0.data),
+            };
+
+            if topics.is_empty() {
+                continue;
+            }
+
+            let topic0 = match &topics[0] {
+                ScVal::Symbol(s) => s.to_string(),
+                _ => continue,
+            };
+
+            if topic0 == "fn_call" && topics.len() >= 3 {
+                // Topic 1: Contract Address (ignored since we use event.contract_id)
+                // Topic 2: Function Name
+                let function = match &topics[2] {
+                    ScVal::Symbol(s) => s.to_string(),
+                    _ => "unknown".to_string(),
+                };
+
+                let node = CallNode {
+                    contract_id: contract_id.clone(),
+                    function,
+                    children: Vec::new(),
+                };
+
+                stack.push(node);
+            } else if topic0 == "fn_return" {
+                if let Some(finished_node) = stack.pop() {
+                    if let Some(parent) = stack.last_mut() {
+                        parent.children.push(finished_node);
+                    } else {
+                        root = Some(finished_node);
+                    }
+                }
+            }
+        }
+
+        root.map(|r| CallGraph { root: r })
     }
 
     fn extract_touched_ledger_keys(&self, transaction_data: &str) -> Vec<String> {
@@ -807,7 +927,7 @@ impl SimulationEngine {
         auth_value: Option<&str>,
         touched_keys: &[String],
         latest_ledger: u64,
-    ) -> Result<TtlAnalysisReport, SimulationError> {
+    ) -> Result<(TtlAnalysisReport, SimulationStateSnapshot), SimulationError> {
         let req = GetLedgerEntriesRequest {
             jsonrpc: "2.0".to_string(),
             id: 1,
@@ -848,10 +968,19 @@ impl SimulationEngine {
             }
         };
 
+        let mut ledger_entries = HashMap::new();
+        let mut ttl_entries = HashMap::new();
+
         let touched_entries: Vec<TtlEntryReport> = entries
             .into_iter()
             .filter_map(|entry| {
+                if let Some(xdr) = &entry.xdr {
+                    ledger_entries.insert(entry.key.clone(), xdr.clone());
+                }
+                
                 let live_until = entry.live_until_ledger_seq?;
+                ttl_entries.insert(entry.key.clone(), live_until);
+                
                 let remaining = live_until as i64 - latest_ledger as i64;
                 Some(TtlEntryReport {
                     key: entry.key,
@@ -864,11 +993,18 @@ impl SimulationEngine {
         let extend_ttl_suggestions =
             Self::build_extend_ttl_suggestions(&touched_entries, latest_ledger);
 
-        Ok(TtlAnalysisReport {
-            current_ledger: latest_ledger,
-            touched_entries,
-            extend_ttl_suggestions,
-        })
+        Ok((
+            TtlAnalysisReport {
+                current_ledger: latest_ledger,
+                touched_entries,
+                extend_ttl_suggestions,
+            },
+            SimulationStateSnapshot {
+                ledger_entries,
+                ttl_entries,
+                latest_ledger,
+            },
+        ))
     }
 
     fn build_extend_ttl_suggestions(

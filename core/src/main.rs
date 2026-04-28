@@ -2,6 +2,9 @@ mod auth;
 mod benchmarks;
 mod comparison;
 mod errors;
+pub mod fee_analytics;
+pub mod fee_collector;
+pub mod fee_store;
 pub mod insights;
 mod jobs;
 mod parser;
@@ -10,6 +13,9 @@ mod simulation;
 
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
 use crate::errors::AppError;
+use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
+use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
+use crate::fee_store::FeeStore;
 use crate::insights::InsightsEngine;
 use crate::jobs::{
     JobId, JobQueue, JobQueueConfig, JobWorker, SubmitJobRequest, SubmitJobResponse,
@@ -74,6 +80,15 @@ struct AppConfig {
     /// Max concurrent jobs (default 10).
     #[serde(default = "default_max_concurrent_jobs")]
     max_concurrent_jobs: usize,
+    /// Fee data collection interval in seconds (default 5).
+    #[serde(default = "default_fee_collection_interval")]
+    fee_collection_interval_secs: u64,
+    /// Fee data retention period in days (default 30).
+    #[serde(default = "default_fee_retention_days")]
+    fee_retention_days: u32,
+    /// Enable fee market analysis (default true).
+    #[serde(default = "default_fee_analysis_enabled")]
+    fee_analysis_enabled: bool,
 }
 
 fn default_health_check_interval() -> u64 {
@@ -96,6 +111,18 @@ fn default_max_concurrent_jobs() -> usize {
     10
 }
 
+fn default_fee_collection_interval() -> u64 {
+    5
+}
+
+fn default_fee_retention_days() -> u32 {
+    30
+}
+
+fn default_fee_analysis_enabled() -> bool {
+    true
+}
+
 fn load_config() -> Result<AppConfig, ConfigError> {
     dotenvy::dotenv().ok();
 
@@ -113,6 +140,9 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("database_url", "sqlite://soroscope.db")?
         .set_default("job_timeout_secs", 300)?
         .set_default("max_concurrent_jobs", 10)?
+        .set_default("fee_collection_interval_secs", 5)?
+        .set_default("fee_retention_days", 30)?
+        .set_default("fee_analysis_enabled", true)?
         .build()?;
 
     settings.try_deserialize()
@@ -159,6 +189,10 @@ struct AppState {
     simulation_timeout: std::time::Duration,
     /// Job queue for background task processing
     job_queue: JobQueue,
+    /// Fee market analytics engine
+    fee_analytics_engine: FeeAnalyticsEngine,
+    /// Fee data store
+    fee_store: Arc<FeeStore>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -199,6 +233,12 @@ pub struct ResourceReport {
     pub ttl_analysis: Option<TtlAnalysisApiReport>,
     /// Efficiency score (0–100) and optimisation insights.
     pub nutrition: NutritionReport,
+    /// Cross-contract call graph
+    pub call_graph: Option<crate::simulation::CallGraph>,
+    /// Call graph in Mermaid format
+    pub call_graph_mermaid: Option<String>,
+    /// Snapshot of the ledger state used/touched during simulation
+    pub state_snapshot: Option<crate::simulation::SimulationStateSnapshot>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -274,6 +314,63 @@ pub struct OptimizeLimitsResponse {
     pub recommended: crate::simulation::SorobanResources,
 }
 
+// ── Fee Market Types ─────────────────────────────────────────────────────
+
+/// Request body for fee recommendation endpoint
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct FeeRecommendationRequest {
+    /// Desired inclusion speed: "next_ledger", "next_3_ledgers", "economy", "standard", "priority"
+    #[schema(example = "priority")]
+    pub inclusion_speed: Option<String>,
+    /// Custom safety margin (default 0.10 = 10%)
+    #[schema(example = 0.10)]
+    pub safety_margin: Option<f64>,
+}
+
+/// Response with fee recommendations
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FeeRecommendationResponse {
+    /// Recommended fee bid in stroops
+    pub recommended_bid: u64,
+    /// Estimated resource fee
+    pub resource_fee_estimate: u64,
+    /// Total estimated cost
+    pub total_estimated_cost: u64,
+    /// Confidence in inclusion (0.0-1.0)
+    pub inclusion_confidence: f64,
+    /// Expected number of ledgers for inclusion
+    pub expected_inclusion_ledgers: u32,
+    /// Current market conditions
+    pub market_conditions: MarketConditions,
+    /// Breakdown of prediction models
+    pub model_breakdown: ModelBreakdown,
+    /// Timestamp of prediction
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// Request for historical fee data
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct FeeHistoryRequest {
+    /// Number of recent ledgers to retrieve (default 50)
+    #[schema(example = 50)]
+    pub limit: Option<i64>,
+    /// Starting ledger sequence (optional)
+    #[schema(example = 1000)]
+    pub from_ledger: Option<i64>,
+    /// Ending ledger sequence (optional)
+    #[schema(example = 1100)]
+    pub to_ledger: Option<i64>,
+}
+
+/// Historical fee data response
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FeeHistoryResponse {
+    /// List of fee samples
+    pub samples: Vec<crate::fee_store::LedgerFeeSample>,
+    /// Total count of samples
+    pub total_count: i64,
+}
+
 /// Request body for the WASM-bytes analysis endpoint.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct AnalyzeWasmRequest {
@@ -344,6 +441,9 @@ fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine) -> Res
                 })
                 .collect(),
         },
+        call_graph: result.call_graph.clone(),
+        call_graph_mermaid: result.call_graph.as_ref().map(|g| g.to_mermaid()),
+        state_snapshot: result.state_snapshot.clone(),
     }
 }
 
@@ -693,11 +793,150 @@ fn write_temp_wasm(bytes: &[u8]) -> Result<std::path::PathBuf, AppError> {
     Ok(path)
 }
 
+// ── Fee Market API Handlers ──────────────────────────────────────────────
+
+#[utoipa::path(
+    get,
+    path = "/fees/recommend",
+    params(
+        ("inclusion_speed" = Option<String>, Query, description = "Desired inclusion speed: next_ledger, next_3_ledgers, economy, standard, priority"),
+        ("safety_margin" = Option<f64>, Query, description = "Custom safety margin (default 0.10)")
+    ),
+    responses(
+        (status = 200, description = "Fee recommendation successful", body = FeeRecommendationResponse),
+        (status = 500, description = "Failed to generate recommendation")
+    ),
+    tag = "Fee Market"
+)]
+async fn fee_recommend(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<FeeRecommendationResponse>, AppError> {
+    use crate::fee_analytics::TrendDirection;
+
+    tracing::info("Generating fee recommendation");
+
+    // Get recent samples for analysis
+    let samples = state
+        .fee_store
+        .get_recent_samples(100)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to fetch fee data: {}", e)))?;
+
+    // Get current ledger from latest sample or use 0
+    let current_ledger = samples
+        .first()
+        .map(|s| s.ledger_sequence as u64)
+        .unwrap_or(0);
+
+    // Generate prediction
+    let prediction = state.fee_analytics_engine.predict(&samples, current_ledger);
+    let market_conditions = state.fee_analytics_engine.get_market_conditions(&samples, current_ledger);
+    let model_breakdown = state.fee_analytics_engine.get_model_breakdown(&samples);
+
+    // Determine recommended bid based on prediction
+    let (recommended_bid, expected_ledgers) = (
+        prediction.priority_bid,
+        1,
+    );
+
+    Ok(Json(FeeRecommendationResponse {
+        recommended_bid,
+        resource_fee_estimate: 0, // Will be calculated based on transaction resources
+        total_estimated_cost: recommended_bid,
+        inclusion_confidence: prediction.confidence_score,
+        expected_inclusion_ledgers: expected_ledgers,
+        market_conditions,
+        model_breakdown,
+        timestamp: chrono::Utc::now(),
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/fees/history",
+    params(
+        ("limit" = Option<i64>, Query, description = "Number of recent ledgers to retrieve"),
+        ("from_ledger" = Option<i64>, Query, description = "Starting ledger sequence"),
+        ("to_ledger" = Option<i64>, Query, description = "Ending ledger sequence")
+    ),
+    responses(
+        (status = 200, description = "Fee history retrieved successfully", body = FeeHistoryResponse),
+        (status = 500, description = "Failed to fetch fee history")
+    ),
+    tag = "Fee Market"
+)]
+async fn fee_history(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<FeeHistoryResponse>, AppError> {
+    tracing::info("Fetching fee history");
+
+    let limit = 50; // Default limit
+    let samples = state
+        .fee_store
+        .get_recent_samples(limit)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to fetch fee history: {}", e)))?;
+
+    let total_count = state
+        .fee_store
+        .get_sample_count()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to get sample count: {}", e)))?;
+
+    Ok(Json(FeeHistoryResponse {
+        samples,
+        total_count,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/fees/analytics",
+    responses(
+        (status = 200, description = "Fee analytics retrieved successfully", body = serde_json::Value),
+        (status = 500, description = "Failed to fetch analytics")
+    ),
+    tag = "Fee Market"
+)]
+async fn fee_analytics(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    tracing::info("Fetching fee analytics");
+
+    // Get recent samples for analysis
+    let samples = state
+        .fee_store
+        .get_recent_samples(200)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to fetch fee data: {}", e)))?;
+
+    let current_ledger = samples
+        .first()
+        .map(|s| s.ledger_sequence as u64)
+        .unwrap_or(0);
+
+    let prediction = state.fee_analytics_engine.predict(&samples, current_ledger);
+    let market_conditions = state.fee_analytics_engine.get_market_conditions(&samples, current_ledger);
+    let model_breakdown = state.fee_analytics_engine.get_model_breakdown(&samples);
+
+    let response = serde_json::json!({
+        "current_ledger": current_ledger,
+        "prediction": prediction,
+        "market_conditions": market_conditions,
+        "model_breakdown": model_breakdown,
+        "sample_count": samples.len(),
+        "timestamp": chrono::Utc::now(),
+    });
+
+    Ok(Json(response))
+}
+
 #[derive(OpenApi)]
 #[openapi(
     paths(
         analyze, analyze_wasm, optimize_limits, compare_handler,
-        auth::challenge_handler, auth::verify_handler
+        auth::challenge_handler, auth::verify_handler,
+        fee_recommend, fee_history, fee_analytics
     ),
     components(schemas(
         AnalyzeRequest, AnalyzeWasmRequest, ResourceReport,
@@ -706,16 +945,23 @@ fn write_temp_wasm(bytes: &[u8]) -> Result<std::path::PathBuf, AppError> {
         auth::ChallengeRequest, auth::ChallengeResponse,
         auth::VerifyRequest, auth::VerifyResponse,
         crate::simulation::OptimizationBuffer,
-        crate::simulation::SorobanResources
+        crate::simulation::SorobanResources,
+        FeeRecommendationRequest, FeeRecommendationResponse,
+        FeeHistoryRequest, FeeHistoryResponse,
+        crate::fee_store::LedgerFeeSample,
+        crate::fee_analytics::MarketConditions,
+        crate::fee_analytics::ModelBreakdown,
+        crate::fee_analytics::TrendDirection
     )),
     tags(
         (name = "Analysis", description = "Soroban contract resource analysis endpoints"),
-        (name = "Auth", description = "SEP-10 wallet authentication")
+        (name = "Auth", description = "SEP-10 wallet authentication"),
+        (name = "Fee Market", description = "Stellar/Soroban fee market analysis and prediction")
     ),
     info(
         title = "SoroScope API",
         version = "0.1.0",
-        description = "API for analyzing Soroban smart contract resource consumption"
+        description = "API for analyzing Soroban smart contract resource consumption and fee market predictions"
     )
 )]
 struct ApiDoc;
@@ -824,6 +1070,87 @@ async fn main() {
         return;
     }
 
+    // ── CLI: export subcommand ──────────────────────────────────────────
+    if args.len() > 1 && args[1] == "export" {
+        if args.len() < 6 {
+            eprintln!("Usage: soroscope-core export <contract_id> <function> <args_json> <output_file>");
+            eprintln!("\nSimulate a transaction and export the touched state to a JSON file.");
+            std::process::exit(1);
+        }
+
+        let contract_id = &args[2];
+        let function = &args[3];
+        let args_json = &args[4];
+        let output_file = &args[5];
+
+        let parsed_args: Vec<String> = serde_json::from_str(args_json).unwrap_or_default();
+
+        let providers = build_providers(&config);
+        let registry = rpc_provider::ProviderRegistry::new(providers);
+        let engine = SimulationEngine::with_registry(std::sync::Arc::clone(&registry));
+
+        match engine.simulate_from_contract_id(contract_id, function, parsed_args, None).await {
+            Ok(result) => {
+                if let Some(snapshot) = result.state_snapshot {
+                    let json = serde_json::to_string_pretty(&snapshot).unwrap();
+                    if let Err(e) = std::fs::write(output_file, json) {
+                        eprintln!("Error: Failed to write snapshot to {}: {}", output_file, e);
+                        std::process::exit(1);
+                    }
+                    println!("State snapshot exported to {}", output_file);
+                } else {
+                    eprintln!("Error: No state snapshot generated.");
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("Error: Simulation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+
+        return;
+    }
+
+    // ── CLI: restore subcommand ──────────────────────────────────────────
+    if args.len() > 1 && args[1] == "restore" {
+        if args.len() < 6 {
+            eprintln!("Usage: soroscope-core restore <snapshot_file> <contract_id> <function> <args_json>");
+            eprintln!("\nRestore state from a JSON file and run a simulation.");
+            std::process::exit(1);
+        }
+
+        let snapshot_file = &args[2];
+        let contract_id = &args[3];
+        let function = &args[4];
+        let args_json = &args[5];
+
+        let snapshot_json = std::fs::read_to_string(snapshot_file).expect("Failed to read snapshot file");
+        let snapshot: crate::simulation::SimulationStateSnapshot = serde_json::from_str(&snapshot_json).expect("Failed to parse snapshot JSON");
+
+        let parsed_args: Vec<String> = serde_json::from_str(args_json).unwrap_or_default();
+
+        let providers = build_providers(&config);
+        let registry = rpc_provider::ProviderRegistry::new(providers);
+        let engine = SimulationEngine::with_registry(std::sync::Arc::clone(&registry));
+
+        match engine.simulate_from_contract_id(contract_id, function, parsed_args, Some(snapshot.ledger_entries)).await {
+            Ok(result) => {
+                println!("Simulation successful with restored state.");
+                println!("Resources: {:?}", result.resources);
+                if let Some(deps) = result.state_dependency {
+                    println!("State dependencies: {} entries", deps.len());
+                }
+            }
+            Err(e) => {
+                eprintln!("Error: Simulation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+
+        return;
+    }
+
     tracing::info!("Starting SoroScope API Server...");
 
     let auth_state = Arc::new(auth::AuthState::new(
@@ -856,6 +1183,64 @@ async fn main() {
         "Simulation timeout configured"
     );
 
+    // ── Fee Market Setup ────────────────────────────────────────────────
+    let database_url = &config.database_url;
+    tracing::info!(database_url = %database_url, "Initializing database");
+
+    let db_pool = sqlx::SqlitePool::connect(database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    // Run migrations
+    sqlx::migrate!()
+        .run(&db_pool)
+        .await
+        .expect("Failed to run database migrations");
+
+    tracing::info!("Database migrations completed");
+
+    let fee_store = Arc::new(FeeStore::new(db_pool.clone()));
+    let fee_analytics_engine = FeeAnalyticsEngine::new();
+
+    // Start background fee collector if enabled
+    if config.fee_analysis_enabled {
+        let collector_config = FeeCollectorConfig {
+            collection_interval_secs: config.fee_collection_interval_secs,
+            batch_size: 10,
+            request_timeout: std::time::Duration::from_secs(10),
+        };
+
+        let collector = Arc::new(FeeCollector::new(
+            Arc::clone(&registry),
+            Arc::clone(&fee_store),
+            collector_config,
+        ));
+
+        tokio::spawn(async move {
+            collector.run_collection_loop().await;
+        });
+
+        tracing::info!(
+            interval_secs = config.fee_collection_interval_secs,
+            "Fee market collector started"
+        );
+
+        // Schedule periodic cleanup of old fee data
+        let cleanup_store = Arc::clone(&fee_store);
+        let retention_days = config.fee_retention_days;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // Every hour
+            loop {
+                interval.tick().await;
+                if let Err(e) = cleanup_store.cleanup_old_samples(retention_days as i32).await {
+                    tracing::error!(error = %e, "Failed to cleanup old fee samples");
+                }
+            }
+        });
+    } else {
+        tracing::info!("Fee market analysis is disabled");
+    }
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_timeout(
             Arc::clone(&registry),
@@ -864,6 +1249,8 @@ async fn main() {
         cache: SimulationCache::new(),
         insights_engine: InsightsEngine::new(),
         simulation_timeout,
+        fee_analytics_engine,
+        fee_store,
     });
 
     let cors = CorsLayer::new().allow_origin(Any);
@@ -886,6 +1273,10 @@ async fn main() {
         .route("/health", get(health_check))
         .route("/auth/challenge", post(auth::challenge_handler))
         .route("/auth/verify", post(auth::verify_handler))
+        // Fee market routes (public access)
+        .route("/fees/recommend", get(fee_recommend))
+        .route("/fees/history", get(fee_history))
+        .route("/fees/analytics", get(fee_analytics))
         .merge(protected)
         .layer(Extension(auth_state))
         .layer(cors)
