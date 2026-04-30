@@ -43,6 +43,7 @@ async fn main() {
 use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
 use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
 use crate::fee_store::FeeStore;
+use crate::cache::{DiskCache, DiskCacheConfig};
 use crate::insights::InsightsEngine;
 use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
 use crate::ws::SimulationBus;
@@ -122,6 +123,15 @@ struct AppConfig {
     /// Enable fee market analysis (default true).
     #[serde(default = "default_fee_analysis_enabled")]
     fee_analysis_enabled: bool,
+    /// Filesystem path that backs the disk-persistent L2 cache. When
+    /// empty the L2 tier is disabled and the service runs L1-only (same
+    /// behaviour as before #104).
+    #[serde(default = "default_disk_cache_path")]
+    disk_cache_path: String,
+    /// Number of ledgers a cached entry may lag the current ledger before
+    /// L2 treats it as stale. Default 100 ≈ 8 minutes at 5 s/ledger.
+    #[serde(default = "default_max_ledger_age")]
+    max_ledger_age: u32,
 }
 
 fn default_health_check_interval() -> u64 {
@@ -160,6 +170,17 @@ fn default_fee_analysis_enabled() -> bool {
     true
 }
 
+fn default_disk_cache_path() -> String {
+    // Empty == L2 disabled. Operators who want persistence set this in
+    // env / config.toml explicitly; we don't create a hidden directory
+    // in the CWD by default.
+    String::new()
+}
+
+fn default_max_ledger_age() -> u32 {
+    100
+}
+
 fn load_config() -> Result<AppConfig, ConfigError> {
     dotenvy::dotenv().ok();
 
@@ -181,6 +202,8 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("fee_collection_interval_secs", 5)?
         .set_default("fee_retention_days", 30)?
         .set_default("fee_analysis_enabled", true)?
+        .set_default("disk_cache_path", "")?
+        .set_default("max_ledger_age", 100)?
         .build()?;
 
     settings.try_deserialize()
@@ -1449,13 +1472,49 @@ async fn main() {
         tracing::info!("Fee market analysis is disabled");
     }
 
+    // Attach the disk-backed L2 cache when an operator-configured path
+    // is set. An empty path keeps the L1-only behaviour; a failure to
+    // open the directory is non-fatal — we log and continue without the
+    // L2 tier rather than preventing the service from starting.
+    let cache = {
+        let base = SimulationCache::new();
+        if config.disk_cache_path.is_empty() {
+            tracing::info!("Disk cache disabled (DISK_CACHE_PATH not set)");
+            base
+        } else {
+            let cfg = DiskCacheConfig::new(
+                std::path::PathBuf::from(&config.disk_cache_path),
+                config.max_ledger_age,
+            );
+            match DiskCache::open(cfg) {
+                Ok(disk) => {
+                    tracing::info!(
+                        path = %config.disk_cache_path,
+                        max_ledger_age = config.max_ledger_age,
+                        entries = disk.len(),
+                        "Disk cache attached as L2 tier"
+                    );
+                    base.with_disk_cache(Arc::new(disk))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %config.disk_cache_path,
+                        error = %e,
+                        "Failed to open disk cache; continuing with L1 only"
+                    );
+                    base
+                }
+            }
+        }
+    };
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_timeout_and_mode(
             Arc::clone(&registry),
             simulation_timeout,
             simulation_mode,
         ),
-        cache: SimulationCache::new(),
+        cache,
         insights_engine: InsightsEngine::new(),
         gas_golfing_analyzer: GasGolfingAnalyzer::new(),
         simulation_timeout,

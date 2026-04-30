@@ -1990,6 +1990,18 @@ pub struct SimulationCache {
     inner: Cache<String, SimulationResult>,
     hits: AtomicU64,
     misses: AtomicU64,
+    /// Hits served from the disk-backed L2 tier (and promoted into L1).
+    /// Tracked separately so operators can tell an L1 hit apart from an
+    /// L2 hit in the emitted stats line.
+    l2_hits: AtomicU64,
+    /// Optional disk-backed L2 store. When `None`, the cache behaves
+    /// exactly as the L1-only MVP did.
+    l2: Option<Arc<crate::cache::DiskCache>>,
+    /// Caller-provided view of the current Soroban ledger, used to stamp
+    /// L2 writes and drive staleness checks on L2 reads. Defaults to `0`,
+    /// which disables age-based eviction until the caller wires in a
+    /// ledger watcher via [`set_current_ledger`](Self::set_current_ledger).
+    current_ledger: std::sync::atomic::AtomicU32,
 }
 
 impl SimulationCache {
@@ -2002,7 +2014,61 @@ impl SimulationCache {
             inner,
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
+            l2_hits: AtomicU64::new(0),
+            l2: None,
+            current_ledger: std::sync::atomic::AtomicU32::new(0),
         })
+    }
+
+    /// Return a new cache wrapping the same L1 state plus a disk-backed
+    /// L2 tier. Intended for construction at service start:
+    ///
+    /// ```ignore
+    /// let cache = SimulationCache::new().with_disk_cache(Arc::new(disk));
+    /// ```
+    ///
+    /// Takes `Arc<Self>` so the caller keeps the existing single-owner
+    /// invariant without juggling interior mutability on the cache
+    /// fields.
+    pub fn with_disk_cache(self: Arc<Self>, l2: Arc<crate::cache::DiskCache>) -> Arc<Self> {
+        // Unwrap, mutate, rewrap. `Arc::try_unwrap` only succeeds when the
+        // caller holds the only strong reference; that's fine at service
+        // start, which is the documented call site. A future caller that
+        // clones the Arc before attaching L2 panics loudly rather than
+        // silently dropping the L2 tier into a shadow copy.
+        let mut owned = Arc::try_unwrap(self).unwrap_or_else(|shared| {
+            panic!(
+                "SimulationCache::with_disk_cache called with {} live Arc clones; \
+                 attach the L2 tier before cloning the cache",
+                Arc::strong_count(&shared)
+            )
+        });
+        owned.l2 = Some(l2);
+        Arc::new(owned)
+    }
+
+    /// Update the cache's view of the current ledger. The ledger watcher
+    /// is expected to call this on every new ledger so L2 reads can
+    /// correctly reject entries older than `max_ledger_age` ledgers.
+    pub fn set_current_ledger(&self, ledger: u32) {
+        self.current_ledger
+            .store(ledger, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Read the current ledger the cache is using for L2 staleness
+    /// checks. Primarily useful for tests and `/health` diagnostics.
+    pub fn current_ledger(&self) -> u32 {
+        self.current_ledger
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Trigger a bulk sweep on the L2 store. No-op when no disk cache is
+    /// attached.
+    pub fn evict_stale_l2(&self) -> u64 {
+        match &self.l2 {
+            Some(l2) => l2.evict_stale(self.current_ledger()),
+            None => 0,
+        }
     }
 
     pub fn generate_key(contract_id: &str, function_name: &str, args: &[String]) -> String {
@@ -2013,27 +2079,91 @@ impl SimulationCache {
     }
 
     pub async fn get(&self, key: &str) -> Option<SimulationResult> {
-        let value: Option<SimulationResult> = self.inner.get(key).await;
-        if value.is_some() {
+        // L1 — Moka.
+        if let Some(value) = self.inner.get(key).await {
             self.hits.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!(cache.key = %key, "Cache HIT");
-        } else {
-            self.misses.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!(cache.key = %key, "Cache MISS");
+            tracing::debug!(cache.key = %key, "Cache HIT (L1)");
+            return Some(value);
         }
-        value
+
+        // L2 — disk. Any I/O or decode error falls through as a miss;
+        // the disk store logs the underlying reason itself.
+        //
+        // We serialise `SimulationResult` with serde_json rather than
+        // bincode because the struct carries `#[serde(skip_serializing_if)]`
+        // attributes. bincode writes positionally, so a skipped field on
+        // write would desynchronise the deserialiser on read; JSON is
+        // self-describing and handles the skip cleanly. The disk store
+        // itself still uses bincode for its own fixed-shape wrapper.
+        if let Some(l2) = &self.l2 {
+            let current_ledger = self.current_ledger();
+            if let Some(raw) = l2.get(key.as_bytes(), current_ledger) {
+                if let Ok(value) = serde_json::from_slice::<SimulationResult>(&raw) {
+                    self.l2_hits.fetch_add(1, Ordering::Relaxed);
+                    // Promote into L1 so subsequent reads skip the decode.
+                    self.inner.insert(key.to_string(), value.clone()).await;
+                    tracing::debug!(cache.key = %key, "Cache HIT (L2, promoted to L1)");
+                    return Some(value);
+                } else {
+                    tracing::warn!(
+                        cache.key = %key,
+                        "L2 payload failed to deserialise; treating as miss"
+                    );
+                }
+            }
+        }
+
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        tracing::debug!(cache.key = %key, "Cache MISS");
+        None
     }
 
     pub async fn set(&self, key: String, value: SimulationResult) {
+        // Write L2 first so a crash between L1 and L2 leaves the durable
+        // tier consistent; if L2 errors, L1 still gets populated so the
+        // request path isn't penalised.
+        if let Some(l2) = &self.l2 {
+            match serde_json::to_vec(&value) {
+                Ok(raw) => {
+                    // Use the simulation's own `latest_ledger` when
+                    // available — it's the ledger the payload is actually
+                    // valid against. Fall back to the cache's current
+                    // ledger view if the simulation didn't populate one.
+                    let written_at = if value.latest_ledger == 0 {
+                        self.current_ledger()
+                    } else {
+                        value.latest_ledger as u32
+                    };
+                    if let Err(e) = l2.set(key.as_bytes(), raw, written_at) {
+                        tracing::warn!(
+                            error = %e,
+                            cache.key = %key,
+                            "L2 write failed; L1 will still serve"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        cache.key = %key,
+                        "L2 payload serialisation failed; L1 will still serve"
+                    );
+                }
+            }
+        }
         self.inner.insert(key, value).await;
     }
 
     pub fn log_stats(&self) {
-        let hits = self.hits.load(Ordering::Relaxed);
+        let l1_hits = self.hits.load(Ordering::Relaxed);
+        let l2_hits = self.l2_hits.load(Ordering::Relaxed);
+        let hits = l1_hits + l2_hits;
         let misses = self.misses.load(Ordering::Relaxed);
         let total = hits + misses;
         let hit_rate_pct = if total > 0 { hits * 100 / total } else { 0 };
         tracing::info!(
+            cache.l1_hits = l1_hits,
+            cache.l2_hits = l2_hits,
             cache.hits = hits,
             cache.misses = misses,
             cache.total = total,
@@ -2585,6 +2715,115 @@ mod tests {
             cache.set(k2.clone(), r2).await;
             assert_eq!(cache.get(&k1).await.unwrap().latest_ledger, 1);
             assert_eq!(cache.get(&k2).await.unwrap().latest_ledger, 2);
+        }
+
+        // ── Two-tier L1+L2 tests ───────────────────────────────────────
+
+        fn open_disk_l2(max_age: u32) -> (tempfile::TempDir, Arc<crate::cache::DiskCache>) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let disk = crate::cache::DiskCache::open_at(dir.path(), max_age)
+                .expect("open disk cache");
+            (dir, Arc::new(disk))
+        }
+
+        #[tokio::test]
+        async fn two_tier_cache_promotes_l2_hit_to_l1() {
+            let (_dir, l2) = open_disk_l2(100);
+            let cache = SimulationCache::new().with_disk_cache(Arc::clone(&l2));
+            let key = SimulationCache::generate_key("CONTRACT_A", "fn_x", &[]);
+
+            // Seed L2 directly — bypass the set() path so L1 stays empty.
+            let mut result = make_result();
+            result.latest_ledger = 500;
+            let raw = serde_json::to_vec(&result).unwrap();
+            l2.set(key.as_bytes(), raw, 500).unwrap();
+
+            // First get: L1 misses, L2 hits, result is promoted into L1.
+            let first = cache.get(&key).await.expect("L2 hit");
+            assert_eq!(first.latest_ledger, 500);
+            assert_eq!(cache.l2_hits.load(Ordering::Relaxed), 1);
+            assert_eq!(cache.hits.load(Ordering::Relaxed), 0);
+
+            // Second get: L1 now serves it.
+            let second = cache.get(&key).await.expect("L1 hit after promotion");
+            assert_eq!(second.latest_ledger, 500);
+            assert_eq!(cache.hits.load(Ordering::Relaxed), 1);
+            assert_eq!(cache.l2_hits.load(Ordering::Relaxed), 1);
+        }
+
+        #[tokio::test]
+        async fn two_tier_set_writes_through_to_l2() {
+            let (_dir, l2) = open_disk_l2(100);
+            let cache = SimulationCache::new().with_disk_cache(Arc::clone(&l2));
+            let key = SimulationCache::generate_key("CONTRACT_A", "fn_x", &[]);
+            let mut result = make_result();
+            result.latest_ledger = 300;
+            cache.set(key.clone(), result.clone()).await;
+
+            // Raw L2 read confirms the payload is there, stamped at the
+            // SimulationResult's own ledger sequence.
+            let raw = l2.get(key.as_bytes(), 300).expect("L2 has payload");
+            let decoded: SimulationResult = serde_json::from_slice(&raw).unwrap();
+            assert_eq!(decoded.latest_ledger, 300);
+        }
+
+        #[tokio::test]
+        async fn two_tier_stale_l2_entry_does_not_promote() {
+            // max_ledger_age = 10; entry written at ledger 100; we read
+            // at ledger 200 — well past the staleness threshold. Expect
+            // a full miss, not a promotion.
+            let (_dir, l2) = open_disk_l2(10);
+            let cache = SimulationCache::new().with_disk_cache(Arc::clone(&l2));
+            cache.set_current_ledger(200);
+            let key = SimulationCache::generate_key("CONTRACT_A", "fn_x", &[]);
+            let mut result = make_result();
+            result.latest_ledger = 100;
+            let raw = serde_json::to_vec(&result).unwrap();
+            l2.set(key.as_bytes(), raw, 100).unwrap();
+
+            assert!(cache.get(&key).await.is_none());
+            assert_eq!(cache.misses.load(Ordering::Relaxed), 1);
+            assert_eq!(cache.l2_hits.load(Ordering::Relaxed), 0);
+        }
+
+        #[tokio::test]
+        async fn two_tier_without_l2_behaves_as_l1_only() {
+            // Sanity-check: a cache built without `with_disk_cache` still
+            // works exactly like the pre-#104 cache.
+            let cache = SimulationCache::new();
+            let key = SimulationCache::generate_key("CONTRACT_A", "fn_x", &[]);
+            assert!(cache.get(&key).await.is_none());
+            cache.set(key.clone(), make_result()).await;
+            assert!(cache.get(&key).await.is_some());
+        }
+
+        #[tokio::test]
+        async fn current_ledger_is_readable_after_set() {
+            let cache = SimulationCache::new();
+            assert_eq!(cache.current_ledger(), 0);
+            cache.set_current_ledger(42);
+            assert_eq!(cache.current_ledger(), 42);
+        }
+
+        #[tokio::test]
+        async fn evict_stale_l2_is_noop_without_disk_cache() {
+            let cache = SimulationCache::new();
+            assert_eq!(cache.evict_stale_l2(), 0);
+        }
+
+        #[tokio::test]
+        async fn evict_stale_l2_sweeps_disk_when_attached() {
+            let (_dir, l2) = open_disk_l2(10);
+            let cache = SimulationCache::new().with_disk_cache(Arc::clone(&l2));
+            cache.set_current_ledger(200);
+            let key = SimulationCache::generate_key("C", "f", &[]);
+            let mut result = make_result();
+            result.latest_ledger = 100;
+            cache.set(key.clone(), result).await;
+            // Entry is in L2 stamped at 100; at current_ledger=200 with
+            // max_age=10 it's stale. The sweep must remove it.
+            assert_eq!(cache.evict_stale_l2(), 1);
+            assert_eq!(l2.len(), 0);
         }
     }
     // ── Multi-auth tests ──────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod comparison;
 pub mod errors;
 pub mod gas_golfing;
