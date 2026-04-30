@@ -57,43 +57,41 @@ pub enum SimulationError {
     #[error("Parse error: {0}")]
     ParseError(#[from] crate::parser::ParserError),
 
-    /// Returned when consensus mode is enabled but the responses from the
-    /// participating RPC providers disagree on resource estimations or
-    /// ledger changes. The message includes a per-field summary of the
-    /// detected differences.
-    #[error("Consensus mismatch: {0}")]
-    ConsensusMismatch(String),
+    /// Local WASM execution is not available for this invocation — usually
+    /// because no WASM has been pre-loaded for the target contract. The
+    /// engine treats this as a cue to fall back to the RPC runner rather
+    /// than surfacing it to the caller.
+    #[error("Local WASM execution unavailable")]
+    LocalUnavailable,
 
-    /// Returned when consensus mode is enabled but fewer than the minimum
-    /// number of healthy providers (3) are available to form a quorum.
-    #[error("Insufficient providers for consensus: {0}")]
-    InsufficientConsensusProviders(String),
+    /// The contract ran locally but failed during execution (host error,
+    /// panic, budget exhaustion, malformed WASM).
+    #[error("Contract execution failed: {0}")]
+    ExecutionFailed(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SimulationMode {
-    Failover,
-    Consensus,
-}
-
-impl SimulationMode {
-    pub fn from_config(value: &str) -> Result<Self, SimulationError> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "" | "failover" => Ok(Self::Failover),
-            "consensus" => Ok(Self::Consensus),
-            other => Err(SimulationError::InvalidContract(format!(
-                "Unsupported simulation mode '{other}'. Expected 'failover' or 'consensus'"
-            ))),
-        }
+impl SimulationError {
+    /// True when the engine should attempt a fallback path (RPC) after
+    /// seeing this error.
+    ///
+    /// Only errors that point to local-runner unavailability or transient
+    /// local infrastructure issues are retriable; a contract-level failure
+    /// (`ExecutionFailed`, `InvalidContract`, bad input) is terminal —
+    /// retrying on RPC would hide a real bug.
+    pub fn is_retriable(&self) -> bool {
+        matches!(self, SimulationError::LocalUnavailable)
     }
 }
 
-impl fmt::Display for SimulationMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Failover => write!(f, "failover"),
-            Self::Consensus => write!(f, "consensus"),
-        }
+/// Map `soroban-env-host` errors onto `SimulationError` so local-runner
+/// failures surface with the same error type as RPC failures.
+///
+/// All host errors collapse to `ExecutionFailed` — the distinction between
+/// a budget overrun, an XDR decode glitch, and a contract trap is useful
+/// for debugging but carries no retry meaning at the API boundary.
+impl From<soroban_env_host::HostError> for SimulationError {
+    fn from(e: soroban_env_host::HostError) -> Self {
+        SimulationError::ExecutionFailed(format!("{e:?}"))
     }
 }
 
@@ -370,7 +368,10 @@ pub struct SimulationEngine {
     request_timeout: std::time::Duration,
     /// When set, the engine will iterate healthy providers and failover automatically.
     registry: Option<Arc<ProviderRegistry>>,
-    mode: SimulationMode,
+    /// Optional local WASM runner. When attached, the engine tries in-process
+    /// execution first and falls back to RPC on `LocalUnavailable` or other
+    /// retriable errors.
+    local_runner: Option<Arc<crate::runner::LocalRunner>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,7 +393,7 @@ impl SimulationEngine {
             client: Client::new(),
             request_timeout: std::time::Duration::from_secs(30),
             registry: None,
-            mode: SimulationMode::Failover,
+            local_runner: None,
         }
     }
 
@@ -408,7 +409,7 @@ impl SimulationEngine {
             client: Client::new(),
             request_timeout: std::time::Duration::from_secs(30),
             registry: Some(registry),
-            mode,
+            local_runner: None,
         }
     }
 
@@ -431,8 +432,24 @@ impl SimulationEngine {
             client: Client::new(),
             request_timeout: timeout,
             registry: Some(registry),
-            mode,
+            local_runner: None,
         }
+    }
+
+    /// Attach a [`crate::runner::LocalRunner`] so that `simulate_from_contract_id`
+    /// tries in-process WASM execution before hitting the RPC endpoint.
+    ///
+    /// When the local runner has no WASM loaded for the target contract, the
+    /// engine transparently falls back to RPC — callers don't need to know
+    /// which path served their request.
+    pub fn with_local_runner(mut self, runner: Arc<crate::runner::LocalRunner>) -> Self {
+        self.local_runner = Some(runner);
+        self
+    }
+
+    /// Test / injection hook: report whether a local runner is attached.
+    pub fn has_local_runner(&self) -> bool {
+        self.local_runner.is_some()
     }
 
     /// Update the request timeout for subsequent simulation calls.
@@ -474,6 +491,38 @@ impl SimulationEngine {
                 return self
                     .simulate_locally(contract_id, function_name, args, overrides, protocol_version, enable_experimental)
                     .await;
+            }
+        }
+
+        // Try local WASM execution first when a runner is attached. Any
+        // retriable error (notably `LocalUnavailable`, i.e. no WASM loaded
+        // for this contract) transparently falls back to RPC; other errors
+        // propagate so we don't hide real contract bugs.
+        if let Some(runner) = &self.local_runner {
+            let contract_hash = self.parse_contract_id(contract_id)?;
+            let invocation = crate::runner::ContractInvocation::new(
+                contract_hash,
+                function_name,
+                args.clone(),
+            );
+            match runner.simulate(&invocation).await {
+                Ok(result) => {
+                    tracing::debug!(
+                        contract_id = %contract_id,
+                        function = %function_name,
+                        "Simulation served by local runner"
+                    );
+                    return Ok(result);
+                }
+                Err(e) if e.is_retriable() => {
+                    tracing::warn!(
+                        contract_id = %contract_id,
+                        function = %function_name,
+                        error = %e,
+                        "Local simulation unavailable, falling back to RPC"
+                    );
+                }
+                Err(e) => return Err(e),
             }
         }
 
@@ -2944,5 +2993,78 @@ mod tests {
         assert_eq!(suggestions.len(), 1);
         assert_eq!(suggestions[0].key, "key-a");
         assert!(suggestions[0].ledgers_to_extend_by > 0);
+    }
+
+    // ── Local runner / RPC fallback tests ─────────────────────────────────
+
+    #[test]
+    fn is_retriable_true_only_for_local_unavailable() {
+        assert!(SimulationError::LocalUnavailable.is_retriable());
+        assert!(!SimulationError::ExecutionFailed("boom".into()).is_retriable());
+        assert!(!SimulationError::NodeTimeout.is_retriable());
+        assert!(!SimulationError::InvalidContract("bad".into()).is_retriable());
+        assert!(!SimulationError::NodeError("x".into()).is_retriable());
+    }
+
+    #[test]
+    fn host_error_maps_to_execution_failed() {
+        // Build a real `soroban_env_host::HostError` from a known ScError
+        // and run it through our `From` impl. This exercises the mapping
+        // without depending on probabilistic host behaviour (panic vs.
+        // graceful error) from a contrived invocation.
+        use soroban_env_host::xdr::{ScError, ScErrorCode};
+        use soroban_env_host::HostError;
+        let host_err: HostError = ScError::Context(ScErrorCode::InvalidInput).into();
+        let mapped: SimulationError = host_err.into();
+        assert!(matches!(mapped, SimulationError::ExecutionFailed(_)));
+    }
+
+    #[tokio::test]
+    async fn engine_falls_back_to_rpc_when_local_unavailable() {
+        // Engine is built with an attached local runner that has no WASM
+        // loaded for any contract hash. Calling `simulate_from_contract_id`
+        // must therefore fall through to the RPC path. We point RPC at an
+        // unroutable URL so the fallback attempt surfaces a *network*
+        // error (not a `LocalUnavailable` error), which is the observable
+        // proof that the fallback branch ran.
+        use crate::runner::LocalRunner;
+        let runner = Arc::new(LocalRunner::new(crate::runner::local::default_ledger_info()));
+        let engine = SimulationEngine::new("http://127.0.0.1:1/unroutable".to_string())
+            .with_local_runner(runner);
+        assert!(engine.has_local_runner());
+
+        let result = engine
+            .simulate_from_contract_id(
+                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+                "hello",
+                vec![],
+                None,
+            )
+            .await;
+
+        // The important assertion: whatever happened, it was NOT
+        // `LocalUnavailable` — that would mean the fallback never ran.
+        match result {
+            Ok(_) => panic!("unroutable RPC should not have succeeded"),
+            Err(SimulationError::LocalUnavailable) => {
+                panic!("fallback path was skipped — engine surfaced LocalUnavailable");
+            }
+            Err(_) => { /* any RPC / network error proves fallback executed */ }
+        }
+    }
+
+    #[tokio::test]
+    async fn engine_without_local_runner_goes_straight_to_rpc() {
+        let engine = SimulationEngine::new("http://127.0.0.1:1/unroutable".to_string());
+        assert!(!engine.has_local_runner());
+        let result = engine
+            .simulate_from_contract_id(
+                "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+                "hello",
+                vec![],
+                None,
+            )
+            .await;
+        assert!(result.is_err());
     }
 }

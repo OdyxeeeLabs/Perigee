@@ -3988,7 +3988,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "sled",
+ "soroban-env-host",
  "soroban-sdk",
  "sqlx",
  "stellar-strkey",

@@ -102,16 +102,14 @@ impl From<SimulationError> for AppError {
                 AppError::Internal(format!("Serialization error: {}", e))
             }
 
-            // Consensus-mode errors. Both surface as 500 because the
-            // request itself was valid — the failure is on the upstream
-            // pool (disagreement or insufficient quorum). The detailed
-            // message is preserved so callers can debug node-specific
-            // jitter or protocol mismatches.
-            SimulationError::ConsensusMismatch(msg) => {
-                AppError::Internal(format!("Consensus mismatch: {}", msg))
-            }
-            SimulationError::InsufficientConsensusProviders(msg) => {
-                AppError::Internal(format!("Insufficient providers for consensus: {}", msg))
+            // Local-runner errors. `LocalUnavailable` should normally be
+            // handled upstream by falling back to RPC, so if it reaches the
+            // HTTP boundary treat it as an internal misconfiguration.
+            SimulationError::LocalUnavailable => AppError::Internal(
+                "Local WASM execution unavailable and no RPC fallback succeeded".to_string(),
+            ),
+            SimulationError::ExecutionFailed(msg) => {
+                AppError::BadRequest(format!("Contract execution failed: {}", msg))
             }
         }
     }

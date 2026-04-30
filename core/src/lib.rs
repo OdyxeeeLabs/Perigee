@@ -6,6 +6,7 @@ pub mod insights;
 pub mod parser;
 pub mod routing;
 pub mod rpc_provider;
+pub mod runner;
 pub mod simulation;
 
 #[cfg(test)]

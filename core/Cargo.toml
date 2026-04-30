@@ -9,6 +9,10 @@ path = "src/lib.rs"
 
 [dependencies]
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+# Used directly for the local WASM simulation runner. `testutils` exposes
+# the test Host + budget controls we need for in-process contract invocation.
+# Version aligned with the soroban-sdk 22 workspace pin.
+soroban-env-host = { version = "22", features = ["testutils"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
