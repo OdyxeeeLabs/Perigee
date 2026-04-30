@@ -114,7 +114,7 @@ fn test_double_initialization() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #2)")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn test_swap_insufficient_liquidity() {
     let e = Env::default();
     e.mock_all_auths();
@@ -149,7 +149,7 @@ fn test_swap_insufficient_liquidity() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn test_swap_slippage_exceeded() {
     let e = Env::default();
     e.mock_all_auths();
@@ -184,7 +184,7 @@ fn test_swap_slippage_exceeded() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #4)")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn test_withdraw_insufficient_shares() {
     let e = Env::default();
     e.mock_all_auths();
@@ -303,7 +303,7 @@ fn test_transfer() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn test_transfer_insufficient_balance() {
     let e = Env::default();
     e.mock_all_auths();
@@ -647,7 +647,7 @@ fn test_transfer_from() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #10)")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn test_transfer_from_insufficient_allowance() {
     let e = Env::default();
     e.mock_all_auths();
@@ -688,7 +688,7 @@ fn test_transfer_from_insufficient_allowance() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn test_transfer_from_insufficient_balance() {
     let e = Env::default();
     e.mock_all_auths();
@@ -779,7 +779,7 @@ fn test_pause_and_unpause() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn test_deposit_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -816,7 +816,7 @@ fn test_deposit_when_paused() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn test_swap_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -854,7 +854,7 @@ fn test_swap_when_paused() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn test_withdraw_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -947,7 +947,7 @@ fn test_set_fee_valid() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #8)")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn test_set_fee_above_max() {
     let e = Env::default();
     e.mock_all_auths();
@@ -1092,7 +1092,7 @@ fn test_burn() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #4)")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn test_burn_insufficient_shares() {
     let e = Env::default();
     e.mock_all_auths();

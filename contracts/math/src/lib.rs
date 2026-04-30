@@ -1,14 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype};
+use soroban_sdk::{contract, contractimpl, contracttype, Env};
 
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum MathError {
-    Overflow = 1,
-    DivisionByZero = 2,
-    InvalidInput = 3,
-}
+pub use soroscope_error_codes::ContractError as MathError;
 
 #[contracttype]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]

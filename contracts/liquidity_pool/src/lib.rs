@@ -1,32 +1,12 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String};
+use soroban_sdk::{contract, contractclient, contractimpl, contracttype, Address, Env, String};
+
+pub use soroscope_error_codes::ContractError as Error;
 
 #[cfg(test)]
 mod fuzz_test;
 #[cfg(test)]
 mod test;
-
-// Custom Error enum for better error handling
-/// Errors returned by the `LiquidityPool` contract.
-#[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum Error {
-    AlreadyInitialized = 1,
-    InsufficientLiquidity = 2,
-    SlippageExceeded = 3,
-    InsufficientShares = 4,
-    NotInitialized = 5,
-    InsufficientBalance = 6,
-    Unauthorized = 7,
-    InvalidFee = 8,
-    Paused = 9,
-    InsufficientAllowance = 10,
-    OracleNotConfigured = 11,
-    InvalidOraclePrice = 12,
-    TimelockNotElapsed = 13,
-    NoPendingFeeUpdate = 14,
-}
 
 // Event structures for state-changing operations
 /// Event payload emitted after a successful deposit.
@@ -175,11 +155,10 @@ pub const LOW_VOLATILITY_FEE_BPS: i128 = 40;
 pub const MEDIUM_VOLATILITY_FEE_BPS: i128 = 70;
 pub const HIGH_VOLATILITY_FEE_BPS: i128 = 100;
 
+#[contractclient(name = "PriceOracleClient")]
 pub trait PriceOracle {
     fn latest_price(e: Env) -> i128;
 }
-
-soroban_sdk::contractclient!(name = "PriceOracleClient", trait = PriceOracle);
 
 fn check_paused(e: &Env) -> Result<(), Error> {
     let paused: bool = e

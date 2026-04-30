@@ -632,6 +632,21 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "BaseFeeBasisPoints"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 30
+                          }
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "FeeBasisPoints"
                             }
                           ]
@@ -641,6 +656,18 @@
                             "hi": 0,
                             "lo": 30
                           }
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "FeeUpdateTimelockLedgers"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 120
                         }
                       },
                       {

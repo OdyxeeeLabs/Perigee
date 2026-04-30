@@ -59,7 +59,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 265872872985233398
+                    "lo": 732346333632320209
                   }
                 }
               ]
@@ -84,7 +84,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 169069758123056648
+                    "lo": 28443654798791657
                   }
                 }
               ]
@@ -109,13 +109,13 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 265872872985233398
+                    "lo": 732346333632320209
                   }
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 169069758123056648
+                    "lo": 28443654798791657
                   }
                 }
               ]
@@ -137,7 +137,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 265872872985233398
+                        "lo": 732346333632320209
                       }
                     }
                   ]
@@ -160,7 +160,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 169069758123056648
+                        "lo": 28443654798791657
                       }
                     }
                   ]
@@ -222,6 +222,65 @@
         }
       ]
     ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
+              "function_name": "swap",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                },
+                {
+                  "bool": false
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 20519438536177122
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 2,
+                    "lo": 13106511852580896768
+                  }
+                }
+              ]
+            }
+          },
+          "sub_invocations": [
+            {
+              "function": {
+                "contract_fn": {
+                  "contract_address": "CBEPDNVYXQGWB5YUBXKJWYJA7OXTZW5LFLNO5JRRGE6Z6C5OSUZPCCEL",
+                  "function_name": "transfer",
+                  "args": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                    },
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                    },
+                    {
+                      "i128": {
+                        "hi": 0,
+                        "lo": 1902087568078263478
+                      }
+                    }
+                  ]
+                }
+              },
+              "sub_invocations": []
+            }
+          ]
+        }
+      ]
+    ],
+    [],
     []
   ],
   "ledger": {
@@ -526,7 +585,7 @@
                 "val": {
                   "i128": {
                     "hi": 0,
-                    "lo": 212016655777548695
+                    "lo": 144328120291918236
                   }
                 }
               }
@@ -575,6 +634,21 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "BaseFeeBasisPoints"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 30
+                          }
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "FeeBasisPoints"
                             }
                           ]
@@ -590,6 +664,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "FeeUpdateTimelockLedgers"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 120
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "ReserveA"
                             }
                           ]
@@ -597,7 +683,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 265872872985233398
+                            "lo": 2634433901710583687
                           }
                         }
                       },
@@ -612,7 +698,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 169069758123056648
+                            "lo": 7924216262614535
                           }
                         }
                       },
@@ -651,7 +737,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 212016655777548695
+                            "lo": 144328120291918236
                           }
                         }
                       }
@@ -687,6 +773,39 @@
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 2032731177588607455
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          6311999
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 6277191135259896685
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 6277191135259896685
                   }
                 },
                 "durability": "temporary",
@@ -742,7 +861,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 265872872985233398
+                          "lo": 2634433901710583687
                         }
                       }
                     },
@@ -888,7 +1007,7 @@
                       "val": {
                         "i128": {
                           "hi": 2,
-                          "lo": 13106511852580896768
+                          "lo": 11204424284502633290
                         }
                       }
                     },
@@ -1073,7 +1192,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 169069758123056648
+                          "lo": 7924216262614535
                         }
                       }
                     },
@@ -1219,7 +1338,7 @@
                       "val": {
                         "i128": {
                           "hi": 2,
-                          "lo": 13106511852580896768
+                          "lo": 13127031291117073890
                         }
                       }
                     },
