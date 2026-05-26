@@ -48,4 +48,4 @@ if pause_state {
 }
 ```
 
-This ensures that all pools spawned by the factory can be halted by the multi-sig administrative committee in the event of an emergency, protecting user funds and protocol integrity.
+This guarantees that all pools spawned by the factory can be halted by the multi-sig administrative committee in the event of an emergency, protecting user funds and protocol integrity at all times.
