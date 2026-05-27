@@ -20,6 +20,14 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+const MAX_WASM_SIZE = 5 * 1024 * 1024; // 5 MB — Soroban contract size ceiling
+const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d]; // \0asm
+
+function hasWasmMagic(buffer: ArrayBuffer): boolean {
+  const bytes = new Uint8Array(buffer, 0, 4);
+  return WASM_MAGIC.every((b, i) => bytes[i] === b);
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 /** Animated WASM hex-grid icon */
@@ -184,13 +192,19 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
       setUploadState('scanning');
       setErrorMessage('');
 
-      // Simulate async scan (replace with real WASM parsing logic)
       const reader = new FileReader();
       reader.onload = () => {
+        const buffer = reader.result as ArrayBuffer;
+        if (!hasWasmMagic(buffer)) {
+          setErrorMessage(`"${file.name}" is not a valid WASM binary (magic bytes mismatch)`);
+          setUploadState('error');
+          setDroppedFile(null);
+          return;
+        }
         setTimeout(() => {
           setUploadState('success');
           onFileReady?.(file);
-        }, 2000); // 2-second scan window
+        }, 2000);
       };
       reader.readAsArrayBuffer(file);
     },
@@ -200,9 +214,12 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
   const onDropRejected = useCallback((rejections: FileRejection[]) => {
     const first = rejections[0];
     const fileName = first?.file?.name ?? 'file';
+    const isTooLarge = first?.errors?.some((e) => e.code === 'file-too-large');
     const ext = fileName.includes('.') ? `.${fileName.split('.').pop()}` : 'unknown type';
     setErrorMessage(
-      `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`
+      isTooLarge
+        ? `"${fileName}" exceeds the ${MAX_WASM_SIZE / (1024 * 1024)} MB size limit`
+        : `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`
     );
     setUploadState('error');
     setDroppedFile(null);
@@ -225,6 +242,7 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
     onDragLeave,
     accept: { 'application/wasm': ['.wasm'] },
     maxFiles: 1,
+    maxSize: MAX_WASM_SIZE,
     noClick: uploadState === 'scanning',
     noDrag: uploadState === 'scanning',
   });
