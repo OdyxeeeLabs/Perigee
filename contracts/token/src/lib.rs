@@ -7,6 +7,9 @@ mod contract;
 mod metadata;
 mod storage_types;
 
+// Re-export emergency guard for use in token contracts
+pub use emergency_guard;
+
 #[cfg(test)]
 mod test;
 
