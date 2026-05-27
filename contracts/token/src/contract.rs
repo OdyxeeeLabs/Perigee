@@ -48,6 +48,11 @@ impl TokenTrait for Token {
         admin.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
+        // Check if minting is paused (using MINT pause type = 1 << 4 = 16)
+        if EmergencyGuard::is_paused(e.clone(), 1 << 4) {
+            panic!("minting is paused");
+        }
+
         receive_balance(&e, to, amount);
     }
 
@@ -80,6 +85,11 @@ impl TokenTrait for Token {
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
+        // Check if transfers are paused (using TRANSFER pause type = 1 << 3 = 8)
+        if EmergencyGuard::is_paused(e.clone(), 1 << 3) {
+            panic!("transfers are paused");
+        }
+
         spend_balance(&e, from, amount);
         receive_balance(&e, to, amount);
     }
@@ -87,6 +97,11 @@ impl TokenTrait for Token {
     fn transfer_from(e: Env, spender: Address, from: Address, to: Address, amount: i128) {
         spender.require_auth();
         e.storage().instance().extend_ttl(100, 100);
+
+        // Check if transfers are paused (using TRANSFER pause type = 1 << 3 = 8)
+        if EmergencyGuard::is_paused(e.clone(), 1 << 3) {
+            panic!("transfers are paused");
+        }
 
         spend_allowance(&e, from.clone(), spender, amount);
         spend_balance(&e, from, amount);
@@ -97,12 +112,22 @@ impl TokenTrait for Token {
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
+        // Check if burning is paused (using BURN pause type = 1 << 5 = 32)
+        if EmergencyGuard::is_paused(e.clone(), 1 << 5) {
+            panic!("burning is paused");
+        }
+
         spend_balance(&e, from, amount);
     }
 
     fn burn_from(e: Env, spender: Address, from: Address, amount: i128) {
         spender.require_auth();
         e.storage().instance().extend_ttl(100, 100);
+
+        // Check if burning is paused (using BURN pause type = 1 << 5 = 32)
+        if EmergencyGuard::is_paused(e.clone(), 1 << 5) {
+            panic!("burning is paused");
+        }
 
         spend_allowance(&e, from.clone(), spender, amount);
         spend_balance(&e, from, amount);
