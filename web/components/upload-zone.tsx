@@ -174,6 +174,11 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
   const [uploadState, setUploadState] = useState<UploadState>('idle');
   const [droppedFile, setDroppedFile] = useState<DroppedFile | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [unexpectedError, setUnexpectedError] = useState<Error | null>(null);
+
+  if (unexpectedError) {
+    throw unexpectedError;
+  }
 
   // ── Drop handling ────────────────────────────────────────────────────────────
 
@@ -188,11 +193,30 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
       const reader = new FileReader();
       reader.onload = () => {
         setTimeout(() => {
-          setUploadState('success');
-          onFileReady?.(file);
+          try {
+            setUploadState('success');
+            onFileReady?.(file);
+          } catch (error) {
+            setUnexpectedError(
+              error instanceof Error
+                ? error
+                : new Error('Unexpected upload callback failure')
+            );
+          }
         }, 2000); // 2-second scan window
       };
-      reader.readAsArrayBuffer(file);
+      reader.onerror = () => {
+        const message = reader.error?.message ?? 'Unable to read the selected file';
+        setUnexpectedError(new Error(message));
+      };
+
+      try {
+        reader.readAsArrayBuffer(file);
+      } catch (error) {
+        setUnexpectedError(
+          error instanceof Error ? error : new Error('Unable to start reading the selected file')
+        );
+      }
     },
     [onFileReady]
   );
@@ -236,6 +260,7 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
     setUploadState('idle');
     setDroppedFile(null);
     setErrorMessage('');
+    setUnexpectedError(null);
   };
 
   // ── Dynamic border & bg classes ──────────────────────────────────────────────

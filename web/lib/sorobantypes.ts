@@ -19,6 +19,7 @@ export interface InvocationResult {
   inputs: Record<string, any>;
   result?: any;
   error?: string;
+  errorType?: string; // Error type from backend (e.g., BAD_REQUEST, INTERNAL_SERVER_ERROR)
   resourceCost?: {
     fee?: string;
     cpu_instructions: number;

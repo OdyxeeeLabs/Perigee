@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "core",
+    "contracts/emergency_guard",
     "contracts/error_codes",
     "contracts/token",
     "contracts/hello_soroban",
@@ -14,4 +15,5 @@ members = [
     "contracts/typed_data_auth",
     "contracts/proxy",
     "contracts/flash_loan_vault",
+    "contracts/emergency_guard",
 ]
