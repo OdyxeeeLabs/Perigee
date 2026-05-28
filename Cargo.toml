@@ -14,4 +14,5 @@ members = [
     "contracts/typed_data_auth",
     "contracts/proxy",
     "contracts/flash_loan_vault",
+    "contracts/emergency_guard",
 ]
