@@ -1294,7 +1294,7 @@ fn test_add_then_remove_admin_enforces_rotation_membership() {
 }
 
 #[test]
-fn test_rotated_admin_controls_emergency_pause_and_resume() {
+fn test_rotated_admin_controls_emergency_pause_and_guard_unpause() {
     let e = Env::default();
     e.mock_all_auths();
 
@@ -1326,11 +1326,11 @@ fn test_rotated_admin_controls_emergency_pause_and_resume() {
     );
 
     assert_eq!(
-        client.try_resume(&vec![&e, admin.clone()]),
+        client.try_guard_unpause(&vec![&e, admin.clone()]),
         Err(Ok(Error::Unauthorized))
     );
 
-    client.resume(&vec![&e, new_admin.clone()]);
+    client.guard_unpause(&vec![&e, new_admin.clone()]);
     assert_eq!(client.deposit(&user, &1_000, &1_000), 1_000);
 }
 

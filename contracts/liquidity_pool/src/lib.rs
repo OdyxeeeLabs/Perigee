@@ -1,5 +1,4 @@
 #![no_std]
-use emergency_guard::{EmergencyGuard, PauseType};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, vec, Address, Env, String, Vec,
 };
@@ -163,7 +162,6 @@ pub struct OracleConfig {
     pub oracle_id: Address,
     pub base_fee_bps: i128,
     pub timelock_ledgers: u32,
-    pub based_on_volatility_bps: i128,
 }
 
 // ── Per-user storage keys (persistent, keyed by address) ─────────────────────
@@ -239,22 +237,6 @@ fn save_pool(e: &Env, pool: &PoolState) {
     e.storage().instance().set(&DataKey::Pool, pool);
 }
 
-fn check_paused(pool: &PoolState) -> Result<(), Error> {
-    if pool.paused {
-        Err(Error::Paused)
-    } else {
-        Ok(())
-    }
-}
-
-fn check_not_operation_paused(e: &Env, operation: u32) -> Result<(), Error> {
-    if EmergencyGuard::is_paused(e.clone(), operation) {
-        Err(Error::Paused)
-    } else {
-        Ok(())
-    }
-}
-
 /// Map volatility (bps) to a dynamic fee target.
 fn target_fee_from_volatility(base_fee_bps: i128, volatility_bps: i128) -> i128 {
     let dynamic = if volatility_bps >= HIGH_VOLATILITY_THRESHOLD_BPS {
@@ -294,6 +276,24 @@ fn guard_pause_state(e: &Env) -> u32 {
         .instance()
         .get(&DataKey::GuardPauseState)
         .unwrap_or(0u32)
+}
+
+fn read_admin(e: &Env) -> Result<Address, Error> {
+    e.storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(Error::NotInitialized)
+}
+
+fn read_guard_admins(e: &Env) -> Vec<Address> {
+    e.storage()
+        .instance()
+        .get(&DataKey::GuardAdmins)
+        .unwrap_or_else(|| Vec::new(e))
+}
+
+fn write_guard_admins(e: &Env, admins: &Vec<Address>) {
+    e.storage().instance().set(&DataKey::GuardAdmins, admins);
 }
 
 /// Return `Err(Error::Paused)` if `op` is currently paused.
@@ -406,105 +406,94 @@ impl LiquidityPool {
 
     // ── Granular pause (EmergencyGuard admin interface) ───────────────────────
 
-    /// Pause or unpause **all** core operations at once.
-    ///
-    /// Any single admin can call this; it requires only the admin's signature.
-    pub fn set_paused(e: Env, paused: bool) -> Result<(), Error> {
-        let admin: Address = e
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
+    /// Pause or resume one operation bit. Any current guard admin may call this.
+    pub fn set_operation_paused(
+        e: Env,
+        admin: Address,
+        operation: u32,
+        paused: bool,
+    ) -> Result<(), Error> {
         guard_require_admin(&e, &admin)?;
-        let all = pause_op::SWAP | pause_op::DEPOSIT | pause_op::WITHDRAW | pause_op::BURN;
-        guard_set_ops(&e, all, paused);
+        guard_set_ops(&e, operation, paused);
         Ok(())
+    }
+
+    /// Backward-compatible granular pause entry point.
+    pub fn guard_pause(
+        e: Env,
+        admin: Address,
+        operation: u32,
+        paused: bool,
+    ) -> Result<(), Error> {
+        Self::set_operation_paused(e, admin, operation, paused)
     }
 
     /// Pause only swap operations.
     pub fn pause_swaps(e: Env) -> Result<(), Error> {
-        let admin: Address = e
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-        guard_require_admin(&e, &admin)?;
-        guard_set_ops(&e, pause_op::SWAP, true);
-        Ok(())
+        let admin = read_admin(&e)?;
+        Self::set_operation_paused(e, admin, pause_op::SWAP, true)
     }
 
     /// Resume swap operations.
     pub fn resume_swaps(e: Env) -> Result<(), Error> {
-        let admin: Address = e
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-        guard_require_admin(&e, &admin)?;
-        guard_set_ops(&e, pause_op::SWAP, false);
-        Ok(())
+        let admin = read_admin(&e)?;
+        Self::set_operation_paused(e, admin, pause_op::SWAP, false)
     }
 
     /// Pause only deposit operations.
     pub fn pause_deposits(e: Env) -> Result<(), Error> {
-        let admin: Address = e
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-        guard_require_admin(&e, &admin)?;
-        guard_set_ops(&e, pause_op::DEPOSIT, true);
-        Ok(())
+        let admin = read_admin(&e)?;
+        Self::set_operation_paused(e, admin, pause_op::DEPOSIT, true)
     }
 
     /// Resume deposit operations.
     pub fn resume_deposits(e: Env) -> Result<(), Error> {
-        let admin: Address = e
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-        guard_require_admin(&e, &admin)?;
-        guard_set_ops(&e, pause_op::DEPOSIT, false);
-        Ok(())
+        let admin = read_admin(&e)?;
+        Self::set_operation_paused(e, admin, pause_op::DEPOSIT, false)
     }
 
     /// Pause only withdrawal operations.
     pub fn pause_withdrawals(e: Env) -> Result<(), Error> {
-        let admin: Address = e
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-        guard_require_admin(&e, &admin)?;
-        guard_set_ops(&e, pause_op::WITHDRAW, true);
-        Ok(())
+        let admin = read_admin(&e)?;
+        Self::set_operation_paused(e, admin, pause_op::WITHDRAW, true)
     }
 
     /// Resume withdrawal operations.
     pub fn resume_withdrawals(e: Env) -> Result<(), Error> {
-        let admin: Address = e
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-        guard_require_admin(&e, &admin)?;
-        guard_set_ops(&e, pause_op::WITHDRAW, false);
-        Ok(())
+        let admin = read_admin(&e)?;
+        Self::set_operation_paused(e, admin, pause_op::WITHDRAW, false)
     }
 
-    /// Emergency: pause **all** operations (requires multi-sig approval).
-    pub fn emergency_pause_all(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
+    /// Emergency: pause all guarded operations via multi-sig approval.
+    pub fn emergency_pause(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
         guard_require_multisig(&e, &approvers)?;
         guard_set_ops(&e, pause_op::ALL, true);
         Ok(())
     }
 
-    /// Resume all paused operations (requires multi-sig approval).
-    pub fn resume_all(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
+    /// Alias for callers that use the explicit "all" naming.
+    pub fn emergency_pause_all(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
+        Self::emergency_pause(e, approvers)
+    }
+
+    /// Unpause all guarded operations via multi-sig approval.
+    ///
+    /// This replaces the old single-admin boolean unpause flow. The approver
+    /// list is validated by the same guard threshold used for emergency pause.
+    pub fn guard_unpause(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
         guard_require_multisig(&e, &approvers)?;
         guard_set_ops(&e, pause_op::ALL, false);
         Ok(())
+    }
+
+    /// Backward-compatible resume entry point for existing callers.
+    pub fn resume(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
+        Self::guard_unpause(e, approvers)
+    }
+
+    /// Alias for callers that use the explicit "all" naming.
+    pub fn resume_all(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
+        Self::guard_unpause(e, approvers)
     }
 
     /// Returns the raw pause-state bitmask.
@@ -513,85 +502,133 @@ impl LiquidityPool {
     }
 
     /// Returns `true` when `operation` is currently paused.
-    pub fn is_paused_op(e: Env, operation: u32) -> bool {
+    pub fn guard_is_paused(e: Env, operation: u32) -> bool {
         guard_pause_state(&e) & operation != 0
     }
 
+    /// Alias for callers that use operation-centric naming.
+    pub fn is_paused_op(e: Env, operation: u32) -> bool {
+        Self::guard_is_paused(e, operation)
+    }
+
     /// Returns the list of authorized guard admins.
+    pub fn get_admins(e: Env) -> Vec<Address> {
+        read_guard_admins(&e)
+    }
+
+    /// Alias for callers that use guard-specific naming.
     pub fn get_guard_admins(e: Env) -> Vec<Address> {
-        e.storage()
-            .instance()
-            .get(&DataKey::GuardAdmins)
-            .unwrap_or_else(|| Vec::new(&e))
+        read_guard_admins(&e)
     }
 
     /// Returns the current multi-sig approval threshold.
-    pub fn get_guard_threshold(e: Env) -> u32 {
+    pub fn get_admin_threshold(e: Env) -> u32 {
         e.storage()
             .instance()
             .get(&DataKey::GuardThreshold)
             .unwrap_or(0)
     }
 
-    /// Add a new admin (requires multi-sig approval).
+    /// Alias for callers that use guard-specific naming.
+    pub fn get_guard_threshold(e: Env) -> u32 {
+        Self::get_admin_threshold(e)
+    }
+
+    /// Returns the current primary pool admin.
+    pub fn get_admin(e: Env) -> Result<Address, Error> {
+        read_admin(&e)
+    }
+
+    /// Add a new guard admin. Requires the current multi-sig threshold.
+    pub fn add_admin(e: Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), Error> {
+        guard_require_multisig(&e, &approvers)?;
+        let mut admins = read_guard_admins(&e);
+        if !admins.iter().any(|a| a == new_admin) {
+            admins.push_back(new_admin);
+            write_guard_admins(&e, &admins);
+        }
+        Ok(())
+    }
+
+    /// Alias for callers that use guard-specific naming.
     pub fn add_guard_admin(
         e: Env,
         approvers: Vec<Address>,
         new_admin: Address,
     ) -> Result<(), Error> {
+        Self::add_admin(e, approvers, new_admin)
+    }
+
+    /// Remove a guard admin. The admin set cannot be reduced below threshold.
+    pub fn remove_admin(e: Env, approvers: Vec<Address>, admin: Address) -> Result<(), Error> {
         guard_require_multisig(&e, &approvers)?;
-        let mut admins: Vec<Address> = e
-            .storage()
-            .instance()
-            .get(&DataKey::GuardAdmins)
-            .unwrap_or_else(|| Vec::new(&e));
-        if !admins.iter().any(|a| a == new_admin) {
-            admins.push_back(new_admin);
-            e.storage().instance().set(&DataKey::GuardAdmins, &admins);
+        let admins = read_guard_admins(&e);
+        let threshold = Self::get_admin_threshold(e.clone());
+        if admins.len() as u32 <= threshold {
+            return Err(Error::Unauthorized);
         }
-                base_fee_bps: DEFAULT_BASE_FEE_BPS,
-                admin,
-                paused: false,
-            },
-        );
-        EmergencyGuard::initialize(e.clone(), vec![&e, admin], 1)
-            .map_err(|_| Error::Unauthorized)?;
+
+        let mut next_admins = Vec::new(&e);
+        let mut found = false;
+        for candidate in admins.iter() {
+            if candidate == admin {
+                found = true;
+            } else {
+                next_admins.push_back(candidate);
+            }
+        }
+        if !found {
+            return Err(Error::Unauthorized);
+        }
+
+        write_guard_admins(&e, &next_admins);
+        if read_admin(&e)? == admin {
+            if let Some(next_primary) = next_admins.get(0) {
+                e.storage().instance().set(&DataKey::Admin, &next_primary);
+            }
+        }
         Ok(())
     }
 
-    /// Remove an admin (requires multi-sig approval; cannot drop below threshold).
+    /// Alias for callers that use guard-specific naming.
     pub fn remove_guard_admin(
         e: Env,
         approvers: Vec<Address>,
         admin: Address,
     ) -> Result<(), Error> {
+        Self::remove_admin(e, approvers, admin)
+    }
+
+    /// Replace one guard admin with another and update the primary pool admin
+    /// when the replaced address is the current primary admin.
+    pub fn rotate_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), Error> {
         guard_require_multisig(&e, &approvers)?;
-        let admins: Vec<Address> = e
-            .storage()
-            .instance()
-            .get(&DataKey::GuardAdmins)
-            .unwrap_or_else(|| Vec::new(&e));
-        let threshold: u32 = e
-            .storage()
-            .instance()
-            .get(&DataKey::GuardThreshold)
-            .unwrap_or(1);
-        if admins.len() as u32 <= threshold {
+        if !guard_is_admin(&e, &old_admin) {
             return Err(Error::Unauthorized);
         }
-        let mut new_admins: Vec<Address> = Vec::new(&e);
-        for a in admins.iter() {
-            if a != admin {
-                new_admins.push_back(a);
+
+        let admins = read_guard_admins(&e);
+        let mut next_admins = Vec::new(&e);
+        for candidate in admins.iter() {
+            if candidate == old_admin {
+                if !next_admins.iter().any(|a| a == new_admin) {
+                    next_admins.push_back(new_admin.clone());
+                }
+            } else if !next_admins.iter().any(|a| a == candidate) {
+                next_admins.push_back(candidate);
             }
         }
-        e.storage()
-            .instance()
-            .set(&DataKey::GuardAdmins, &new_admins);
+
+        write_guard_admins(&e, &next_admins);
+        if read_admin(&e)? == old_admin {
+            e.storage().instance().set(&DataKey::Admin, &new_admin);
+        }
         Ok(())
-            .get::<_, PoolState>(&DataKey::Pool)
-            .map(|p| p.fee_bps)
-            .unwrap_or(DEFAULT_BASE_FEE_BPS)
     }
 
     // ── Fee management ────────────────────────────────────────────────────────
@@ -603,192 +640,29 @@ impl LiquidityPool {
             .unwrap_or(DEFAULT_BASE_FEE_BPS)
     }
 
-    /// Admin-only: set the swap fee directly.  Valid range: 0–100 bps.
+    /// Admin-only: set the swap fee directly. Valid range: 0-100 bps.
     pub fn set_fee(e: Env, fee_bps: i128) -> Result<(), Error> {
         if !(0..=MAX_FEE_BPS).contains(&fee_bps) {
             return Err(Error::InvalidFee);
         }
-        // One read + one write instead of 3 reads + 2 writes.
-        let mut pool = load_pool(&e)?;
-        pool.admin.require_auth();
-        let old_fee = pool.fee_bps;
-        pool.fee_bps = fee_bps;
-        pool.base_fee_bps = fee_bps;
-        save_pool(&e, &pool);
-        e.events().publish(
-            (String::from_str(&e, "fee_changed"), pool.admin.clone()),
-            FeeChangedEvent {
-                admin: pool.admin,
-                old_fee_bps: old_fee,
-                new_fee_bps: fee_bps,
-            },
-        );
-        Ok(())
-    }
 
-    /// Admin-only: configure external oracle and timelock parameters.
-    pub fn configure_fee_oracle(
-        e: Env,
-        oracle: Address,
-        base_fee_bps: i128,
-        timelock_ledgers: u32,
-    ) -> Result<(), Error> {
-        if !(0..=MAX_FEE_BPS).contains(&base_fee_bps) {
-            return Err(Error::InvalidFee);
-        }
-        // One read (pool) + one write (oracle config) instead of 1 read + 3 writes.
-        let mut pool = load_pool(&e)?;
-        pool.admin.require_auth();
-        pool.base_fee_bps = base_fee_bps;
-        save_pool(&e, &pool);
-
-        let cfg = OracleConfig {
-            oracle,
-            last_price: 0,
-            last_volatility_bps: 0,
-            timelock_ledgers,
-        };
-        e.storage().instance().set(&DataKey::Oracle, &cfg);
-        Ok(())
-    }
-
-    pub fn get_last_volatility_bps(e: Env) -> i128 {
-        e.storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
+        let admin = read_admin(&e)?;
         admin.require_auth();
-
         let mut pool = load_pool(&e)?;
         let old_fee = pool.fee_bps;
         pool.fee_bps = fee_bps;
         save_pool(&e, &pool);
-            .get::<_, OracleConfig>(&DataKey::Oracle)
-            .map(|c| c.last_volatility_bps)
-            .unwrap_or(0)
-    }
-
-    pub fn get_pending_fee_update(e: Env) -> Option<PendingFeeUpdate> {
-        e.storage().instance().get(&DataKey::PendingFeeUpdate)
-    }
-
-    /// Pulls price from oracle, computes volatility and schedules a timelocked fee update.
-    pub fn sync_fee_from_oracle(e: Env) -> Result<Option<PendingFeeUpdate>, Error> {
-        // One read (oracle config) instead of 5 separate reads.
-        let mut cfg: OracleConfig = e
-            .storage()
-            .instance()
-            .get(&DataKey::Oracle)
-            .ok_or(Error::OracleNotConfigured)?;
-
-        let oracle_client = PriceOracleClient::new(&e, &cfg.oracle);
-        let current_price = oracle_client.latest_price();
-        if current_price <= 0 {
-            return Err(Error::InvalidOraclePrice);
-        }
-
-        let prev = cfg.last_price;
-        cfg.last_price = current_price;
-
-        if prev <= 0 {
-            cfg.last_volatility_bps = 0;
-            // One write instead of 2 writes.
-            e.storage().instance().set(&DataKey::Oracle, &cfg);
-            return Ok(None);
-        }
-
-        let price_delta = if current_price >= prev {
-            current_price - prev
-        } else {
-            prev - current_price
-        };
-        let volatility_bps = price_delta
-            .checked_mul(10_000)
-            .ok_or(Error::InvalidOraclePrice)?
-            / prev;
-
-        cfg.last_volatility_bps = volatility_bps;
-        // One write instead of 2 writes.
-        e.storage().instance().set(&DataKey::Oracle, &cfg);
-
-        let pool = load_pool(&e)?;
-        let target_fee = target_fee_from_volatility(pool.base_fee_bps, volatility_bps);
-        if target_fee == pool.fee_bps {
-            return Ok(None);
-        }
-
-        let execute_after = e.ledger().sequence().saturating_add(cfg.timelock_ledgers);
-        let pending = PendingFeeUpdate {
-            new_fee_bps: target_fee,
-            executable_after_ledger: execute_after,
-            based_on_volatility_bps: volatility_bps,
-        };
-        e.storage()
-            .instance()
-            .set(&DataKey::PendingFeeUpdate, &pending);
-
-        let scheduled_by = e.current_contract_address();
-        e.events().publish(
-            (
-                String::from_str(&e, "fee_update_scheduled"),
-                scheduled_by.clone(),
-            ),
-            FeeUpdateScheduledEvent {
-                scheduled_by,
-                old_fee_bps: pool.fee_bps,
-                new_fee_bps: target_fee,
-                executable_after_ledger: execute_after,
-                volatility_bps,
-            },
-        );
-
-        Ok(Some(pending))
-    }
-
-    /// Applies a previously scheduled fee update after timelock elapses.
-    pub fn execute_fee_update(e: Env) -> Result<i128, Error> {
-        let pending: PendingFeeUpdate = e
-            .storage()
-            .instance()
-            .get(&DataKey::PendingFeeUpdate)
-            .ok_or(Error::NoPendingFeeUpdate)?;
-
-        if e.ledger().sequence() < pending.executable_after_ledger {
-            return Err(Error::TimelockNotElapsed);
-        }
-        if !(0..=MAX_FEE_BPS).contains(&pending.new_fee_bps) {
-            return Err(Error::InvalidFee);
-        }
-
-        // One read + one write instead of 2 reads + 1 write.
-        let mut pool = load_pool(&e)?;
-        let old_fee = pool.fee_bps;
-        pool.fee_bps = pending.new_fee_bps;
-        save_pool(&e, &pool);
-        e.storage().instance().remove(&DataKey::PendingFeeUpdate);
 
         e.events().publish(
             (String::from_str(&e, "fee_changed"), admin.clone()),
             FeeChangedEvent {
                 admin,
                 old_fee_bps: old_fee,
-                new_fee_bps: pending.new_fee_bps,
+                new_fee_bps: fee_bps,
             },
         );
-
-        Ok(pending.new_fee_bps)
-    }
-
-    /// Admin-only: pause or unpause the pool.
-    pub fn set_paused(e: Env, paused: bool) -> Result<(), Error> {
-        let mut pool = load_pool(&e)?;
-        pool.admin.require_auth();
-        pool.paused = paused;
-        save_pool(&e, &pool);
         Ok(())
     }
-
-    // ── Oracle-driven dynamic fee ─────────────────────────────────────────────
 
     /// Admin-only: configure the price oracle for dynamic fee adjustment.
     pub fn configure_fee_oracle(
@@ -797,11 +671,10 @@ impl LiquidityPool {
         base_fee_bps: i128,
         timelock_ledgers: u32,
     ) -> Result<(), Error> {
-        let admin: Address = e
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
+        if !(0..=MAX_FEE_BPS).contains(&base_fee_bps) {
+            return Err(Error::InvalidFee);
+        }
+        let admin = read_admin(&e)?;
         admin.require_auth();
         e.storage().instance().set(
             &DataKey::OracleConfig,
@@ -968,10 +841,6 @@ impl LiquidityPool {
     /// Constant-product swap. `buy_a = true` → buy token A, sell token B.
     pub fn swap(e: Env, to: Address, buy_a: bool, out: i128, in_max: i128) -> Result<i128, Error> {
         guard_check_not_paused(&e, pause_op::SWAP)?;
-        // One read instead of 5 separate reads.
-        let mut pool = load_pool(&e)?;
-        check_paused(&pool)?;
-        check_not_operation_paused(&e, PauseType::SWAP)?;
         to.require_auth();
 
         let mut pool = load_pool(&e)?;
@@ -1048,10 +917,6 @@ impl LiquidityPool {
     /// Burn LP shares and receive proportional reserves.
     pub fn withdraw(e: Env, to: Address, share_amount: i128) -> Result<(i128, i128), Error> {
         guard_check_not_paused(&e, pause_op::WITHDRAW)?;
-        // One read instead of 4 separate reads.
-        let mut pool = load_pool(&e)?;
-        check_paused(&pool)?;
-        check_not_operation_paused(&e, PauseType::WITHDRAW)?;
         to.require_auth();
 
         let mut pool = load_pool(&e)?;
@@ -1104,9 +969,6 @@ impl LiquidityPool {
     /// Burn LP shares without withdrawing reserves (fee-burn / charity).
     pub fn burn(e: Env, from: Address, amount: i128) -> Result<(), Error> {
         guard_check_not_paused(&e, pause_op::BURN)?;
-        let mut pool = load_pool(&e)?;
-        check_paused(&pool)?;
-        check_not_operation_paused(&e, PauseType::BURN)?;
         from.require_auth();
 
         let mut pool = load_pool(&e)?;
