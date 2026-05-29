@@ -767,13 +767,11 @@ fn test_pause_and_unpause() {
     assert_eq!(shares, 1000);
 
     // Admin pauses deposits only.
-    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
-    assert!(client.guard_is_paused(&emergency_guard::PauseType::DEPOSIT));
-    assert!(!client.guard_is_paused(&emergency_guard::PauseType::SWAP));
+    client.set_operation_paused(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
+    assert_eq!(client.try_deposit(&user, &1, &1), Err(Ok(Error::Paused)));
 
     // Unpause deposits.
-    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &false);
-    assert!(!client.guard_is_paused(&emergency_guard::PauseType::DEPOSIT));
+    client.set_operation_paused(&admin, &emergency_guard::PauseType::DEPOSIT, &false);
 
     // Operations should work again
     token_a_admin.mint(&user, &500);
@@ -813,7 +811,7 @@ fn test_deposit_when_paused() {
     token_b_admin.mint(&user, &1000);
 
     // Pause deposits only.
-    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
+    client.set_operation_paused(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
 
     // Try to deposit - should panic with Paused error
     client.deposit(&user, &1000, &1000);
@@ -851,7 +849,7 @@ fn test_swap_when_paused() {
     client.deposit(&user, &1000, &1000);
 
     // Pause swaps only.
-    client.guard_pause(&admin, &emergency_guard::PauseType::SWAP, &true);
+    client.set_operation_paused(&admin, &emergency_guard::PauseType::SWAP, &true);
 
     // Try to swap - should panic with Paused error
     client.swap(&user, &false, &100, &200);
@@ -889,10 +887,128 @@ fn test_withdraw_when_paused() {
     let shares = client.deposit(&user, &1000, &1000);
 
     // Pause withdrawals only.
-    client.guard_pause(&admin, &emergency_guard::PauseType::WITHDRAW, &true);
+    client.set_operation_paused(&admin, &emergency_guard::PauseType::WITHDRAW, &true);
 
     // Try to withdraw - should panic with Paused error
     client.withdraw(&user, &shares);
+}
+
+#[test]
+fn test_pause_deposit_only_allows_swap_and_withdraw() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let token_a_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_a);
+    let token_b_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_b);
+
+    let user = Address::generate(&e);
+
+    e.cost_estimate().budget().reset_unlimited();
+
+    client.initialize(&admin, &token_a, &token_b);
+    token_a_admin.mint(&user, &3_000);
+    token_b_admin.mint(&user, &3_000);
+    let shares = client.deposit(&user, &1_000, &1_000);
+
+    client.set_operation_paused(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
+
+    assert_eq!(
+        client.try_deposit(&user, &100, &100),
+        Err(Ok(Error::Paused))
+    );
+    assert!(client.swap(&user, &false, &50, &100) > 0);
+    let (withdrawn_a, withdrawn_b) = client.withdraw(&user, &(shares / 10));
+    assert!(withdrawn_a > 0);
+    assert!(withdrawn_b > 0);
+}
+
+#[test]
+fn test_pause_swap_only_allows_deposit_and_withdraw() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let token_a_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_a);
+    let token_b_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_b);
+
+    let user = Address::generate(&e);
+
+    e.cost_estimate().budget().reset_unlimited();
+
+    client.initialize(&admin, &token_a, &token_b);
+    token_a_admin.mint(&user, &3_000);
+    token_b_admin.mint(&user, &3_000);
+    client.deposit(&user, &1_000, &1_000);
+
+    client.set_operation_paused(&admin, &emergency_guard::PauseType::SWAP, &true);
+
+    assert_eq!(
+        client.try_swap(&user, &false, &50, &100),
+        Err(Ok(Error::Paused))
+    );
+    let added_shares = client.deposit(&user, &500, &500);
+    assert!(added_shares > 0);
+    assert_eq!(client.withdraw(&user, &100), (100, 100));
+}
+
+#[test]
+fn test_pause_withdraw_only_allows_deposit_and_swap() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    let token_a_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_a);
+    let token_b_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_b);
+
+    let user = Address::generate(&e);
+
+    e.cost_estimate().budget().reset_unlimited();
+
+    client.initialize(&admin, &token_a, &token_b);
+    token_a_admin.mint(&user, &3_000);
+    token_b_admin.mint(&user, &3_000);
+    let shares = client.deposit(&user, &1_000, &1_000);
+
+    client.set_operation_paused(&admin, &emergency_guard::PauseType::WITHDRAW, &true);
+
+    assert_eq!(
+        client.try_withdraw(&user, &(shares / 10)),
+        Err(Ok(Error::Paused))
+    );
+    let added_shares = client.deposit(&user, &500, &500);
+    assert!(added_shares > 0);
+    assert!(client.swap(&user, &false, &50, &100) > 0);
 }
 
 // ===== Admin Fee Control Tests =====
