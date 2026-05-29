@@ -18,17 +18,18 @@
 //! ## Flow
 //!
 //! ```text
-//! 1. check_not_paused()
-//! 2. if FlashLoanActive → Err(Reentrancy)
-//! 3. set FlashLoanActive = true
-//! 4. pre_balance = token.balance(self)
-//! 5. fee = amount * fee_bps / 10_000
-//! 6. token.transfer(self → receiver, amount)
-//! 7. ReceiverClient::execute_operation(token, amount, fee, initiator)
-//! 8. post_balance = token.balance(self)
-//! 9. assert post_balance >= pre_balance + fee
-//! 10. set FlashLoanActive = false
-//! 11. emit FlashLoanEvent
+//! 1. if BorrowPaused → Err(BorrowPaused)
+//! 2. check_not_paused()
+//! 3. if FlashLoanActive → Err(Reentrancy)
+//! 4. set FlashLoanActive = true
+//! 5. pre_balance = token.balance(self)
+//! 6. fee = amount * fee_bps / 10_000
+//! 7. token.transfer(self → receiver, amount)
+//! 8. ReceiverClient::execute_operation(token, amount, fee, initiator)
+//! 9. post_balance = token.balance(self)
+//! 10. assert post_balance >= pre_balance + fee
+//! 11. set FlashLoanActive = false
+//! 12. emit FlashLoanEvent
 //! ```
 
 use emergency_guard::EmergencyGuard;
@@ -63,6 +64,8 @@ pub enum Error {
     Paused = 9,
     /// Requested withdrawal exceeds deposited balance.
     InsufficientDeposit = 10,
+    /// Borrow (flash loan) is paused.
+    BorrowPaused = 11,
 }
 
 // ── Event types ──────────────────────────────────────────────────────────────
@@ -111,6 +114,8 @@ pub enum DataKey {
     FeeBps,
     /// Reentrancy guard: true while a flash loan callback is executing.
     FlashLoanActive,
+    /// Granular pause: blocks BORROW/flash_loan only, without affecting admin ops.
+    BorrowPaused,
     /// Total amount the admin has deposited (tracked for withdrawal cap).
     TotalDeposited,
 }
@@ -202,6 +207,14 @@ fn set_total_deposited(e: &Env, amount: i128) {
         .set(&DataKey::TotalDeposited, &amount);
 }
 
+fn is_borrow_paused(e: &Env) -> bool {
+    e.storage().instance().get(&DataKey::BorrowPaused).unwrap_or(false)
+}
+
+fn set_borrow_paused(e: &Env, paused: bool) {
+    e.storage().instance().set(&DataKey::BorrowPaused, &paused);
+}
+
 // ── Contract ─────────────────────────────────────────────────────────────────
 
 #[contract]
@@ -227,6 +240,9 @@ impl FlashLoanVault {
         e.storage()
             .instance()
             .set(&DataKey::FlashLoanActive, &false);
+        e.storage()
+            .instance()
+            .set(&DataKey::BorrowPaused, &false);
         e.storage().instance().set(&DataKey::TotalDeposited, &0i128);
 
         Ok(())
@@ -328,6 +344,27 @@ impl FlashLoanVault {
             .map_err(|_| Error::Unauthorized)
     }
 
+    /// Admin-only: pause BORROW/flash_loan without affecting other operations.
+    pub fn pause_borrow(e: Env) -> Result<(), Error> {
+        let admin = load_admin(&e)?;
+        admin.require_auth();
+        set_borrow_paused(&e, true);
+        Ok(())
+    }
+
+    /// Admin-only: resume BORROW/flash_loan.
+    pub fn resume_borrow(e: Env) -> Result<(), Error> {
+        let admin = load_admin(&e)?;
+        admin.require_auth();
+        set_borrow_paused(&e, false);
+        Ok(())
+    }
+
+    /// View: is borrow paused?
+    pub fn get_borrow_paused(e: Env) -> bool {
+        is_borrow_paused(&e)
+    }
+
     /// Admin-only: emergency pause all operations.
     pub fn emergency_pause(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
         EmergencyGuard::emergency_pause(e, approvers).map_err(|_| Error::Unauthorized)
@@ -356,6 +393,11 @@ impl FlashLoanVault {
         receiver: Address,
         amount: i128,
     ) -> Result<i128, Error> {
+        // Granular pause check: BORROW only.
+        if is_borrow_paused(&e) {
+            return Err(Error::BorrowPaused);
+        }
+
         // 1. Pause check.
         check_not_paused(&e)?;
 

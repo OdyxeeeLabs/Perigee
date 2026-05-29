@@ -1,7 +1,6 @@
 use super::*;
 use soroban_sdk::{
     contract, contractimpl, contracttype, testutils::Address as _, Address, Env,
-    String as SorobanString,
 };
 
 // ── Mock receivers ───────────────────────────────────────────────────────────
@@ -338,6 +337,49 @@ fn test_set_fee_invalid() {
     s.vault_client.set_fee(&101); // Over MAX_FEE_BPS
 }
 
+// ── Granular borrow pause (Issue #320) ───────────────────────────────────────
+
+#[test]
+fn test_borrow_pause_blocks_flash_loan_and_resume_allows() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    let initiator = Address::generate(&s.e);
+    let receiver_id = s.e.register(good::GoodReceiver, ());
+    let receiver = good::GoodReceiverClient::new(&s.e, &receiver_id);
+    receiver.set_vault(&s.vault_id);
+
+    assert_eq!(s.vault_client.get_borrow_paused(), false);
+    s.vault_client.pause_borrow();
+    assert_eq!(s.vault_client.get_borrow_paused(), true);
+
+    // While paused, borrowing must fail with BorrowPaused.
+    let res = s.vault_client.try_flash_loan(&initiator, &receiver_id, &5_000);
+    assert_eq!(res, Err(Ok(Error::BorrowPaused)));
+
+    // Resume and borrowing works again.
+    s.vault_client.resume_borrow();
+    assert_eq!(s.vault_client.get_borrow_paused(), false);
+    let fee = s.vault_client.flash_loan(&initiator, &receiver_id, &5_000);
+    assert_eq!(fee, 0);
+}
+
+#[test]
+fn test_borrow_pause_does_not_affect_deposit_withdraw() {
+    let s = setup();
+
+    s.vault_client.pause_borrow();
+
+    // Deposit/withdraw should still function normally.
+    s.token_admin.mint(&s.admin, &3_000);
+    s.vault_client.deposit(&s.admin, &3_000);
+    assert_eq!(s.vault_client.get_available(), 3_000);
+
+    s.vault_client.withdraw(&s.admin, &1_000);
+    assert_eq!(s.vault_client.get_available(), 2_000);
+    assert_eq!(s.token_client.balance(&s.admin), 1_000);
+}
+
 // ── Flash loan: success ──────────────────────────────────────────────────────
 
 #[test]
@@ -465,7 +507,7 @@ fn test_flash_loan_overpay() {
 // ── Flash loan: reentrancy ───────────────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Error(Contract, #4)")]
+#[should_panic(expected = "Contract re-entry is not allowed")]
 fn test_reentrancy_guard() {
     let s = setup();
     fund_vault(&s, 10_000);
