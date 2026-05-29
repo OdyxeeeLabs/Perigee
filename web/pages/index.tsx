@@ -6,6 +6,7 @@ import { InvocationHistory, useInvocationHistory } from '../components/Innovocat
 import { NutritionLabel } from '../components/NutritionLabel';
 import { FunctionSidebar } from '../components/FunctionSidebar';
 import { ContractInteraction } from '../components/ContractInteraction';
+import { GasUsageChart } from '../components/GasUsageChart';
 import { MOCK_CONTRACT_FUNCTIONS, generateMockResult, generateMockResourceCost } from '../lib/sorobantypes';
 import type { ContractFunction, InvocationResult } from '../lib/sorobantypes';
 import { UploadZone } from '../components/upload-zone';
@@ -266,13 +267,21 @@ export default function Home() {
                 <>
                   <ResultViewer result={currentResult} />
                   {currentResult?.resourceCost && (
-                    <div className="mt-4">
+                    <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
                       <NutritionLabel
                         cpu_instructions={currentResult.resourceCost.cpu_instructions}
                         ram_bytes={currentResult.resourceCost.ram_bytes}
                         ledger_read_bytes={currentResult.resourceCost.ledger_read_bytes}
                         ledger_write_bytes={currentResult.resourceCost.ledger_write_bytes}
                         transaction_size_bytes={currentResult.resourceCost.transaction_size_bytes}
+                      />
+                      <GasUsageChart
+                        cpu_instructions={currentResult.resourceCost.cpu_instructions}
+                        ram_bytes={currentResult.resourceCost.ram_bytes}
+                        ledger_read_bytes={currentResult.resourceCost.ledger_read_bytes}
+                        ledger_write_bytes={currentResult.resourceCost.ledger_write_bytes}
+                        transaction_size_bytes={currentResult.resourceCost.transaction_size_bytes}
+                        cost_stroops={currentResult.resourceCost.cost_stroops}
                       />
                     </div>
                   )}
