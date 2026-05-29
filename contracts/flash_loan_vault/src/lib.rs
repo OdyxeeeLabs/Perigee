@@ -113,6 +113,8 @@ pub enum DataKey {
     FlashLoanActive,
     /// Total amount the admin has deposited (tracked for withdrawal cap).
     TotalDeposited,
+    /// Temporary record of the last borrow for a borrower address.
+    BorrowRecord(Address),
 }
 
 // ── Flash loan receiver interface ────────────────────────────────────────────
@@ -174,6 +176,19 @@ fn get_fee_bps(e: &Env) -> i128 {
         .instance()
         .get(&DataKey::FeeBps)
         .unwrap_or(DEFAULT_FEE_BPS)
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BorrowRecord {
+    pub fee: i128,
+    pub total_repayment: i128,
+}
+
+/// Helper: calculate fee for a given amount using configured bps.
+fn calculate_fee(e: &Env, amount: i128) -> i128 {
+    let fee_bps = get_fee_bps(e);
+    amount * fee_bps / 10_000
 }
 
 fn is_flash_loan_active(e: &Env) -> bool {
@@ -417,6 +432,89 @@ impl FlashLoanVault {
             (String::from_str(&e, "flash_loan"), receiver.clone()),
             FlashLoanEvent {
                 receiver,
+                token: token_addr,
+                amount,
+                fee,
+            },
+        );
+
+        Ok(fee)
+    }
+
+    /// Execute a borrow (flash-style): transfer `amount` to `borrower`, call
+    /// borrower callback, and verify repayment of `amount + fee` before
+    /// returning. Stores a temporary `BorrowRecord` with `fee` and
+    /// `total_repayment` while the callback executes.
+    pub fn borrow(e: Env, borrower: Address, amount: i128) -> Result<i128, Error> {
+        // 1. Pause check.
+        check_not_paused(&e)?;
+
+        // 2. Validate amount > 0.
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        // 3. Reentrancy guard.
+        if is_flash_loan_active(&e) {
+            return Err(Error::Reentrancy);
+        }
+
+        let token_addr = load_token(&e)?;
+        let token = soroban_sdk::token::Client::new(&e, &token_addr);
+
+        // 4. Check vault has enough balance.
+        let pre_balance = token.balance(&e.current_contract_address());
+        if amount > pre_balance {
+            return Err(Error::InsufficientVaultBalance);
+        }
+
+        // 5. Calculate fee and total repayment.
+        let fee = calculate_fee(&e, amount);
+        let total_repayment = amount + fee;
+
+        // 6. Effects: set reentrancy guard and store borrow record.
+        set_flash_loan_active(&e, true);
+        e.storage().instance().set(
+            &DataKey::BorrowRecord(borrower.clone()),
+            &BorrowRecord {
+                fee,
+                total_repayment,
+            },
+        );
+
+        // 7. Interaction: transfer funds to borrower.
+        token.transfer(&e.current_contract_address(), &borrower, &amount);
+
+        // 8. Call borrower's callback so it can use the funds and repay.
+        let receiver_client = FlashLoanReceiverClient::new(&e, &borrower);
+        receiver_client.execute_operation(&token_addr, &amount, &fee, &borrower);
+
+        // 9. Verify repayment: vault balance must be >= pre_balance + fee.
+        let post_balance = token.balance(&e.current_contract_address());
+        if post_balance < pre_balance + fee {
+            // Revert with a clear error.
+            panic!("borrow not repaid");
+        }
+
+        // 10. Clear reentrancy guard and borrow record.
+        set_flash_loan_active(&e, false);
+        // Overwrite the temporary record with zeros to avoid stale data.
+        e.storage().instance().set(
+            &DataKey::BorrowRecord(borrower.clone()),
+            &BorrowRecord { fee: 0, total_repayment: 0 },
+        );
+
+        // 11. If fee collected, update total deposited.
+        if fee > 0 {
+            let deposited = get_total_deposited(&e);
+            set_total_deposited(&e, deposited + fee);
+        }
+
+        // 12. Emit same event as flash_loan for observability.
+        e.events().publish(
+            (String::from_str(&e, "borrow"), borrower.clone()),
+            FlashLoanEvent {
+                receiver: borrower,
                 token: token_addr,
                 amount,
                 fee,

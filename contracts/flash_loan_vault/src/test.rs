@@ -571,6 +571,48 @@ fn test_sequential_flash_loans_with_fee() {
     assert_eq!(s.vault_client.get_available(), 10_045);
 }
 
+// ── Borrow (alias) tests ───────────────────────────────────────────────────
+
+#[test]
+fn test_borrow_success_zero_fee() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    // Deploy good receiver and have it repay to the vault.
+    let receiver_id = s.e.register(good::GoodReceiver, ());
+    let receiver_client = good::GoodReceiverClient::new(&s.e, &receiver_id);
+    receiver_client.set_vault(&s.vault_id);
+
+    // Borrow 5_000 with 0 fee.
+    let fee = s.vault_client.borrow(&receiver_id, &5_000);
+    assert_eq!(fee, 0);
+    assert_eq!(s.vault_client.get_available(), 10_000);
+}
+
+#[test]
+fn test_borrow_with_fee() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    // Set 1% fee (100 bps).
+    s.vault_client.set_fee(&100);
+
+    // Deploy good receiver and pre-fund it with extra tokens for the fee.
+    let receiver_id = s.e.register(good::GoodReceiver, ());
+    let receiver_client = good::GoodReceiverClient::new(&s.e, &receiver_id);
+    receiver_client.set_vault(&s.vault_id);
+
+    // Pre-fund receiver with enough for the fee: 5000 * 100 / 10000 = 50.
+    s.token_admin.mint(&receiver_id, &50);
+
+    let fee = s.vault_client.borrow(&receiver_id, &5_000);
+    assert_eq!(fee, 50);
+
+    // Vault should now have 10_000 + 50 = 10_050.
+    assert_eq!(s.vault_client.get_available(), 10_050);
+    assert_eq!(s.vault_client.get_total_deposited(), 10_050);
+}
+
 // ── View functions ───────────────────────────────────────────────────────────
 
 #[test]
