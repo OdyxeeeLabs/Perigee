@@ -1,6 +1,6 @@
 import { WalletModal } from "../components/WalletModal";
 import { ConnectButton } from "../components/ConnectButton";
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ResultViewer } from '../components/Resultviewer';
 import { InvocationHistory, useInvocationHistory } from '../components/InnovocationHistory';
 import { NutritionLabel } from '../components/NutritionLabel';
@@ -11,6 +11,7 @@ import type { ContractFunction, InvocationResult } from '../lib/sorobantypes';
 import { UploadZone } from '../components/upload-zone';
 import { extractErrorDetails, createUserFriendlyMessage } from '../lib/errorHandling';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { saveLatestAnalysis, loadLatestAnalysis } from '../lib/analysisStorage';
 
 export default function Home() {
   const [contractId, setContractId] = useState('CAEZJVJ4N7P7GRUVD5NG5LYYH23AQHJUKQEUHW54LR5PGQX3V7FXD7Q');
@@ -19,6 +20,14 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<'explorer' | 'history'>('explorer');
   const { history, addToHistory } = useInvocationHistory();
+
+  // Restore the latest analysis result on initial page load
+  useEffect(() => {
+    const restored = loadLatestAnalysis();
+    if (restored) {
+      setCurrentResult(restored);
+    }
+  }, []);
 
   const handleSimulate = async (inputs: Record<string, any>) => {
     setLoading(true);
@@ -55,6 +64,7 @@ export default function Home() {
 
       setCurrentResult(result);
       addToHistory(result);
+      saveLatestAnalysis(result); // Persist the latest successful analysis
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred during analysis';
       
@@ -69,6 +79,7 @@ export default function Home() {
       };
       setCurrentResult(errorResult);
       addToHistory(errorResult);
+      saveLatestAnalysis(errorResult); // Persist the latest error result as well
     } finally {
       setLoading(false);
     }
