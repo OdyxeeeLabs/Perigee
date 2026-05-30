@@ -518,6 +518,44 @@ fn test_reentrancy_guard() {
     s.vault_client.flash_loan(&initiator, &receiver_id, &5_000);
 }
 
+#[test]
+fn test_mutations_reject_while_flash_loan_active() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    s.e.as_contract(&s.vault_id, || {
+        set_flash_loan_active(&s.e, true);
+    });
+
+    assert_eq!(
+        s.vault_client.try_deposit(&s.admin, &1),
+        Err(Ok(Error::Reentrancy))
+    );
+    assert_eq!(
+        s.vault_client.try_withdraw(&s.admin, &1),
+        Err(Ok(Error::Reentrancy))
+    );
+    assert_eq!(s.vault_client.try_set_fee(&25), Err(Ok(Error::Reentrancy)));
+    assert_eq!(
+        s.vault_client.try_set_paused(&s.admin, &true),
+        Err(Ok(Error::Reentrancy))
+    );
+    assert_eq!(
+        s.vault_client
+            .try_emergency_pause(&soroban_sdk::vec![&s.e, s.admin.clone()]),
+        Err(Ok(Error::Reentrancy))
+    );
+
+    s.e.as_contract(&s.vault_id, || {
+        set_flash_loan_active(&s.e, false);
+    });
+
+    assert_eq!(s.vault_client.get_fee(), 0);
+    assert_eq!(s.vault_client.get_available(), 10_000);
+    assert_eq!(s.vault_client.get_total_deposited(), 10_000);
+    assert_eq!(s.token_client.balance(&s.admin), 0);
+}
+
 // ── Flash loan: edge cases ───────────────────────────────────────────────────
 
 #[test]

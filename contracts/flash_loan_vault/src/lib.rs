@@ -183,6 +183,14 @@ fn is_flash_loan_active(e: &Env) -> bool {
         .unwrap_or(false)
 }
 
+fn check_no_flash_loan_active(e: &Env) -> Result<(), Error> {
+    if is_flash_loan_active(e) {
+        Err(Error::Reentrancy)
+    } else {
+        Ok(())
+    }
+}
+
 fn set_flash_loan_active(e: &Env, active: bool) {
     e.storage()
         .instance()
@@ -236,6 +244,8 @@ impl FlashLoanVault {
 
     /// Admin deposits tokens into the vault, making them available for flash loans.
     pub fn deposit(e: Env, from: Address, amount: i128) -> Result<(), Error> {
+        check_no_flash_loan_active(&e)?;
+
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -268,6 +278,8 @@ impl FlashLoanVault {
 
     /// Admin withdraws tokens from the vault.
     pub fn withdraw(e: Env, to: Address, amount: i128) -> Result<(), Error> {
+        check_no_flash_loan_active(&e)?;
+
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -301,6 +313,8 @@ impl FlashLoanVault {
 
     /// Admin-only: set the flash loan fee in basis points (0–100).
     pub fn set_fee(e: Env, fee_bps: i128) -> Result<(), Error> {
+        check_no_flash_loan_active(&e)?;
+
         if !(0..=MAX_FEE_BPS).contains(&fee_bps) {
             return Err(Error::InvalidFee);
         }
@@ -324,12 +338,16 @@ impl FlashLoanVault {
 
     /// Admin-only: pause or unpause flash loan operations.
     pub fn set_paused(e: Env, admin: Address, paused: bool) -> Result<(), Error> {
+        check_no_flash_loan_active(&e)?;
+
         EmergencyGuard::set_pause(e, admin, FLASH_LOAN_PAUSE_FLAG, paused)
             .map_err(|_| Error::Unauthorized)
     }
 
     /// Admin-only: emergency pause all operations.
     pub fn emergency_pause(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
+        check_no_flash_loan_active(&e)?;
+
         EmergencyGuard::emergency_pause(e, approvers).map_err(|_| Error::Unauthorized)
     }
 
@@ -367,9 +385,7 @@ impl FlashLoanVault {
         }
 
         // 3. Reentrancy guard.
-        if is_flash_loan_active(&e) {
-            return Err(Error::Reentrancy);
-        }
+        check_no_flash_loan_active(&e)?;
 
         // 4. Auth: the initiator must have signed.
         initiator.require_auth();
