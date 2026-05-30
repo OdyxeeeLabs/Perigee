@@ -309,6 +309,11 @@ impl EmergencyGuard {
             .unwrap_or(0)
     }
 
+    /// Authorize administration operations by verifying the caller approvers against the guard threshold.
+    pub fn authorize(env: Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        Self::check_multi_sig(&env, &approvers)
+    }
+
     // Internal helpers
 
     fn is_admin_internal(env: &Env, addr: &Address) -> bool {
