@@ -266,6 +266,19 @@ export default function Home() {
                 <>
                   <ResultViewer result={currentResult} />
                   {currentResult?.resourceCost && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentResult(null);
+                        const resetBtn = document.getElementById('wasm-upload-reset-btn');
+                        if (resetBtn) resetBtn.click();
+                      }}
+                      className="mt-4 px-4 py-2 bg-slate-800 text-slate-300 rounded hover:bg-slate-700 transition"
+                    >
+                      Clear analysis
+                    </button>
+                  )}
+                  {currentResult?.resourceCost && (
                     <div className="mt-4">
                       <NutritionLabel
                         cpu_instructions={currentResult.resourceCost.cpu_instructions}
