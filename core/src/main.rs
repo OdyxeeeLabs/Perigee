@@ -8,6 +8,7 @@ pub mod fee_collector;
 pub mod fee_store;
 pub mod insights;
 mod jobs;
+mod merkle_tree;
 mod parser;
 mod routing;
 pub mod rpc_provider;
@@ -19,6 +20,7 @@ mod ws;
 use crate::cache::{SimulationCache, ContractCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
 use crate::errors::AppError;
+use crate::merkle_tree::MerkleTree;
 use axum::{
     extract::State,
     routing::{get, post},
@@ -397,6 +399,10 @@ pub struct AnalyzeRequest {
     pub protocol_version: Option<u32>,
     /// Whether to enable experimental host functions
     pub enable_experimental: Option<bool>,
+    /// Whether to generate and include Merkle tree root of the state snapshot
+    #[serde(default)]
+    #[schema(example = false, description = "Generate Merkle tree root from state snapshot")]
+    pub include_merkle_tree: Option<bool>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -440,6 +446,9 @@ pub struct ResourceReport {
     /// Protocol version used for this simulation
     #[schema(example = 20)]
     pub protocol_version: u32,
+    /// Merkle tree root hash (hex-encoded) of the state snapshot, if requested
+    #[schema(description = "Merkle tree root hash of the state snapshot (hex-encoded)")]
+    pub merkle_tree_root: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -658,7 +667,7 @@ pub struct WasmBranchAnalysisResponse {
 }
 
 /// Convert a `SimulationResult` (library type) into the API `ResourceReport`.
-fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine) -> ResourceReport {
+fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine, merkle_tree_root: Option<String>) -> ResourceReport {
     let insights_report = insights_engine.analyze(&result.resources);
 
     ResourceReport {
@@ -720,6 +729,7 @@ fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine) -> Res
         call_graph_mermaid: result.call_graph.as_ref().map(|g| g.to_mermaid()),
         state_snapshot: result.state_snapshot.clone(),
         protocol_version: result.protocol_version,
+        merkle_tree_root,
     }
 }
 
@@ -840,6 +850,39 @@ async fn analyze(
         .with_label_values(&["efficiency_score"])
         .set(insights_report.efficiency_score as f64);
 
+    // Generate Merkle tree root if requested
+    let merkle_tree_root = if payload.include_merkle_tree.unwrap_or(false) {
+        result
+            .state_snapshot
+            .as_ref()
+            .and_then(|snapshot| {
+                // Extract ledger entries as leaves for the Merkle tree
+                let leaves: Vec<Vec<u8>> = snapshot
+                    .ledger_entries
+                    .values()
+                    .filter_map(|entry_b64| hex::decode(entry_b64).ok())
+                    .collect();
+
+                if leaves.is_empty() {
+                    tracing::warn!("No ledger entries available for Merkle tree generation");
+                    None
+                } else {
+                    match MerkleTree::new(leaves) {
+                        Ok(tree) => {
+                            tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count);
+                            Some(tree.get_root_hex())
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to generate Merkle tree: {}", e);
+                            None
+                        }
+                    }
+                }
+            })
+    } else {
+        None
+    };
+
     let mut headers = HeaderMap::new();
     headers.insert(
         HeaderName::from_static("x-soroscope-cache"),
@@ -851,7 +894,7 @@ async fn analyze(
             .unwrap_or_else(|_| HeaderValue::from_static("0")),
     );
 
-    Ok((headers, Json(to_report(&result, &state.insights_engine))))
+    Ok((headers, Json(to_report(&result, &state.insights_engine, merkle_tree_root))))
 }
 
 #[utoipa::path(
