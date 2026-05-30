@@ -227,9 +227,7 @@ impl FlashLoanVault {
         e.storage()
             .instance()
             .set(&DataKey::FlashLoanActive, &false);
-        e.storage()
-            .instance()
-            .set(&DataKey::TotalDeposited, &0i128);
+        e.storage().instance().set(&DataKey::TotalDeposited, &0i128);
 
         Ok(())
     }
@@ -248,8 +246,11 @@ impl FlashLoanVault {
         from.require_auth();
 
         let token = load_token(&e)?;
-        soroban_sdk::token::Client::new(&e, &token)
-            .transfer(&from, &e.current_contract_address(), &amount);
+        soroban_sdk::token::Client::new(&e, &token).transfer(
+            &from,
+            &e.current_contract_address(),
+            &amount,
+        );
 
         let deposited = get_total_deposited(&e);
         set_total_deposited(&e, deposited + amount);
@@ -282,17 +283,17 @@ impl FlashLoanVault {
         }
 
         let token = load_token(&e)?;
-        soroban_sdk::token::Client::new(&e, &token)
-            .transfer(&e.current_contract_address(), &to, &amount);
+        soroban_sdk::token::Client::new(&e, &token).transfer(
+            &e.current_contract_address(),
+            &to,
+            &amount,
+        );
 
         set_total_deposited(&e, deposited - amount);
 
         e.events().publish(
             (String::from_str(&e, "vault_withdraw"), to.clone()),
-            VaultWithdrawEvent {
-                admin: to,
-                amount,
-            },
+            VaultWithdrawEvent { admin: to, amount },
         );
 
         Ok(())
@@ -307,9 +308,7 @@ impl FlashLoanVault {
         admin.require_auth();
 
         let old_fee = get_fee_bps(&e);
-        e.storage()
-            .instance()
-            .set(&DataKey::FeeBps, &fee_bps);
+        e.storage().instance().set(&DataKey::FeeBps, &fee_bps);
 
         e.events().publish(
             (String::from_str(&e, "fee_changed"), admin.clone()),
@@ -324,11 +323,7 @@ impl FlashLoanVault {
     }
 
     /// Admin-only: pause or unpause flash loan operations.
-    pub fn set_paused(
-        e: Env,
-        admin: Address,
-        paused: bool,
-    ) -> Result<(), Error> {
+    pub fn set_paused(e: Env, admin: Address, paused: bool) -> Result<(), Error> {
         EmergencyGuard::set_pause(e, admin, FLASH_LOAN_PAUSE_FLAG, paused)
             .map_err(|_| Error::Unauthorized)
     }

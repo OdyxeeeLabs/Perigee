@@ -50,11 +50,8 @@ fn test_upgrade_to_and_call_executes_new_implementation_method() {
     let proxy = ProxyClient::new(&env, &proxy_id);
     proxy.initialize(&admin, &impl_v2_id);
 
-    let call_result: Val = proxy.upgrade_to_and_call(
-        &impl_v2_id,
-        &Symbol::new(&env, "version"),
-        &Vec::new(&env),
-    );
+    let call_result: Val =
+        proxy.upgrade_to_and_call(&impl_v2_id, &Symbol::new(&env, "version"), &Vec::new(&env));
     let version: u32 = call_result.try_into_val(&env).unwrap();
     assert_eq!(version, 2);
 }

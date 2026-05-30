@@ -2,12 +2,35 @@ use crate::admin::{has_administrator, read_administrator, write_administrator};
 use crate::allowance::{read_allowance, spend_allowance, write_allowance};
 use crate::balance::{read_balance, receive_balance, spend_balance};
 use crate::metadata::{read_decimal, read_name, read_symbol, write_metadata};
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use emergency_guard::{EmergencyGuard, GuardError, PauseType};
+use soroban_sdk::{contract, contractimpl, vec, Address, Env, String, Vec};
+
+fn require_not_paused(e: &Env, operation: u32) {
+    if EmergencyGuard::is_paused(e.clone(), operation) {
+        panic!("operation paused");
+    }
+}
 
 pub trait TokenTrait {
     fn initialize(e: Env, admin: Address, decimal: u32, name: String, symbol: String);
     fn mint(e: Env, to: Address, amount: i128);
     fn set_admin(e: Env, new_admin: Address);
+    fn guard_pause(e: Env, admin: Address, operation: u32, paused: bool) -> Result<(), GuardError>;
+    fn emergency_pause(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
+    fn guard_resume(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
+    fn guard_add_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        new_admin: Address,
+    ) -> Result<(), GuardError>;
+    fn guard_remove_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        admin: Address,
+    ) -> Result<(), GuardError>;
+    fn guard_admins(e: Env) -> Vec<Address>;
+    fn guard_threshold(e: Env) -> u32;
+    fn guard_is_paused(e: Env, operation: u32) -> bool;
     fn allowance(e: Env, from: Address, spender: Address) -> i128;
     fn approve(e: Env, from: Address, spender: Address, amount: i128, expiration_ledger: u32);
     fn balance(e: Env, id: Address) -> i128;
@@ -30,11 +53,14 @@ impl TokenTrait for Token {
             panic!("already initialized");
         }
         write_administrator(&e, &admin);
+        EmergencyGuard::initialize(e.clone(), vec![&e, admin.clone()], 1)
+            .expect("failed to initialize emergency guard");
         // One write instead of three separate writes for name/symbol/decimals.
         write_metadata(&e, &name, &symbol, decimal);
     }
 
     fn mint(e: Env, to: Address, amount: i128) {
+        require_not_paused(&e, PauseType::MINT);
         let admin = read_administrator(&e);
         admin.require_auth();
         e.storage().instance().extend_ttl(100, 100);
@@ -47,7 +73,51 @@ impl TokenTrait for Token {
         admin.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
+        EmergencyGuard::add_admin(e.clone(), vec![&e, admin.clone()], new_admin.clone())
+            .expect("failed to add token admin");
+        EmergencyGuard::remove_admin(e.clone(), vec![&e, admin.clone()], admin)
+            .expect("failed to remove old token admin");
         write_administrator(&e, &new_admin);
+    }
+
+    fn guard_pause(e: Env, admin: Address, operation: u32, paused: bool) -> Result<(), GuardError> {
+        EmergencyGuard::set_pause(e, admin, operation, paused)
+    }
+
+    fn emergency_pause(e: Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        EmergencyGuard::emergency_pause(e, approvers)
+    }
+
+    fn guard_resume(e: Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        EmergencyGuard::resume(e, approvers)
+    }
+
+    fn guard_add_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
+        EmergencyGuard::add_admin(e, approvers, new_admin)
+    }
+
+    fn guard_remove_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        admin: Address,
+    ) -> Result<(), GuardError> {
+        EmergencyGuard::remove_admin(e, approvers, admin)
+    }
+
+    fn guard_admins(e: Env) -> Vec<Address> {
+        EmergencyGuard::get_admins(e)
+    }
+
+    fn guard_threshold(e: Env) -> u32 {
+        EmergencyGuard::get_threshold(e)
+    }
+
+    fn guard_is_paused(e: Env, operation: u32) -> bool {
+        EmergencyGuard::is_paused(e, operation)
     }
 
     fn allowance(e: Env, from: Address, spender: Address) -> i128 {
@@ -68,6 +138,7 @@ impl TokenTrait for Token {
     }
 
     fn transfer(e: Env, from: Address, to: Address, amount: i128) {
+        require_not_paused(&e, PauseType::TRANSFER);
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
@@ -76,6 +147,7 @@ impl TokenTrait for Token {
     }
 
     fn transfer_from(e: Env, spender: Address, from: Address, to: Address, amount: i128) {
+        require_not_paused(&e, PauseType::TRANSFER);
         spender.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
@@ -85,6 +157,7 @@ impl TokenTrait for Token {
     }
 
     fn burn(e: Env, from: Address, amount: i128) {
+        require_not_paused(&e, PauseType::BURN);
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
@@ -92,6 +165,7 @@ impl TokenTrait for Token {
     }
 
     fn burn_from(e: Env, spender: Address, from: Address, amount: i128) {
+        require_not_paused(&e, PauseType::BURN);
         spender.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 

@@ -1,9 +1,4 @@
-use axum::{
-    extract::State,
-    response::IntoResponse,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -76,21 +71,19 @@ struct AppState {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    
+
     let state = Arc::new(AppState {
         rpc_url: args.rpc_url,
         client: reqwest::Client::new(),
         config: Config::default(),
     });
-    
-    let app = Router::new()
-        .route("/", post(handle_rpc))
-        .with_state(state);
-    
+
+    let app = Router::new().route("/", post(handle_rpc)).with_state(state);
+
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", args.port))
         .await
         .unwrap();
-    
+
     println!("RPC Proxy running on port {}", args.port);
     axum::serve(listener, app).await.unwrap();
 }
@@ -101,7 +94,7 @@ async fn handle_rpc(
 ) -> impl IntoResponse {
     if req.method == "eth_sendTransaction" {
         println!("Intercepting sendTransaction");
-        
+
         let params: Vec<Transaction> = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
             Err(_) => {
@@ -116,7 +109,7 @@ async fn handle_rpc(
                 });
             }
         };
-        
+
         if params.is_empty() {
             return Json(RpcResponse {
                 jsonrpc: "2.0".to_string(),
@@ -128,9 +121,9 @@ async fn handle_rpc(
                 id: req.id,
             });
         }
-        
+
         let tx = &params[0];
-        
+
         if state.config.blocked_addresses.contains(&tx.from) {
             return Json(RpcResponse {
                 jsonrpc: "2.0".to_string(),
@@ -142,18 +135,24 @@ async fn handle_rpc(
                 id: req.id,
             });
         }
-        
+
         let simulate_req = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "eth_call",
             "params": [tx, "latest"],
             "id": 1
         });
-        
-        match state.client.post(&state.rpc_url).json(&simulate_req).send().await {
+
+        match state
+            .client
+            .post(&state.rpc_url)
+            .json(&simulate_req)
+            .send()
+            .await
+        {
             Ok(resp) => {
                 let result: serde_json::Value = resp.json().await.unwrap_or_default();
-                
+
                 if result.get("error").is_some() {
                     println!("Simulation failed for tx from {}", tx.from);
                     return Json(RpcResponse {
@@ -166,15 +165,21 @@ async fn handle_rpc(
                         id: req.id,
                     });
                 }
-                
+
                 let gas_req = serde_json::json!({
                     "jsonrpc": "2.0",
                     "method": "eth_estimateGas",
                     "params": [tx],
                     "id": 1
                 });
-                
-                match state.client.post(&state.rpc_url).json(&gas_req).send().await {
+
+                match state
+                    .client
+                    .post(&state.rpc_url)
+                    .json(&gas_req)
+                    .send()
+                    .await
+                {
                     Ok(gas_resp) => {
                         let gas_body: serde_json::Value = gas_resp.json().await.unwrap_or_default();
                         let gas_used = gas_body
@@ -182,20 +187,26 @@ async fn handle_rpc(
                             .and_then(|r| r.as_str())
                             .and_then(|s| u64::from_str_radix(&s[2..], 16).ok())
                             .unwrap_or(0);
-                        
+
                         if gas_used > state.config.max_gas_limit {
-                            println!("Gas limit exceeded: {} > {}", gas_used, state.config.max_gas_limit);
+                            println!(
+                                "Gas limit exceeded: {} > {}",
+                                gas_used, state.config.max_gas_limit
+                            );
                             return Json(RpcResponse {
                                 jsonrpc: "2.0".to_string(),
                                 result: None,
                                 error: Some(RpcError {
                                     code: -32000,
-                                    message: format!("Gas limit exceeded: {} > {}", gas_used, state.config.max_gas_limit),
+                                    message: format!(
+                                        "Gas limit exceeded: {} > {}",
+                                        gas_used, state.config.max_gas_limit
+                                    ),
                                 }),
                                 id: req.id,
                             });
                         }
-                        
+
                         println!("Simulation passed: gas={}", gas_used);
                     }
                     Err(_) => {}
@@ -214,7 +225,7 @@ async fn handle_rpc(
             }
         }
     }
-    
+
     match state.client.post(&state.rpc_url).json(&req).send().await {
         Ok(resp) => {
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
@@ -225,16 +236,14 @@ async fn handle_rpc(
                 id: req.id,
             })
         }
-        Err(e) => {
-            Json(RpcResponse {
-                jsonrpc: "2.0".to_string(),
-                result: None,
-                error: Some(RpcError {
-                    code: -32000,
-                    message: format!("Upstream error: {}", e),
-                }),
-                id: req.id,
-            })
-        }
+        Err(e) => Json(RpcResponse {
+            jsonrpc: "2.0".to_string(),
+            result: None,
+            error: Some(RpcError {
+                code: -32000,
+                message: format!("Upstream error: {}", e),
+            }),
+            id: req.id,
+        }),
     }
 }

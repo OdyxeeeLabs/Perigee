@@ -1,6 +1,6 @@
 #![no_std]
 use emergency_guard::{EmergencyGuard, PauseType};
-use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env};
 
 #[contracttype]
 pub enum DataKey {
@@ -25,8 +25,12 @@ impl SimpleToken {
         admin.require_auth();
 
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::TotalSupply, &initial_supply);
-        env.storage().instance().set(&DataKey::Balance(admin.clone()), &initial_supply);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalSupply, &initial_supply);
+        env.storage()
+            .instance()
+            .set(&DataKey::Balance(admin.clone()), &initial_supply);
 
         let admins = vec![&env, admin];
         EmergencyGuard::initialize(env.clone(), admins, 1).expect("Failed to init guard");
@@ -39,13 +43,25 @@ impl SimpleToken {
 
         from.require_auth();
 
-        let balance: i128 = env.storage().instance().get(&DataKey::Balance(from.clone())).unwrap_or(0);
+        let balance: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Balance(from.clone()))
+            .unwrap_or(0);
         assert!(balance >= amount, "Insufficient balance");
 
-        env.storage().instance().set(&DataKey::Balance(from.clone()), &(balance - amount));
+        env.storage()
+            .instance()
+            .set(&DataKey::Balance(from.clone()), &(balance - amount));
 
-        let to_balance: i128 = env.storage().instance().get(&DataKey::Balance(to.clone())).unwrap_or(0);
-        env.storage().instance().set(&DataKey::Balance(to), &(to_balance + amount));
+        let to_balance: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Balance(to.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::Balance(to), &(to_balance + amount));
     }
 }
 
