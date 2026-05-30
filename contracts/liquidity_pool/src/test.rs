@@ -767,13 +767,13 @@ fn test_pause_and_unpause() {
     assert_eq!(shares, 1000);
 
     // Admin pauses deposits only.
-    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
-    assert!(client.guard_is_paused(&emergency_guard::PauseType::DEPOSIT));
-    assert!(!client.guard_is_paused(&emergency_guard::PauseType::SWAP));
+    client.guard_pause(&admin, &pause_op::DEPOSIT, &true);
+    assert!(client.guard_is_paused(&pause_op::DEPOSIT));
+    assert!(!client.guard_is_paused(&pause_op::SWAP));
 
     // Unpause deposits.
-    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &false);
-    assert!(!client.guard_is_paused(&emergency_guard::PauseType::DEPOSIT));
+    client.guard_pause(&admin, &pause_op::DEPOSIT, &false);
+    assert!(!client.guard_is_paused(&pause_op::DEPOSIT));
 
     // Operations should work again
     token_a_admin.mint(&user, &500);
@@ -813,7 +813,7 @@ fn test_deposit_when_paused() {
     token_b_admin.mint(&user, &1000);
 
     // Pause deposits only.
-    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
+    client.guard_pause(&admin, &pause_op::DEPOSIT, &true);
 
     // Try to deposit - should panic with Paused error
     client.deposit(&user, &1000, &1000);
@@ -851,7 +851,7 @@ fn test_swap_when_paused() {
     client.deposit(&user, &1000, &1000);
 
     // Pause swaps only.
-    client.guard_pause(&admin, &emergency_guard::PauseType::SWAP, &true);
+    client.guard_pause(&admin, &pause_op::SWAP, &true);
 
     // Try to swap - should panic with Paused error
     client.swap(&user, &false, &100, &200);
@@ -889,7 +889,7 @@ fn test_withdraw_when_paused() {
     let shares = client.deposit(&user, &1000, &1000);
 
     // Pause withdrawals only.
-    client.guard_pause(&admin, &emergency_guard::PauseType::WITHDRAW, &true);
+    client.guard_pause(&admin, &pause_op::WITHDRAW, &true);
 
     // Try to withdraw - should panic with Paused error
     client.withdraw(&user, &shares);
@@ -1182,13 +1182,13 @@ fn test_rotate_admin_replaces_guard_and_pool_admin() {
     assert_eq!(client.get_admin(), new_admin);
 
     assert_eq!(
-        client.try_set_operation_paused(&admin, &emergency_guard::PauseType::SWAP, &true),
+        client.try_set_operation_paused(&admin, &pause_op::SWAP, &true),
         Err(Ok(Error::Unauthorized))
     );
 
-    client.set_operation_paused(&new_admin, &emergency_guard::PauseType::SWAP, &true);
+    client.set_operation_paused(&new_admin, &pause_op::SWAP, &true);
     assert_eq!(
-        client.try_set_operation_paused(&new_admin, &emergency_guard::PauseType::SWAP, &false),
+        client.try_set_operation_paused(&new_admin, &pause_op::SWAP, &false),
         Ok(Ok(()))
     );
 }
