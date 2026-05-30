@@ -89,6 +89,10 @@ struct AppConfig {
     /// Enable fee market analysis (default true).
     #[serde(default = "default_fee_analysis_enabled")]
     fee_analysis_enabled: bool,
+    /// Emergency pause for message verification (default false).
+    /// When true, all verification endpoints return an error.
+    #[serde(default = "default_emergency_verification_paused")]
+    emergency_verification_paused: bool,
 }
 
 fn default_health_check_interval() -> u64 {
@@ -123,6 +127,10 @@ fn default_fee_analysis_enabled() -> bool {
     true
 }
 
+fn default_emergency_verification_paused() -> bool {
+    false
+}
+
 fn load_config() -> Result<AppConfig, ConfigError> {
     dotenvy::dotenv().ok();
 
@@ -143,7 +151,8 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("fee_collection_interval_secs", 5)?
         .set_default("fee_retention_days", 30)?
         .set_default("fee_analysis_enabled", true)?
-        .build()?;
+        .set_default("emergency_verification_paused", false)?
+        .build()?
 
     settings.try_deserialize()
 }
@@ -1067,6 +1076,7 @@ async fn main() {
         config.jwt_secret.clone(),
         None,
         config.network_passphrase.clone(),
+        config.emergency_verification_paused,
     ));
     tracing::info!(
         "SEP-10 server account: {}",
@@ -1183,6 +1193,7 @@ async fn main() {
         .route("/health", get(health_check))
         .route("/auth/challenge", post(auth::challenge_handler))
         .route("/auth/verify", post(auth::verify_handler))
+        .route("/auth/emergency-pause", post(auth::emergency_pause_handler))
         // Fee market routes (public access)
         .route("/fees/recommend", get(fee_recommend))
         .route("/fees/history", get(fee_history))
