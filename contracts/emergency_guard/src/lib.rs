@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, log, Address, Env, Vec};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec};
 
 /// Granular pause types using bitmask for efficient storage
 /// Each bit represents a different pausable operation
@@ -21,6 +21,8 @@ impl PauseType {
     pub const MINT: u32 = 1 << 4;
     /// Pause burning
     pub const BURN: u32 = 1 << 5;
+    /// Pause liquidity-pool pair creation in factory contracts
+    pub const CREATE_PAIR: u32 = 1 << 6;
 
     pub fn new(value: u32) -> Self {
         PauseType(value)
@@ -71,8 +73,6 @@ pub enum GuardError {
     AdminNotFound = 5,
     AlreadyInitialized = 6,
 }
-
-
 
 /// Result type for guard operations
 // Result type for guard operations replaced inline
@@ -157,7 +157,12 @@ impl EmergencyGuard {
     }
 
     /// Set pause state for a specific operation (any single admin can do this)
-    pub fn set_pause(env: Env, admin: Address, operation: u32, paused: bool) -> Result<(), GuardError> {
+    pub fn set_pause(
+        env: Env,
+        admin: Address,
+        operation: u32,
+        paused: bool,
+    ) -> Result<(), GuardError> {
         admin.require_auth();
 
         // Check if caller is admin
@@ -176,11 +181,13 @@ impl EmergencyGuard {
             .instance()
             .set(&DataKey::PauseState, &pause_state);
 
-        log!(
-            &env,
-            "Pause state updated: op={}, paused={}",
-            operation,
-            paused
+        // Emit standardized EmergencyGuard event
+        env.events().publish(
+            (
+                String::from_str(&env, "emergency_guard.set_pause"),
+                admin.clone(),
+            ),
+            (operation, paused),
         );
         Ok(())
     }
@@ -196,7 +203,13 @@ impl EmergencyGuard {
             .instance()
             .set(&DataKey::PauseState, &pause_state);
 
-        log!(&env, "Emergency pause all activated");
+        env.events().publish(
+            (String::from_str(
+                &env,
+                "emergency_guard.emergency_pause_all",
+            ),),
+            (approvers.clone(),),
+        );
         Ok(())
     }
 
@@ -209,26 +222,43 @@ impl EmergencyGuard {
             .instance()
             .set(&DataKey::PauseState, &pause_state);
 
-        log!(&env, "Resume all activated");
+        env.events().publish(
+            (String::from_str(&env, "emergency_guard.resume_all"),),
+            (approvers.clone(),),
+        );
         Ok(())
     }
 
     /// Add new admin (multi-sig required)
-    pub fn add_admin(env: Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), GuardError> {
+    pub fn add_admin(
+        env: Env,
+        approvers: Vec<Address>,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
         Self::check_multi_sig(&env, &approvers)?;
 
         let mut admins = Self::get_admins(env.clone());
         if !admins.iter().any(|a| a == new_admin) {
             admins.push_back(new_admin.clone());
             env.storage().instance().set(&DataKey::Admins, &admins);
-            log!(&env, "Admin added: {}", new_admin);
+            env.events().publish(
+                (
+                    String::from_str(&env, "emergency_guard.admin_added"),
+                    new_admin.clone(),
+                ),
+                (),
+            );
         }
 
         Ok(())
     }
 
     /// Remove admin (multi-sig required)
-    pub fn remove_admin(env: Env, approvers: Vec<Address>, admin: Address) -> Result<(), GuardError> {
+    pub fn remove_admin(
+        env: Env,
+        approvers: Vec<Address>,
+        admin: Address,
+    ) -> Result<(), GuardError> {
         Self::check_multi_sig(&env, &approvers)?;
 
         let admins = Self::get_admins(env.clone());
@@ -253,7 +283,13 @@ impl EmergencyGuard {
         }
 
         env.storage().instance().set(&DataKey::Admins, &new_admins);
-        log!(&env, "Admin removed: {}", admin);
+        env.events().publish(
+            (
+                String::from_str(&env, "emergency_guard.admin_removed"),
+                admin.clone(),
+            ),
+            (),
+        );
         Ok(())
     }
 

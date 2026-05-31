@@ -8,12 +8,9 @@ pub mod routing;
 pub mod rpc_provider;
 pub mod runner;
 pub mod simulation;
-<<<<<<< Updated upstream
 pub mod wasm_branch_analysis;
-=======
 
 #[cfg(test)]
 pub mod fuzz_tests;
 #[cfg(test)]
 pub mod fuzz_simulation;
->>>>>>> Stashed changes

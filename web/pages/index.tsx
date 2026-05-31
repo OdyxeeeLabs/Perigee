@@ -9,6 +9,8 @@ import { ContractInteraction } from '../components/ContractInteraction';
 import { MOCK_CONTRACT_FUNCTIONS, generateMockResult, generateMockResourceCost } from '../lib/sorobantypes';
 import type { ContractFunction, InvocationResult } from '../lib/sorobantypes';
 import { UploadZone } from '../components/upload-zone';
+import { extractErrorDetails, createUserFriendlyMessage } from '../lib/errorHandling';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 
 export default function Home() {
   const [contractId, setContractId] = useState('CAEZJVJ4N7P7GRUVD5NG5LYYH23AQHJUKQEUHW54LR5PGQX3V7FXD7Q');
@@ -20,6 +22,7 @@ export default function Home() {
 
   const handleSimulate = async (inputs: Record<string, any>) => {
     setLoading(true);
+    let errorType: string | undefined;
     try {
       const response = await fetch('http://localhost:8080/analyze', {
         method: 'POST',
@@ -31,7 +34,11 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error(`Backend error: ${response.statusText}`);
+        // Parse error response from backend
+        const errorResponse = await extractErrorDetails(response);
+        errorType = errorResponse.error;
+        const userMessage = createUserFriendlyMessage(errorResponse);
+        throw new Error(userMessage);
       }
 
       const report = await response.json();
@@ -49,11 +56,14 @@ export default function Home() {
       setCurrentResult(result);
       addToHistory(result);
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred during analysis';
+      
       const errorResult: InvocationResult = {
         id: Math.random().toString(36).substring(7),
         functionName: selectedFunction.name,
         inputs,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: errorMessage,
+        errorType: errorType || 'UNKNOWN_ERROR',
         timestamp: Date.now(),
         success: false,
       };
@@ -64,7 +74,60 @@ export default function Home() {
     }
   };
 
-  return (
+  const handleFileAnalysis = async (file: File) => {
+    setLoading(true);
+    let errorType: string | undefined;
+    try {
+      // Convert file to ArrayBuffer
+      const arrayBuffer = await file.arrayBuffer();
+      const response = await fetch('http://localhost:8080/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: arrayBuffer,
+      });
+
+      if (!response.ok) {
+        // Parse error response from backend
+        const errorResponse = await extractErrorDetails(response);
+        errorType = errorResponse.error;
+        const userMessage = createUserFriendlyMessage(errorResponse);
+        throw new Error(userMessage);
+      }
+
+      const report = await response.json();
+
+      const result: InvocationResult = {
+        id: Math.random().toString(36).substring(7),
+        functionName: 'WASM Analysis',
+        inputs: {},
+        result: null,
+        resourceCost: report,
+        timestamp: Date.now(),
+        success: true,
+      };
+
+      setCurrentResult(result);
+      addToHistory(result);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred during analysis';
+      
+      const errorResult: InvocationResult = {
+        id: Math.random().toString(36).substring(7),
+        functionName: 'WASM Analysis',
+        inputs: {},
+        error: errorMessage,
+        errorType: errorType || 'UNKNOWN_ERROR',
+        timestamp: Date.now(),
+        success: false,
+      };
+      setCurrentResult(errorResult);
+      addToHistory(errorResult);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0f1117' }}>
       {/* Header */}
       <header
@@ -115,12 +178,30 @@ export default function Home() {
               Drop a compiled Soroban contract (.wasm) to analyse its resource usage
             </p>
           </div>
-          <UploadZone
-            onFileReady={(file) => {
-              console.log('[UploadZone] Contract ready for analysis:', file.name, file.size, 'bytes');
-              // TODO: wire into your analysis flow, e.g. POST file bytes to /analyze
-            }}
-          />
+          <ErrorBoundary
+            fallback={(error, reset) => (
+              <div className="rounded-lg border border-red-800/60 bg-red-950/30 p-6 text-center text-red-100">
+                <p className="text-sm font-semibold">Upload failed unexpectedly</p>
+                <p className="mx-auto mt-2 max-w-md text-xs leading-relaxed text-red-200/80">
+                  {error.message}
+                </p>
+                <button
+                  type="button"
+                  onClick={reset}
+                  className="mt-4 rounded-md border border-red-700/70 px-4 py-2 text-sm text-red-100 hover:bg-red-900/40"
+                >
+                  Try another file
+                </button>
+              </div>
+            )}
+          >
+             <UploadZone
+               onFileReady={(file) => {
+                 console.log('[UploadZone] Contract ready for analysis:', file.name, file.size, 'bytes');
+                 handleFileAnalysis(file);
+               }}
+            />
+          </ErrorBoundary>
         </div>
 
         {/* Contract ID Input */}

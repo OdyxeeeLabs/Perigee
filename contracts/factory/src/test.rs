@@ -2,15 +2,10 @@
 extern crate std;
 use super::*;
 
-use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+use soroban_sdk::{testutils::Address as _, vec, Address, BytesN, Env};
 
-// Import the Liquidity Pool WASM for integration testing.
-// This requires running `cargo build --target wasm32-unknown-unknown --release`
-// before `cargo test` so the .wasm artifact exists on disk.
-mod liquidity_pool_contract {
-    soroban_sdk::contractimport!(
-        file = "../../target/wasm32-unknown-unknown/release/liquidity_pool.wasm"
-    );
+fn dummy_pool_hash(env: &Env) -> BytesN<32> {
+    BytesN::from_array(env, &[0; 32])
 }
 
 #[test]
@@ -88,6 +83,49 @@ fn test_guard_admin_threshold_checks() {
 }
 
 #[test]
+fn test_guard_pause_create_pair_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_id = env.register(LiquidityPoolFactory, ());
+    let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
+    let admin = Address::generate(&env);
+    let admins = vec![&env, admin.clone()];
+
+    assert_eq!(factory_client.initialize(&admins, &1), Ok(()));
+    assert!(!factory_client.guard_is_paused(&CREATE_PAIR));
+
+    factory_client
+        .guard_pause(&admin, &CREATE_PAIR, &true)
+        .expect("admin should be able to pause create_pair");
+    assert!(factory_client.guard_is_paused(&CREATE_PAIR));
+
+    factory_client
+        .guard_pause(&admin, &CREATE_PAIR, &false)
+        .expect("admin should be able to resume create_pair");
+    assert!(!factory_client.guard_is_paused(&CREATE_PAIR));
+}
+
+#[test]
+fn test_guard_pause_create_pair_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_id = env.register(LiquidityPoolFactory, ());
+    let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
+    let admin = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let admins = vec![&env, admin.clone()];
+
+    assert_eq!(factory_client.initialize(&admins, &1), Ok(()));
+
+    assert_eq!(
+        factory_client.try_guard_pause(&stranger, &CREATE_PAIR, &true),
+        Err(Ok(Error::Unauthorized))
+    );
+}
+
+#[test]
 fn test_pool_creation() {
     let env = Env::default();
     env.mock_all_auths();
@@ -104,10 +142,7 @@ fn test_pool_creation() {
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
 
-    // Upload the Liquidity Pool WASM and get its hash
-    let pool_hash = env
-        .deployer()
-        .upload_contract_wasm(liquidity_pool_contract::WASM);
+    let pool_hash = dummy_pool_hash(&env);
 
     // Note: Due to a testutils handle mapping bug in the Soroban SDK mock environment,
     // returning a newly deployed address from a native contract call corrupts the handle
@@ -142,9 +177,7 @@ fn test_duplicate_pair_panics() {
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
 
-    let pool_hash = env
-        .deployer()
-        .upload_contract_wasm(liquidity_pool_contract::WASM);
+    let pool_hash = dummy_pool_hash(&env);
 
     // First creation succeeds
     factory_client.create_pair(&token_a, &token_b, &pool_hash);

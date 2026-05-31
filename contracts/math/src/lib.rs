@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, Env};
 
 pub use soroscope_error_codes::ContractError as MathError;
 
