@@ -103,6 +103,9 @@ pub trait EmergencyGuardTrait {
     /// Remove admin (multi-sig required)
     fn remove_admin(env: &Env, approvers: Vec<Address>, admin: Address) -> Result<(), GuardError>;
 
+    /// Rotate admin (multi-sig required)
+    fn rotate_admin(env: &Env, approvers: Vec<Address>, old_admin: Address, new_admin: Address) -> Result<(), GuardError>;
+
     /// Get list of current admins
     fn get_admins(env: &Env) -> Vec<Address>;
 
@@ -287,6 +290,50 @@ impl EmergencyGuard {
             (
                 String::from_str(&env, "emergency_guard.admin_removed"),
                 admin.clone(),
+            ),
+            (),
+        );
+        Ok(())
+    }
+
+    /// Rotate admin (multi-sig required)
+    pub fn rotate_admin(
+        env: Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
+        Self::check_multi_sig(&env, &approvers)?;
+
+        let mut admins = Self::get_admins(env.clone());
+        let threshold = Self::get_threshold(env.clone());
+
+        let mut found = false;
+        let mut new_admins = soroban_sdk::Vec::new(&env);
+        for a in admins.iter() {
+            if a == old_admin {
+                found = true;
+            } else if a != new_admin {
+                new_admins.push_back(a);
+            }
+        }
+
+        if !found {
+            return Err(GuardError::AdminNotFound);
+        }
+
+        new_admins.push_back(new_admin.clone());
+
+        if (new_admins.len() as u32) < threshold {
+            return Err(GuardError::InvalidThreshold);
+        }
+
+        env.storage().instance().set(&DataKey::Admins, &new_admins);
+        env.events().publish(
+            (
+                soroban_sdk::String::from_str(&env, "emergency_guard.admin_rotated"),
+                old_admin,
+                new_admin,
             ),
             (),
         );
