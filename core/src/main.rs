@@ -440,6 +440,22 @@ pub struct ResourceReport {
     /// Protocol version used for this simulation
     #[schema(example = 20)]
     pub protocol_version: u32,
+    /// Testnet average resource usage for comparison
+    pub testnet_averages: TestnetAverages,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct TestnetAverages {
+    /// Average CPU instructions for typical Soroban transactions
+    pub cpu_instructions: u64,
+    /// Average RAM bytes for typical Soroban transactions
+    pub ram_bytes: u64,
+    /// Average ledger read bytes for typical Soroban transactions
+    pub ledger_read_bytes: u64,
+    /// Average ledger write bytes for typical Soroban transactions
+    pub ledger_write_bytes: u64,
+    /// Average transaction size bytes for typical Soroban transactions
+    pub transaction_size_bytes: u64,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -720,6 +736,13 @@ fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine) -> Res
         call_graph_mermaid: result.call_graph.as_ref().map(|g| g.to_mermaid()),
         state_snapshot: result.state_snapshot.clone(),
         protocol_version: result.protocol_version,
+        testnet_averages: TestnetAverages {
+            cpu_instructions: 3_000_000,
+            ram_bytes: 512_000,
+            ledger_read_bytes: 2_048,
+            ledger_write_bytes: 1_024,
+            transaction_size_bytes: 600,
+        },
     }
 }
 

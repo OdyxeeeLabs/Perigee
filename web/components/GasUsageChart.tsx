@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { BarChart3, Cpu, Database, HardDrive, Activity, DollarSign } from 'lucide-react';
+import type { TestnetAverages } from '../lib/sorobantypes';
 
 interface GasMetric {
   key: string;
@@ -13,8 +14,7 @@ interface GasMetric {
   icon: React.ElementType;
 }
 
-// Approximate testnet average resource usage for a typical Soroban transaction
-const TESTNET_AVERAGES = {
+const DEFAULT_TESTNET_AVERAGES: TestnetAverages = {
   cpu_instructions: 3_000_000,
   ram_bytes: 512_000,
   ledger_read_bytes: 2_048,
@@ -29,6 +29,7 @@ interface GasUsageChartProps {
   ledger_write_bytes: number;
   transaction_size_bytes: number;
   cost_stroops?: number;
+  testnetAverages?: TestnetAverages;
 }
 
 const formatCompact = (num: number) =>
@@ -46,13 +47,16 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
   ledger_write_bytes,
   transaction_size_bytes,
   cost_stroops,
+  testnetAverages,
 }) => {
+  const avg = testnetAverages ?? DEFAULT_TESTNET_AVERAGES;
+
   const metrics: GasMetric[] = [
     {
       key: 'cpu',
       label: 'CPU Instructions',
       simulated: cpu_instructions,
-      average: TESTNET_AVERAGES.cpu_instructions,
+      average: avg.cpu_instructions,
       unit: 'instr',
       color: '#ef4444',
       icon: Cpu,
@@ -61,7 +65,7 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
       key: 'ram',
       label: 'Memory (RAM)',
       simulated: ram_bytes,
-      average: TESTNET_AVERAGES.ram_bytes,
+      average: avg.ram_bytes,
       unit: 'bytes',
       color: '#eab308',
       icon: Activity,
@@ -70,7 +74,7 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
       key: 'reads',
       label: 'Ledger Reads',
       simulated: ledger_read_bytes,
-      average: TESTNET_AVERAGES.ledger_read_bytes,
+      average: avg.ledger_read_bytes,
       unit: 'bytes',
       color: '#3b82f6',
       icon: Database,
@@ -79,7 +83,7 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
       key: 'writes',
       label: 'Ledger Writes',
       simulated: ledger_write_bytes,
-      average: TESTNET_AVERAGES.ledger_write_bytes,
+      average: avg.ledger_write_bytes,
       unit: 'bytes',
       color: '#10b981',
       icon: HardDrive,
@@ -88,7 +92,7 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
       key: 'txsize',
       label: 'Transaction Size',
       simulated: transaction_size_bytes,
-      average: TESTNET_AVERAGES.transaction_size_bytes,
+      average: avg.transaction_size_bytes,
       unit: 'bytes',
       color: '#a371f7',
       icon: Activity,

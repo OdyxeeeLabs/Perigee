@@ -335,6 +335,7 @@ export default function Home() {
                         ledger_write_bytes={currentResult.resourceCost.ledger_write_bytes}
                         transaction_size_bytes={currentResult.resourceCost.transaction_size_bytes}
                         cost_stroops={currentResult.resourceCost.cost_stroops}
+                        testnetAverages={currentResult.resourceCost.testnet_averages}
                       />
                     </div>
                   )}

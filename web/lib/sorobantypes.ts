@@ -13,6 +13,25 @@ export interface ContractInput {
   optional?: boolean;
 }
 
+export interface ResourceCost {
+  fee?: string;
+  cost_stroops?: number;
+  cpu_instructions: number;
+  ram_bytes: number;
+  ledger_read_bytes: number;
+  ledger_write_bytes: number;
+  transaction_size_bytes: number;
+  testnet_averages?: TestnetAverages;
+}
+
+export interface TestnetAverages {
+  cpu_instructions: number;
+  ram_bytes: number;
+  ledger_read_bytes: number;
+  ledger_write_bytes: number;
+  transaction_size_bytes: number;
+}
+
 export interface InvocationResult {
   id: string;
   functionName: string;
@@ -20,15 +39,7 @@ export interface InvocationResult {
   result?: any;
   error?: string;
   errorType?: string; // Error type from backend (e.g., BAD_REQUEST, INTERNAL_SERVER_ERROR)
-  resourceCost?: {
-    fee?: string;
-    cost_stroops?: number;
-    cpu_instructions: number;
-    ram_bytes: number;
-    ledger_read_bytes: number;
-    ledger_write_bytes: number;
-    transaction_size_bytes: number;
-  };
+  resourceCost?: ResourceCost;
   callGraph?: CallGraph;
   callGraphMermaid?: string;
   stateSnapshot?: SimulationStateSnapshot;
