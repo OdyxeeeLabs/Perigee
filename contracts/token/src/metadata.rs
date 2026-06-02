@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::storage_types::{DataKey, TokenMetadata};
 use soroban_sdk::{Env, String};
 

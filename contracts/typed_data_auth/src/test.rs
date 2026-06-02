@@ -1,61 +1,19 @@
 #![cfg(test)]
 
-<<<<<<< Updated upstream
-=======
-use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, BytesN, Env, String};
->>>>>>> Stashed changes
 use crate::{Domain, Transfer, TypedDataAuth};
 use soroban_sdk::testutils::{Address as _, BytesN as _};
 use soroban_sdk::{Address, BytesN, Env, String};
 
 #[test]
-<<<<<<< Updated upstream
-fn test_domain_hash_is_nonzero() {
-=======
 fn test_domain_separator_hash() {
->>>>>>> Stashed changes
     let env = Env::default();
-    let zero = BytesN::from_array(&env, &[0u8; 32]);
     let contract_address = Address::generate(&env);
-<<<<<<< Updated upstream
-    let _signer = Address::generate(&env);
-    let from = Address::generate(&env);
-    let to = Address::generate(&env);
-
-=======
->>>>>>> Stashed changes
     let domain = Domain {
         name: String::from_str(&env, "TestContract"),
         version: String::from_str(&env, "1.0"),
         chain_id: 1,
         verifying_contract: contract_address,
     };
-    let hash = TypedDataAuth::compute_domain_hash(&env, &domain);
-    assert!(!hash.is_empty());
-}
-
-<<<<<<< Updated upstream
-#[test]
-fn test_struct_hash_is_nonzero() {
-    let env = Env::default();
-    let from = Address::generate(&env);
-    let to = Address::generate(&env);
-    let transfer = Transfer { from, to, amount: 1000 };
-    let hash = TypedDataAuth::compute_struct_hash(&env, &transfer);
-    assert!(!hash.is_empty());
-}
-
-#[test]
-fn test_message_hash_is_nonzero() {
-    let env = Env::default();
-    let contract_address = Address::generate(&env);
-    let domain = Domain {
-        name: String::from_str(&env, "TestContract"),
-        version: String::from_str(&env, "1.0"),
-        chain_id: 1,
-        verifying_contract: contract_address,
-=======
     let hash = TypedDataAuth::domain_separator_hash(&env, &domain);
     // Hash should be non-zero (32 bytes, not all zeros)
     let zero = BytesN::from_array(&env, &[0u8; 32]);
@@ -71,11 +29,7 @@ fn test_struct_hash() {
         from: from.clone(),
         to: to.clone(),
         amount: 1000,
->>>>>>> Stashed changes
     };
-    let from = Address::generate(&env);
-    let to = Address::generate(&env);
-    let transfer = Transfer { from, to, amount: 500 };
 
     let hash = TypedDataAuth::struct_hash(&env, &transfer);
     let zero = BytesN::from_array(&env, &[0u8; 32]);
@@ -89,22 +43,7 @@ fn test_message_hash() {
     let struct_hash = BytesN::from_array(&env, &[2u8; 32]);
 
     let message_hash = TypedDataAuth::message_hash(&env, &domain_hash, &struct_hash);
-<<<<<<< Updated upstream
-
-    // Generate a signature (in test environment, we can mock this)
-    // For simplicity, we'll assume the signature is valid
-    // In real tests, you'd generate a proper signature using the signer's keypair
-
-    // Since soroban_sdk testutils don't provide easy signature generation,
-    // we'll skip the full verification in unit tests.
-    // This test structure shows the intent.
-
-    // For now, just test that the hashes are computed correctly
-    assert_ne!(domain_hash, zero);
-    assert_ne!(struct_hash, zero);
-=======
     let zero = BytesN::from_array(&env, &[0u8; 32]);
->>>>>>> Stashed changes
     assert_ne!(message_hash, zero);
 }
 

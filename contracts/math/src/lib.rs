@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, Env};
 
 pub use soroscope_error_codes::ContractError as MathError;
 
@@ -206,15 +206,6 @@ pub struct Math;
 
 #[contractimpl]
 impl Math {
-<<<<<<< Updated upstream
-    pub fn exp(_env: Env, x: i128) -> Result<i128, MathError> {
-        Fixed(x).exp().map(|f| f.0)
-    }
-    pub fn ln(_env: Env, x: i128) -> Result<i128, MathError> {
-        Fixed(x).ln().map(|f| f.0)
-    }
-    pub fn pow(_env: Env, x: i128, y: i128) -> Result<i128, MathError> {
-=======
     pub fn exp(_e: Env, x: i128) -> Result<i128, MathError> {
         Fixed(x).exp().map(|f| f.0)
     }
@@ -222,7 +213,6 @@ impl Math {
         Fixed(x).ln().map(|f| f.0)
     }
     pub fn pow(_e: Env, x: i128, y: i128) -> Result<i128, MathError> {
->>>>>>> Stashed changes
         Fixed(x).pow(Fixed(y)).map(|f| f.0)
     }
 }

@@ -673,6 +673,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cross-chain-verifier"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3555,6 +3562,7 @@ dependencies = [
 name = "soroban-liquidity-pool-factory-contract"
 version = "0.1.0"
 dependencies = [
+ "emergency_guard",
  "liquidity_pool",
  "soroban-sdk",
  "soroban-token-contract",
@@ -3631,9 +3639,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "soroban-staking-rewards"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+ "soroscope-error-codes",
+ "soroscope-math",
+]
+
+[[package]]
 name = "soroban-token-contract"
 version = "0.0.0"
 dependencies = [
+ "emergency_guard",
  "soroban-sdk",
 ]
 

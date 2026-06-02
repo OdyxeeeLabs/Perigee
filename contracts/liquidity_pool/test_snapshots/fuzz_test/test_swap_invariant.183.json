@@ -59,7 +59,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 686684115059400457
+                    "lo": 158886619141938891
                   }
                 }
               ]
@@ -84,7 +84,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 509085587551367724
+                    "lo": 503444577532885833
                   }
                 }
               ]
@@ -109,13 +109,13 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 686684115059400457
+                    "lo": 158886619141938891
                   }
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 509085587551367724
+                    "lo": 503444577532885833
                   }
                 }
               ]
@@ -137,7 +137,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 686684115059400457
+                        "lo": 158886619141938891
                       }
                     }
                   ]
@@ -160,7 +160,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 509085587551367724
+                        "lo": 503444577532885833
                       }
                     }
                   ]
@@ -240,7 +240,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 5628623905429745
+                    "lo": 68791716610426747
                   }
                 },
                 {
@@ -268,7 +268,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 38502576893259
+                        "lo": 25222362900167770
                       }
                     }
                   ]
@@ -585,7 +585,7 @@
                 "val": {
                   "i128": {
                     "hi": 0,
-                    "lo": 591253740941404851
+                    "lo": 282826107086212881
                   }
                 }
               }
@@ -634,111 +634,113 @@
                         "key": {
                           "vec": [
                             {
-                              "symbol": "BaseFeeBasisPoints"
+                              "symbol": "GuardAdmins"
                             }
                           ]
                         },
                         "val": {
-                          "i128": {
-                            "hi": 0,
-                            "lo": 30
-                          }
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                            }
+                          ]
                         }
                       },
                       {
                         "key": {
                           "vec": [
                             {
-                              "symbol": "FeeBasisPoints"
+                              "symbol": "GuardPauseState"
                             }
                           ]
                         },
                         "val": {
-                          "i128": {
-                            "hi": 0,
-                            "lo": 30
-                          }
+                          "u32": 0
                         }
                       },
                       {
                         "key": {
                           "vec": [
                             {
-                              "symbol": "FeeUpdateTimelockLedgers"
+                              "symbol": "GuardThreshold"
                             }
                           ]
                         },
                         "val": {
-                          "u32": 120
+                          "u32": 1
                         }
                       },
                       {
                         "key": {
                           "vec": [
                             {
-                              "symbol": "ReserveA"
+                              "symbol": "Pool"
                             }
                           ]
                         },
                         "val": {
-                          "i128": {
-                            "hi": 0,
-                            "lo": 686684115059400457
-                          }
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
+                          "map": [
                             {
-                              "symbol": "ReserveB"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "i128": {
-                            "hi": 0,
-                            "lo": 509085587551367724
-                          }
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
+                              "key": {
+                                "symbol": "fee_bps"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 30
+                                }
+                              }
+                            },
                             {
-                              "symbol": "TokenA"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "address": "CBEPDNVYXQGWB5YUBXKJWYJA7OXTZW5LFLNO5JRRGE6Z6C5OSUZPCCEL"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
+                              "key": {
+                                "symbol": "reserve_a"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 184108982042106661
+                                }
+                              }
+                            },
                             {
-                              "symbol": "TokenB"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
+                              "key": {
+                                "symbol": "reserve_b"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 434652860922459086
+                                }
+                              }
+                            },
                             {
-                              "symbol": "TotalShares"
+                              "key": {
+                                "symbol": "token_a"
+                              },
+                              "val": {
+                                "address": "CBEPDNVYXQGWB5YUBXKJWYJA7OXTZW5LFLNO5JRRGE6Z6C5OSUZPCCEL"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "token_b"
+                              },
+                              "val": {
+                                "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_shares"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 282826107086212881
+                                }
+                              }
                             }
                           ]
-                        },
-                        "val": {
-                          "i128": {
-                            "hi": 0,
-                            "lo": 591253740941404851
-                          }
                         }
                       }
                     ]
@@ -861,7 +863,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 686684115059400457
+                          "lo": 184108982042106661
                         }
                       }
                     },
@@ -1007,7 +1009,7 @@
                       "val": {
                         "i128": {
                           "hi": 2,
-                          "lo": 13106473350004003509
+                          "lo": 13081289489680728998
                         }
                       }
                     },
@@ -1192,7 +1194,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 509085587551367724
+                          "lo": 434652860922459086
                         }
                       }
                     },
@@ -1338,7 +1340,7 @@
                       "val": {
                         "i128": {
                           "hi": 2,
-                          "lo": 13112140476486326513
+                          "lo": 13175303569191323515
                         }
                       }
                     },

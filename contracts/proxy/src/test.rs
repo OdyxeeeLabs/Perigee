@@ -2,7 +2,7 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, IntoVal, Symbol, TryIntoVal, Val, Vec};
+use soroban_sdk::{testutils::Address as _, Address, Env, Symbol, TryIntoVal, Val, Vec};
 
 #[test]
 fn test_proxy_upgrade_keeps_state_and_changes_logic() {
@@ -33,7 +33,7 @@ fn test_proxy_upgrade_keeps_state_and_changes_logic() {
     assert_eq!(proxy.get_value(), 20);
 
     let version_symbol = Symbol::new(&env, "version");
-    let version_val: Val = proxy.delegate_call(&version_symbol, Vec::new(&env));
+    let version_val: Val = proxy.delegate_call(&version_symbol, &Vec::new(&env));
     let version: u32 = version_val.try_into_val(&env).unwrap();
     assert_eq!(version, 2);
 }
@@ -50,11 +50,8 @@ fn test_upgrade_to_and_call_executes_new_implementation_method() {
     let proxy = ProxyClient::new(&env, &proxy_id);
     proxy.initialize(&admin, &impl_v2_id);
 
-    let call_result: Val = proxy.upgrade_to_and_call(
-        &impl_v2_id,
-        Symbol::new(&env, "version"),
-        Vec::new(&env),
-    );
+    let call_result: Val =
+        proxy.upgrade_to_and_call(&impl_v2_id, &Symbol::new(&env, "version"), &Vec::new(&env));
     let version: u32 = call_result.try_into_val(&env).unwrap();
     assert_eq!(version, 2);
 }
