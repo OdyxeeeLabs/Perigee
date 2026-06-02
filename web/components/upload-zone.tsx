@@ -189,33 +189,51 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
       setUploadState('scanning');
       setErrorMessage('');
 
-      // Simulate async scan (replace with real WASM parsing logic)
       const reader = new FileReader();
-      reader.onload = () => {
+      reader.onload = (event) => {
         setTimeout(() => {
           try {
+            const arrayBuffer = event.target?.result as ArrayBuffer;
+            if (!arrayBuffer) throw new Error('Failed to read file content');
+
+            if (arrayBuffer.byteLength < 8) {
+              throw new Error('File is too small to be a valid WebAssembly module');
+            }
+
+            const view = new DataView(arrayBuffer);
+            
+            const magicNumber = view.getUint32(0, false);
+            if (magicNumber !== 0x0061736d) {
+              throw new Error('Invalid WASM magic number. File is not a valid WebAssembly module');
+            }
+
+            const version = view.getUint32(4, true);
+            if (version !== 1) {
+              throw new Error(`Unsupported WASM version: ${version}. Expected version 1`);
+            }
+
             setUploadState('success');
             onFileReady?.(file);
           } catch (error) {
-            setUnexpectedError(
-              error instanceof Error
-                ? error
-                : new Error('Unexpected upload callback failure')
-            );
+            setErrorMessage(error instanceof Error ? error.message : 'Failed to parse WASM metadata');
+            setUploadState('error');
+            setDroppedFile(null);
           }
-        }, 2000); // 2-second scan window
+        }, 800);
       };
+      
       reader.onerror = () => {
-        const message = reader.error?.message ?? 'Unable to read the selected file';
-        setUnexpectedError(new Error(message));
+        setErrorMessage(reader.error?.message ?? 'Unable to read the selected file');
+        setUploadState('error');
+        setDroppedFile(null);
       };
 
       try {
         reader.readAsArrayBuffer(file);
       } catch (error) {
-        setUnexpectedError(
-          error instanceof Error ? error : new Error('Unable to start reading the selected file')
-        );
+        setErrorMessage(error instanceof Error ? error.message : 'Unable to start reading the selected file');
+        setUploadState('error');
+        setDroppedFile(null);
       }
     },
     [onFileReady]

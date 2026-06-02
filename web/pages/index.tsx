@@ -74,7 +74,60 @@ export default function Home() {
     }
   };
 
-  return (
+  const handleFileAnalysis = async (file: File) => {
+    setLoading(true);
+    let errorType: string | undefined;
+    try {
+      // Convert file to ArrayBuffer
+      const arrayBuffer = await file.arrayBuffer();
+      const response = await fetch('http://localhost:8080/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: arrayBuffer,
+      });
+
+      if (!response.ok) {
+        // Parse error response from backend
+        const errorResponse = await extractErrorDetails(response);
+        errorType = errorResponse.error;
+        const userMessage = createUserFriendlyMessage(errorResponse);
+        throw new Error(userMessage);
+      }
+
+      const report = await response.json();
+
+      const result: InvocationResult = {
+        id: Math.random().toString(36).substring(7),
+        functionName: 'WASM Analysis',
+        inputs: {},
+        result: null,
+        resourceCost: report,
+        timestamp: Date.now(),
+        success: true,
+      };
+
+      setCurrentResult(result);
+      addToHistory(result);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred during analysis';
+      
+      const errorResult: InvocationResult = {
+        id: Math.random().toString(36).substring(7),
+        functionName: 'WASM Analysis',
+        inputs: {},
+        error: errorMessage,
+        errorType: errorType || 'UNKNOWN_ERROR',
+        timestamp: Date.now(),
+        success: false,
+      };
+      setCurrentResult(errorResult);
+      addToHistory(errorResult);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#0f1117' }}>
       {/* Header */}
       <header
@@ -142,11 +195,11 @@ export default function Home() {
               </div>
             )}
           >
-            <UploadZone
-              onFileReady={(file) => {
-                console.log('[UploadZone] Contract ready for analysis:', file.name, file.size, 'bytes');
-                // TODO: wire into your analysis flow, e.g. POST file bytes to /analyze
-              }}
+             <UploadZone
+               onFileReady={(file) => {
+                 console.log('[UploadZone] Contract ready for analysis:', file.name, file.size, 'bytes');
+                 handleFileAnalysis(file);
+               }}
             />
           </ErrorBoundary>
         </div>

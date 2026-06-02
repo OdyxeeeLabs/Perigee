@@ -13,6 +13,7 @@ pub const SCALE: i128 = 1_000_000_000_000_000_000; // 18 decimals
 pub enum DataKey {
     Config,
     UserState(Address),
+    TotalStaked,
 }
 
 // ── Configuration Struct ──────────────────────────────────────
@@ -242,10 +243,18 @@ impl StakingRewards {
             start_block,
             is_paused: false,
         };
-
+        
+        // Update total staked
+        let mut total_staked = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
+        total_staked = total_staked
+            .checked_add(amount)
+            .ok_or(ContractError::Overflow)?;
+        e.storage().instance().set(&DataKey::TotalStaked, &total_staked);
+        
         e.storage().instance().set(&DataKey::Config, &config);
+        e.storage().instance().set(&DataKey::TotalStaked, &0i128);
         e.storage().instance().extend_ttl(10000, 10000);
-
+        
         Ok(())
     }
 
@@ -313,6 +322,12 @@ impl StakingRewards {
 
         state.staked_amount = state
             .staked_amount
+            .checked_sub(amount)
+            .ok_or(ContractError::Overflow)?;
+        
+        // Update total staked
+        let mut total_staked = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
+        total_staked = total_staked
             .checked_sub(amount)
             .ok_or(ContractError::Overflow)?;
 
@@ -409,6 +424,13 @@ impl StakingRewards {
 
         let state: UserStakingState = e.storage().persistent().get(&state_key).unwrap();
         let staked_amount = state.staked_amount;
+        
+        // Update total staked
+        let mut total_staked = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
+        total_staked = total_staked
+            .checked_sub(staked_amount)
+            .ok_or(ContractError::Overflow)?;
+        e.storage().instance().set(&DataKey::TotalStaked, &total_staked);
 
         if staked_amount <= 0 {
             return Ok(0);
@@ -494,6 +516,9 @@ impl StakingRewards {
         let t_curr = e.ledger().sequence();
 
         if state.staked_amount > 0 && t_curr > state.last_update_block {
+            // Time-based reward calculation: V_new = V_old * multiplier, where
+            // multiplier = exp(integral of reward rate over time). Rewards are
+            // computed as R_new = V_new - staked_amount to avoid rounding errors.
             let multiplier_res = calculate_multiplier(&config, state.last_update_block, t_curr);
             if let Ok(multiplier) = multiplier_res {
                 let v_old_res = state.staked_amount.checked_add(state.accrued_rewards);
@@ -541,6 +566,9 @@ impl StakingRewards {
         let t_curr = e.ledger().sequence();
 
         if state.staked_amount > 0 && t_curr > state.last_update_block {
+            // Time-based reward calculation: V_new = V_old * multiplier, where
+            // multiplier = exp(integral of reward rate over time). Rewards are
+            // computed as R_new = V_new - staked_amount to avoid rounding errors.
             let multiplier = calculate_multiplier(config, state.last_update_block, t_curr)?;
 
             // Virtual Balance V = S + R

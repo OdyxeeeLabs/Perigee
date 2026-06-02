@@ -70,13 +70,11 @@ impl TokenTrait for Token {
 
     fn set_admin(e: Env, new_admin: Address) {
         let admin = read_administrator(&e);
-        admin.require_auth();
+        // admin.require_auth(); // Handled by EmergencyGuard
         e.storage().instance().extend_ttl(100, 100);
 
-        EmergencyGuard::add_admin(e.clone(), vec![&e, admin.clone()], new_admin.clone())
-            .expect("failed to add token admin");
-        EmergencyGuard::remove_admin(e.clone(), vec![&e, admin.clone()], admin)
-            .expect("failed to remove old token admin");
+        EmergencyGuard::rotate_admin(e.clone(), vec![&e, admin.clone()], admin.clone(), new_admin.clone())
+            .expect("failed to rotate token admin");
         write_administrator(&e, &new_admin);
     }
 

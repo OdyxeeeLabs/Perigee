@@ -1,6 +1,6 @@
 #![no_std]
 use emergency_guard::{EmergencyGuard, PauseType};
-use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env};
 
 #[contracttype]
 pub enum DataKey {
