@@ -1,0 +1,26 @@
+[package]
+name = "cross-chain-payload"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk = "20.5.0"
+
+[dependencies.soroban-sdk]
+version = "20.5.0"
+features = ["std", "testutils"]
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.release-with-logs]
+inherits = "release"
+debug = true

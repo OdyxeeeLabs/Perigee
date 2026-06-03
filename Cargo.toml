@@ -10,6 +10,7 @@ members = [
     "contracts/liquidity_pool",
     "contracts/cpu_heavy",
     "contracts/cross_call",
+    "contracts/cross_chain_payload",
     "contracts/factory",
     "contracts/math",
     "contracts/typed_data_auth",
