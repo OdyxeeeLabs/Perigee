@@ -18,7 +18,7 @@ use soroban_sdk::xdr::ToXdr;
 
 use emergency_guard::{EmergencyGuard, GuardError, PauseType};
 
-const CREATE_PAIR: u32 = 1 << 6;
+use emergency_guard::PauseType;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -53,27 +53,23 @@ pub enum DataKey {
     GuardPauseState,
 }
 
-fn pause_state(env: &Env) -> u32 {
+fn pause_state(env: &Env) -> PauseType {
     env.storage()
         .instance()
         .get(&DataKey::GuardPauseState)
-        .unwrap_or(0)
+        .unwrap_or(PauseType::new(0))
 }
 
 fn set_pause_state(env: &Env, operation: u32, paused: bool) {
     let mut state = pause_state(env);
-    if paused {
-        state |= operation;
-    } else {
-        state &= !operation;
-    }
+    state.set_paused(operation, paused);
     env.storage()
         .instance()
         .set(&DataKey::GuardPauseState, &state);
 }
 
 fn check_not_paused(env: &Env, operation: u32) -> Result<(), Error> {
-    if pause_state(env) & operation != 0 {
+    if pause_state(env).is_paused(operation) {
         Err(Error::Paused)
     } else {
         Ok(())
@@ -162,6 +158,16 @@ impl LiquidityPoolFactory {
     /// Checks whether an address is currently authorized as a factory admin.
     pub fn is_admin(env: Env, addr: Address) -> bool {
         EmergencyGuard::is_admin(&env, &addr)
+    /// Initializes the factory guard admin. Pair creation remains unpaused by default.
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::AlreadyInitialized);
+        }
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::GuardPauseState, &PauseType::new(0));
+        Ok(())
     }
 
     /// Pause or resume a granular factory operation.
@@ -183,11 +189,11 @@ impl LiquidityPoolFactory {
 
     /// Returns true when a granular factory operation is paused.
     pub fn guard_is_paused(env: Env, operation: u32) -> bool {
-        pause_state(&env) & operation != 0
+        pause_state(&env).is_paused(operation)
     }
 
-    /// Returns the raw factory pause bitmask.
-    pub fn get_pause_state(env: Env) -> u32 {
+    /// Returns the factory pause state as a PauseType bitmask.
+    pub fn get_pause_state(env: Env) -> PauseType {
         pause_state(&env)
     /// Initialize the factory's emergency guard state with a set of admins.
     pub fn initialize(env: Env, admins: soroban_sdk::Vec<Address>, threshold: u32) -> Result<(), Error> {
@@ -230,6 +236,8 @@ impl LiquidityPoolFactory {
         ensure_not_paused(&env, PauseType::MINT);
         if EmergencyGuard::is_paused(env.clone(), PauseType::CREATE_PAIR) {
             panic!("Pair creation is paused");
+        if check_not_paused(&env, PauseType::CREATE_PAIR).is_err() {
+            panic!("Create pair operation is paused");
         }
 
         let (token_0, token_1) = if token_a < token_b {
