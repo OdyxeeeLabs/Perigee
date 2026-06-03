@@ -12,6 +12,7 @@ use soroban_sdk::xdr::{
     Preconditions, ReadXdr, SequenceNumber, SignatureHint, TimeBounds, TimePoint, Transaction,
     TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, WriteXdr,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use stellar_strkey::Strkey;
@@ -29,6 +30,9 @@ pub struct AuthState {
     pub signing_key: SigningKey,
     pub server_public_key: [u8; 32],
     pub network_passphrase: String,
+    /// Emergency pause flag for message verification.
+    /// When true, all verification endpoints reject requests.
+    pub emergency_verification_paused: Arc<AtomicBool>,
 }
 
 impl AuthState {
@@ -36,6 +40,7 @@ impl AuthState {
         jwt_private_key_pem: Option<String>,
         sep10_seed: Option<[u8; 32]>,
         network_passphrase: String,
+        emergency_verification_paused: bool,
     ) -> Self {
         let seed = match sep10_seed {
             Some(seed) => seed,
@@ -73,12 +78,21 @@ impl AuthState {
             signing_key,
             server_public_key,
             network_passphrase,
+            emergency_verification_paused: Arc::new(AtomicBool::new(emergency_verification_paused)),
         }
     }
 
     pub fn server_stellar_address(&self) -> String {
         Strkey::PublicKeyEd25519(stellar_strkey::ed25519::PublicKey(self.server_public_key))
             .to_string()
+    }
+
+    pub fn is_verification_paused(&self) -> bool {
+        self.emergency_verification_paused.load(Ordering::SeqCst)
+    }
+
+    pub fn set_verification_paused(&self, paused: bool) {
+        self.emergency_verification_paused.store(paused, Ordering::SeqCst);
     }
 }
 
@@ -102,6 +116,22 @@ pub struct VerifyRequest {
 #[derive(Serialize, ToSchema)]
 pub struct VerifyResponse {
     pub token: String,
+}
+
+/// Emergency pause toggle request (admin-only).
+#[derive(Deserialize, ToSchema)]
+pub struct EmergencyPauseRequest {
+    /// If true, verification is paused. If false, verification resumes.
+    pub paused: bool,
+}
+
+/// Emergency pause toggle response.
+#[derive(Serialize, ToSchema)]
+pub struct EmergencyPauseResponse {
+    /// Current pause status.
+    pub paused: bool,
+    /// Message describing the status change.
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -350,7 +380,8 @@ fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str) -> Result<
     request_body = ChallengeRequest,
     responses(
         (status = 200, description = "SEP-10 challenge transaction", body = ChallengeResponse),
-        (status = 400, description = "Invalid account")
+        (status = 400, description = "Invalid account"),
+        (status = 503, description = "Verification paused for emergency maintenance")
     ),
     tag = "Auth"
 )]
@@ -358,6 +389,12 @@ pub async fn challenge_handler(
     Extension(state): Extension<Arc<AuthState>>,
     Json(payload): Json<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, AppError> {
+    if state.is_verification_paused() {
+        return Err(AppError::Internal(
+            "Message verification is temporarily paused for emergency maintenance".into(),
+        ));
+    }
+
     let strkey = Strkey::from_string(&payload.account)
         .map_err(|_| AppError::BadRequest("Invalid Stellar address".into()))?;
 
@@ -380,7 +417,8 @@ pub async fn challenge_handler(
     request_body = VerifyRequest,
     responses(
         (status = 200, description = "JWT token issued", body = VerifyResponse),
-        (status = 401, description = "Authentication failed")
+        (status = 401, description = "Authentication failed"),
+        (status = 503, description = "Verification paused for emergency maintenance")
     ),
     tag = "Auth"
 )]
@@ -388,8 +426,44 @@ pub async fn verify_handler(
     Extension(state): Extension<Arc<AuthState>>,
     Json(payload): Json<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
+    if state.is_verification_paused() {
+        return Err(AppError::Internal(
+            "Message verification is temporarily paused for emergency maintenance".into(),
+        ));
+    }
+
     let token = verify_challenge_envelope(&state, &payload.transaction)?;
     Ok(Json(VerifyResponse { token }))
+}
+
+/// Emergency pause toggle endpoint (for administrative control).
+/// This endpoint allows operators to pause all message verification in emergency scenarios.
+#[utoipa::path(
+    post,
+    path = "/auth/emergency-pause",
+    request_body = EmergencyPauseRequest,
+    responses(
+        (status = 200, description = "Emergency pause toggled", body = EmergencyPauseResponse),
+        (status = 400, description = "Invalid request")
+    ),
+    tag = "Auth"
+)]
+pub async fn emergency_pause_handler(
+    Extension(state): Extension<Arc<AuthState>>,
+    Json(payload): Json<EmergencyPauseRequest>,
+) -> Result<Json<EmergencyPauseResponse>, AppError> {
+    state.set_verification_paused(payload.paused);
+
+    let message = if payload.paused {
+        "Message verification has been PAUSED for emergency maintenance".to_string()
+    } else {
+        "Message verification has been RESUMED".to_string()
+    };
+
+    Ok(Json(EmergencyPauseResponse {
+        paused: payload.paused,
+        message,
+    }))
 }
 
 pub async fn auth_middleware(
@@ -397,6 +471,13 @@ pub async fn auth_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
+    // Check if verification is paused — deny all requests during emergency maintenance
+    if state.is_verification_paused() {
+        return Err(AppError::Internal(
+            "Authentication is temporarily paused for emergency maintenance".into(),
+        ));
+    }
+
     let auth_header = req
         .headers()
         .get(header::AUTHORIZATION)

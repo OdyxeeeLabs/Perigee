@@ -141,6 +141,10 @@ struct AppConfig {
     /// Enable fee market analysis (default true).
     #[serde(default = "default_fee_analysis_enabled")]
     fee_analysis_enabled: bool,
+    /// Emergency pause for message verification (default false).
+    /// When true, all verification endpoints return an error.
+    #[serde(default = "default_emergency_verification_paused")]
+    emergency_verification_paused: bool,
     /// Filesystem path that backs the disk-persistent L2 cache. When
     /// empty the L2 tier is disabled and the service runs L1-only (same
     /// behaviour as before #104).
@@ -188,6 +192,8 @@ fn default_fee_analysis_enabled() -> bool {
     true
 }
 
+fn default_emergency_verification_paused() -> bool {
+    false
 fn default_disk_cache_path() -> String {
     // Empty == L2 disabled. Operators who want persistence set this in
     // env / config.toml explicitly; we don't create a hidden directory
@@ -223,6 +229,8 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("fee_collection_interval_secs", 5)?
         .set_default("fee_retention_days", 30)?
         .set_default("fee_analysis_enabled", true)?
+        .set_default("emergency_verification_paused", false)?
+        .build()?
         .set_default("disk_cache_path", "")?
         .set_default("max_ledger_age", 100)?
         .build()?;
@@ -1755,6 +1763,7 @@ async fn main() {
         config.jwt_private_key.clone(),
         None,
         config.network_passphrase.clone(),
+        config.emergency_verification_paused,
     ));
     tracing::info!(
         "SEP-10 server account: {}",
@@ -1954,6 +1963,7 @@ async fn main() {
         .route("/metrics", get(metrics_handler))
         .route("/auth/challenge", post(auth::challenge_handler))
         .route("/auth/verify", post(auth::verify_handler))
+        .route("/auth/emergency-pause", post(auth::emergency_pause_handler))
         .route("/auth/jwks", get(auth::jwks_handler))
         // Fee market routes (public access)
         .route("/fees/recommend", get(fee_recommend))
