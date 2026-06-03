@@ -243,29 +243,35 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
     const first = rejections[0];
     const fileName = first?.file?.name ?? 'file';
     const ext = fileName.includes('.') ? `.${fileName.split('.').pop()}` : 'unknown type';
+    const customMessage = first?.errors?.[0]?.message;
     setErrorMessage(
-      `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`
+      customMessage || `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`
     );
     setUploadState('error');
     setDroppedFile(null);
   }, []);
 
-  const onDragEnter = useCallback(() => {
-    if (uploadState !== 'scanning') setUploadState('hover');
-  }, [uploadState]);
-
-  const onDragLeave = useCallback(() => {
-    if (uploadState === 'hover') setUploadState('idle');
-  }, [uploadState]);
+  const wasmValidator = useCallback((file: File) => {
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if (extension !== 'wasm') {
+      return {
+        code: 'file-invalid-type',
+        message: `"${file.name}" was rejected — only .wasm files are accepted (got .${extension || 'unknown'})`,
+      };
+    }
+    return null;
+  }, []);
 
   // ── Dropzone config ──────────────────────────────────────────────────────────
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDropAccepted,
     onDropRejected,
-    onDragEnter,
-    onDragLeave,
-    accept: { 'application/wasm': ['.wasm'] },
+    validator: wasmValidator,
+    accept: {
+      'application/wasm': ['.wasm'],
+      'application/octet-stream': ['.wasm'],
+    },
     maxFiles: 1,
     noClick: uploadState === 'scanning',
     noDrag: uploadState === 'scanning',
@@ -283,13 +289,16 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
 
   // ── Dynamic border & bg classes ──────────────────────────────────────────────
 
+  const isHovered = isDragActive && uploadState !== 'scanning';
+  const displayState = isHovered ? 'hover' : uploadState;
+
   const borderColor = {
     idle: 'border-slate-600 hover:border-slate-400',
     hover: 'border-sky-400 shadow-[0_0_24px_rgba(56,189,248,0.2)]',
     scanning: 'border-violet-500 shadow-[0_0_24px_rgba(167,139,250,0.25)]',
     success: 'border-emerald-500 shadow-[0_0_24px_rgba(52,211,153,0.2)]',
     error: 'border-red-500 shadow-[0_0_24px_rgba(248,113,113,0.2)]',
-  }[uploadState];
+  }[displayState];
 
   const bgColor = {
     idle: 'bg-slate-900/60 hover:bg-slate-800/60',
@@ -297,7 +306,7 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
     scanning: 'bg-violet-950/40',
     success: 'bg-emerald-950/40',
     error: 'bg-red-950/30',
-  }[uploadState];
+  }[displayState];
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -321,12 +330,12 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
         <input {...getInputProps()} id="wasm-file-input" aria-label="Upload .wasm file" />
 
         {/* Animated glow ring on hover */}
-        {(uploadState === 'hover' || uploadState === 'scanning') && (
+        {(displayState === 'hover' || displayState === 'scanning') && (
           <span
             className="absolute inset-0 rounded-2xl pointer-events-none"
             style={{
               boxShadow:
-                uploadState === 'hover'
+                displayState === 'hover'
                   ? '0 0 0 1px rgba(56,189,248,0.3)'
                   : '0 0 0 1px rgba(167,139,250,0.35)',
               animation: 'pulse-ring 2s ease-in-out infinite',
@@ -335,16 +344,16 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
         )}
 
         {/* ── IDLE / HOVER STATE ── */}
-        {(uploadState === 'idle' || uploadState === 'hover') && (
+        {(displayState === 'idle' || displayState === 'hover') && (
           <div className="flex flex-col items-center text-center gap-4 transition-all duration-300">
-            <WasmIcon state={uploadState} />
+            <WasmIcon state={displayState} />
             <div>
               <p
                 className={`text-base font-semibold transition-colors duration-300 ${
-                  uploadState === 'hover' ? 'text-sky-300' : 'text-slate-300'
+                  displayState === 'hover' ? 'text-sky-300' : 'text-slate-300'
                 }`}
               >
-                {uploadState === 'hover'
+                {displayState === 'hover'
                   ? 'Release to upload your .wasm file'
                   : 'Drag & drop your compiled .wasm file'}
               </p>
