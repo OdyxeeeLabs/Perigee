@@ -22,6 +22,7 @@ import { ResourceHeatmap } from '../components/ResourceHeatmap';
 import { GasGolfingSuggestionsTable } from '../components/GasGolfingSuggestionsTable';
 import type { GasGolfingSuggestion } from '../lib/gasGolfingSort';
 import { extractErrorDetails, createUserFriendlyMessage, formatError } from '../lib/errorHandling';
+import { apiUrl } from '../lib/api';
 
 export default function Home() {
   const [contractId, setContractId] = useState('CAEZJVJ4N7P7GRUVD5NG5LYYH23AQHJUKQEUHW54LR5PGQX3V7FXD7Q');
@@ -129,6 +130,7 @@ export default function Home() {
       // Convert file to ArrayBuffer
       const arrayBuffer = await file.arrayBuffer();
       const response = await fetch('http://localhost:8080/analyze', {
+      const response = await fetch(apiUrl('/analyze'),  {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: arrayBuffer,
