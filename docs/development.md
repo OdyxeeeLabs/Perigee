@@ -36,6 +36,7 @@ This guide covers setting up your environment and the development standards we f
 - **Styling**: Use Tailwind CSS for consistency.
 - **Linting**: Run `npm run lint` within the `/web` directory.
 - **Components**: Keep components modular and placed in `/web/components`.
+- **State Persistence**: See [Frontend Persistence](./FRONTEND_PERSISTENCE.md) for details on how analysis results are persisted across page refreshes.
 
 ### Contracts
 - Use **Soroban SDK v22.0.0** or higher.

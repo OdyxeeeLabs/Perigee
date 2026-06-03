@@ -2,6 +2,7 @@ import { WalletModal } from "../components/WalletModal";
 import { ConnectButton } from "../components/ConnectButton";
 import { useState } from 'react';
 import Head from 'next/head';
+import { useState, useEffect } from 'react';
 import { ResultViewer } from '../components/Resultviewer';
 import { InvocationHistory, useInvocationHistory } from '../components/InnovocationHistory';
 import { NutritionLabel } from '../components/NutritionLabel';
@@ -23,6 +24,7 @@ import { GasGolfingSuggestionsTable } from '../components/GasGolfingSuggestionsT
 import type { GasGolfingSuggestion } from '../lib/gasGolfingSort';
 import { extractErrorDetails, createUserFriendlyMessage, formatError } from '../lib/errorHandling';
 import { apiUrl } from '../lib/api';
+import { saveLatestAnalysis, loadLatestAnalysis } from '../lib/analysisStorage';
 
 export default function Home() {
   const [contractId, setContractId] = useState('CAEZJVJ4N7P7GRUVD5NG5LYYH23AQHJUKQEUHW54LR5PGQX3V7FXD7Q');
@@ -124,6 +126,15 @@ export default function Home() {
   };
 
   const handleFileAnalysis = async (file: File) => {
+  // Restore the latest analysis result on initial page load
+  useEffect(() => {
+    const restored = loadLatestAnalysis();
+    if (restored) {
+      setCurrentResult(restored);
+    }
+  }, []);
+
+  const handleSimulate = async (inputs: Record<string, any>) => {
     setLoading(true);
     let errorType: string | undefined;
     try {
@@ -160,6 +171,7 @@ export default function Home() {
 
       setCurrentResult(result);
       addToHistory(result);
+      saveLatestAnalysis(result); // Persist the latest successful analysis
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred during analysis';
       
@@ -174,6 +186,7 @@ export default function Home() {
       };
       setCurrentResult(errorResult);
       addToHistory(errorResult);
+      saveLatestAnalysis(errorResult); // Persist the latest error result as well
     } finally {
       setLoading(false);
     }
