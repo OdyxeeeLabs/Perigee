@@ -7,6 +7,14 @@ use emergency_guard::{EmergencyGuardTrait, GuardError, PauseType};
 use emergency_guard::{EmergencyGuard, PauseType};
 use soroban_sdk::vec;
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec};
+use emergency_guard::{
+    emit_admin_added, emit_admin_removed, emit_emergency_paused_all, emit_guard_initialized,
+    emit_pause_state_changed, emit_resumed_all, EmergencyGuardTrait, GuardError, PauseType,
+};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, vec, Address, Env, String, Vec,
+};
 
 #[cfg(test)]
 mod fuzz_test;
@@ -18,6 +26,16 @@ mod test;
 #[repr(u32)]
 pub enum Error {
     AlreadyInitialized = 1,
+    InsufficientLiquidity = 2,
+    SlippageExceeded = 3,
+    InsufficientShares = 4,
+    NotInitialized = 5,
+    InsufficientBalance = 6,
+    Unauthorized = 7,
+    InsufficientAllowance = 8,
+    InvalidFee = 9,
+    OracleNotConfigured = 10,
+    InvalidOraclePrice = 11,
     NotInitialized = 2,
     Unauthorized = 3,
     InsufficientBalance = 4,
@@ -86,6 +104,44 @@ pub struct FeeChangedEvent {
     pub new_fee_bps: i128,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeUpdateScheduledEvent {
+    pub scheduled_by: Address,
+    pub old_fee_bps: i128,
+    pub new_fee_bps: i128,
+    pub executable_after_ledger: u32,
+    pub volatility_bps: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PoolState {
+    pub token_a: Address,
+    pub token_b: Address,
+    pub reserve_a: i128,
+    pub reserve_b: i128,
+    pub total_shares: i128,
+    pub fee_bps: i128,
+    pub base_fee_bps: i128,
+    pub admin: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GuardState {
+    pub pause_state: u32,
+    pub admins: Vec<Address>,
+    pub signature_threshold: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleConfig {
+    pub oracle: Address,
+    pub last_price: i128,
+    pub last_volatility_bps: i128,
+    pub timelock_ledgers: u32,
 pub const MAX_FEE_BPS: i128 = 100;
 pub const DEFAULT_BASE_FEE_BPS: i128 = 30;
 pub const DEFAULT_FEE_TIMELOCK_LEDGERS: u32 = 120;
@@ -169,6 +225,7 @@ pub struct OracleConfig {
 pub struct PendingFeeUpdate {
     pub new_fee_bps: i128,
     pub executable_after_ledger: u32,
+    pub based_on_volatility_bps: i128,
 }
 
 #[contracttype]
@@ -285,6 +342,31 @@ fn sqrt(x: i128) -> i128 {
     y
 }
 
+    Admin,
+    GuardAdmins,
+    GuardThreshold,
+    GuardPauseState,
+    Balance(Address),
+    Allowance(AllowanceDataKey),
+    OracleConfig,
+    LastOraclePrice,
+    LastVolatilityBps,
+    PendingFeeUpdate,
+}
+
+fn sqrt(x: i128) -> i128 {
+    if x == 0 {
+        return 0;
+    }
+    let mut z = (x + 1) / 2;
+    let mut y = x;
+    while z < y {
+        y = z;
+        z = (x / z + z) / 2;
+    }
+    y
+}
+
 fn load_pool(e: &Env) -> Result<PoolState, Error> {
     e.storage()
         .instance()
@@ -336,24 +418,6 @@ fn check_not_paused(e: &Env, operation: u32) -> Result<(), Error> {
     } else {
         Ok(())
     }
-    let mut z = (x + 1) / 2;
-    let mut y = x;
-    while z < y {
-        y = z;
-        z = (x / z + z) / 2;
-    }
-    y
-}
-
-fn load_pool(e: &Env) -> Result<PoolState, Error> {
-    e.storage()
-        .instance()
-        .get(&DataKey::Pool)
-        .ok_or(Error::NotInitialized)
-}
-
-fn save_pool(e: &Env, pool: &PoolState) {
-    e.storage().instance().set(&DataKey::Pool, pool);
 }
 
 fn target_fee_from_volatility(base_fee_bps: i128, volatility_bps: i128) -> i128 {
@@ -369,6 +433,9 @@ fn target_fee_from_volatility(base_fee_bps: i128, volatility_bps: i128) -> i128 
     if dynamic > MAX_FEE_BPS {
 
     if dynamic_fee > MAX_FEE_BPS {
+
+    if dynamic_fee > MAX_FEE_BPS {
+    if dynamic > MAX_FEE_BPS {
         MAX_FEE_BPS
     } else {
         dynamic
@@ -476,6 +543,46 @@ fn guard_set_ops(e: &Env, ops: u32, paused: bool) {
         .set(&DataKey::GuardPauseState, &state);
 }
 
+fn primary_admin(e: &Env) -> Result<Address, GuardError> {
+    let guard = load_guard(e);
+    if let Some(admin) = guard.admins.get(0) {
+        Ok(admin)
+    } else {
+        let pool = load_pool(e).map_err(|_| GuardError::NotInitialized)?;
+        Ok(pool.admin)
+    }
+}
+
+fn check_multi_sig(e: &Env, approvers: &Vec<Address>) -> Result<(), GuardError> {
+    let guard = load_guard(e);
+    if guard.signature_threshold == 0 {
+        return Err(GuardError::NotInitialized);
+    }
+
+    if approvers.len() < guard.signature_threshold {
+        return Err(GuardError::InsufficientSignatures);
+    }
+
+    let mut valid_approvers: u32 = 0;
+    let mut seen = Vec::new(e);
+
+    for addr in approvers.iter() {
+        if seen.iter().any(|a| a == addr) {
+            continue;
+        }
+        seen.push_back(addr.clone());
+
+        if guard.admins.iter().any(|a| a == addr) {
+            addr.require_auth();
+            valid_approvers += 1;
+        }
+    }
+
+    if valid_approvers < guard.signature_threshold {
+        Err(GuardError::InsufficientSignatures)
+    } else {
+        Ok(())
+    }
 fn set_primary_admin(e: &Env, admin: Address) -> Result<(), Error> {
     e.storage().instance().set(&DataKey::Admin, &admin);
     let mut pool = load_pool(e)?;
@@ -525,6 +632,178 @@ impl LiquidityPool {
                 admin: admin.clone(),
             },
         );
+
+        save_guard(
+            &e,
+            &GuardState {
+                pause_state: 0,
+                admins: {
+                    let mut admins = Vec::new(&e);
+                    admins.push_back(admin);
+                    admins
+                },
+                signature_threshold: 1,
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn get_fee(e: Env) -> i128 {
+        e.storage()
+            .instance()
+            .get::<_, PoolState>(&DataKey::Pool)
+            .map(|p| p.fee_bps)
+            .unwrap_or(DEFAULT_BASE_FEE_BPS)
+    }
+
+    pub fn set_fee(e: Env, fee_bps: i128) -> Result<(), Error> {
+        if !(0..=MAX_FEE_BPS).contains(&fee_bps) {
+            return Err(Error::InvalidFee);
+        }
+
+        let mut pool = load_pool(&e)?;
+        pool.admin.require_auth();
+        let old_fee = pool.fee_bps;
+        pool.fee_bps = fee_bps;
+        pool.base_fee_bps = fee_bps;
+        save_pool(&e, &pool);
+
+        e.events().publish(
+            (String::from_str(&e, "fee_changed"), pool.admin.clone()),
+            FeeChangedEvent {
+                admin: pool.admin,
+                old_fee_bps: old_fee,
+                new_fee_bps: fee_bps,
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn configure_fee_oracle(
+        e: Env,
+        oracle: Address,
+        base_fee_bps: i128,
+        timelock_ledgers: u32,
+    ) -> Result<(), Error> {
+        if !(0..=MAX_FEE_BPS).contains(&base_fee_bps) {
+            return Err(Error::InvalidFee);
+        }
+
+        let mut pool = load_pool(&e)?;
+        pool.admin.require_auth();
+        pool.base_fee_bps = base_fee_bps;
+        save_pool(&e, &pool);
+
+        e.storage().instance().set(
+            &DataKey::Oracle,
+            &OracleConfig {
+                oracle,
+                last_price: 0,
+                last_volatility_bps: 0,
+                timelock_ledgers,
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn get_last_volatility_bps(e: Env) -> i128 {
+        e.storage()
+            .instance()
+            .get::<_, OracleConfig>(&DataKey::Oracle)
+            .map(|cfg| cfg.last_volatility_bps)
+            .unwrap_or(0)
+    }
+
+    pub fn get_pending_fee_update(e: Env) -> Option<PendingFeeUpdate> {
+        e.storage().instance().get(&DataKey::PendingFeeUpdate)
+    }
+
+    pub fn sync_fee_from_oracle(e: Env) -> Result<Option<PendingFeeUpdate>, Error> {
+        let mut cfg: OracleConfig = e
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::OracleNotConfigured)?;
+
+        let oracle_client = PriceOracleClient::new(&e, &cfg.oracle);
+        let current_price = oracle_client.latest_price();
+        if current_price <= 0 {
+            return Err(Error::InvalidOraclePrice);
+        }
+
+        let previous_price = cfg.last_price;
+        cfg.last_price = current_price;
+
+        if previous_price <= 0 {
+            cfg.last_volatility_bps = 0;
+            e.storage().instance().set(&DataKey::Oracle, &cfg);
+            return Ok(None);
+        }
+
+        let price_delta = if current_price >= previous_price {
+            current_price - previous_price
+        } else {
+            previous_price - current_price
+        };
+
+        let volatility_bps = price_delta
+            .checked_mul(10_000)
+            .ok_or(Error::InvalidOraclePrice)?
+            / previous_price;
+
+        cfg.last_volatility_bps = volatility_bps;
+        e.storage().instance().set(&DataKey::Oracle, &cfg);
+
+        let pool = load_pool(&e)?;
+        let target_fee = target_fee_from_volatility(pool.base_fee_bps, volatility_bps);
+        if target_fee == pool.fee_bps {
+            return Ok(None);
+        }
+
+        let execute_after = e.ledger().sequence().saturating_add(cfg.timelock_ledgers);
+        let pending = PendingFeeUpdate {
+            new_fee_bps: target_fee,
+            executable_after_ledger: execute_after,
+            based_on_volatility_bps: volatility_bps,
+        };
+
+        e.storage()
+            .instance()
+            .set(&DataKey::PendingFeeUpdate, &pending);
+
+        let scheduled_by = e.current_contract_address();
+        e.events().publish(
+            (
+                String::from_str(&e, "fee_update_scheduled"),
+                scheduled_by.clone(),
+            ),
+            FeeUpdateScheduledEvent {
+                scheduled_by,
+                old_fee_bps: pool.fee_bps,
+                new_fee_bps: target_fee,
+                executable_after_ledger: execute_after,
+                volatility_bps,
+            },
+        );
+
+        Ok(Some(pending))
+    }
+
+    pub fn execute_fee_update(e: Env) -> Result<i128, Error> {
+        let pending: PendingFeeUpdate = e
+            .storage()
+            .instance()
+            .get(&DataKey::PendingFeeUpdate)
+            .ok_or(Error::NoPendingFeeUpdate)?;
+
+        if e.ledger().sequence() < pending.executable_after_ledger {
+            return Err(Error::TimelockNotElapsed);
+        }
+
+        if !(0..=MAX_FEE_BPS).contains(&pending.new_fee_bps) {
         guard_init(&e, admin);
         Ok(())
     }
@@ -1051,6 +1330,11 @@ impl LiquidityPool {
         pool.fee_bps = pending.new_fee_bps;
         save_pool(&e, &pool);
         e.storage().instance().remove(&DataKey::PendingFeeUpdate);
+        pool.admin.require_auth();
+        let old_fee = pool.fee_bps;
+        pool.fee_bps = fee_bps;
+        pool.base_fee_bps = fee_bps;
+        save_pool(&e, &pool);
 
         e.events().publish(
             (String::from_str(&e, "fee_changed"), pool.admin.clone()),
@@ -1084,6 +1368,8 @@ impl LiquidityPool {
             save_pool(&e, &pool);
         }
 
+        emit_guard_initialized(&e, &admins, threshold);
+
         Ok(())
     }
 
@@ -1107,6 +1393,7 @@ impl LiquidityPool {
         }
 
         save_guard(&e, &guard);
+        emit_pause_state_changed(&e, &admin, operation, paused);
         Ok(())
     }
 
@@ -1115,6 +1402,7 @@ impl LiquidityPool {
         let mut guard = load_guard(&e);
         guard.pause_state = u32::MAX;
         save_guard(&e, &guard);
+        emit_emergency_paused_all(&e, &approvers);
         Ok(())
     }
 
@@ -1123,6 +1411,7 @@ impl LiquidityPool {
         let mut guard = load_guard(&e);
         guard.pause_state = 0;
         save_guard(&e, &guard);
+        emit_resumed_all(&e, &approvers);
         Ok(())
     }
 
@@ -1149,6 +1438,7 @@ impl LiquidityPool {
         if !guard.admins.iter().any(|a| a == new_admin) {
             guard.admins.push_back(new_admin.clone());
             save_guard(&e, &guard);
+            emit_admin_added(&e, &approvers, &new_admin);
         }
 
         Ok(())
@@ -1179,6 +1469,7 @@ impl LiquidityPool {
         let mut updated_guard = guard;
         updated_guard.admins = new_admins;
         save_guard(&e, &updated_guard);
+        emit_admin_removed(&e, &approvers, &admin);
 
         if let Ok(mut pool) = load_pool(&e) {
             if let Some(first_admin) = updated_guard.admins.get(0) {
@@ -1197,6 +1488,7 @@ impl LiquidityPool {
         let mut guard = load_or_init_guard_from_pool(&e, &pool);
         guard.pause_state = if paused { u32::MAX } else { 0 };
         save_guard(&e, &guard);
+        emit_pause_state_changed(&e, &pool.admin, u32::MAX, paused);
 
         Ok(())
     }
@@ -1209,6 +1501,118 @@ impl LiquidityPool {
         let mut pool = load_pool(&e)?;
         let guard = load_or_init_guard_from_pool(&e, &pool);
         check_paused(&pool, PauseType::DEPOSIT, &guard)?;
+    pub fn configure_fee_oracle(
+        e: Env,
+        oracle_id: Address,
+        base_fee_bps: i128,
+        timelock_ledgers: u32,
+    ) -> Result<(), Error> {
+        if !(0..=MAX_FEE_BPS).contains(&base_fee_bps) {
+            return Err(Error::InvalidFee);
+        }
+
+        let mut pool = load_pool(&e)?;
+        pool.admin.require_auth();
+        pool.base_fee_bps = base_fee_bps;
+        save_pool(&e, &pool);
+
+        e.storage().instance().set(
+            &DataKey::OracleConfig,
+            &OracleConfig {
+                oracle_id,
+                base_fee_bps,
+                timelock_ledgers,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn sync_fee_from_oracle(e: Env) -> Result<Option<PendingFeeUpdate>, Error> {
+        let cfg: OracleConfig = e
+            .storage()
+            .instance()
+            .get(&DataKey::OracleConfig)
+            .ok_or(Error::OracleNotConfigured)?;
+
+        let oracle = PriceOracleClient::new(&e, &cfg.oracle_id);
+        let current_price = oracle.latest_price();
+
+        let Some(last_price) = e
+            .storage()
+            .instance()
+            .get::<_, i128>(&DataKey::LastOraclePrice)
+        else {
+            e.storage()
+                .instance()
+                .set(&DataKey::LastOraclePrice, &current_price);
+            return Ok(None);
+        };
+
+        let delta = if current_price >= last_price {
+            current_price - last_price
+        } else {
+            last_price - current_price
+        };
+        let volatility_bps = if last_price == 0 {
+            0
+        } else {
+            delta * 10_000 / last_price
+        };
+
+        e.storage()
+            .instance()
+            .set(&DataKey::LastOraclePrice, &current_price);
+        e.storage()
+            .instance()
+            .set(&DataKey::LastVolatilityBps, &volatility_bps);
+
+        let pool = load_pool(&e)?;
+        let target_fee = target_fee_from_volatility(cfg.base_fee_bps, volatility_bps);
+        if target_fee == pool.fee_bps {
+            return Ok(None);
+        }
+
+        let pending = PendingFeeUpdate {
+            new_fee_bps: target_fee,
+            executable_after_ledger: e.ledger().sequence() + cfg.timelock_ledgers,
+        };
+        e.storage()
+            .instance()
+            .set(&DataKey::PendingFeeUpdate, &pending);
+        Ok(Some(pending))
+    }
+
+    pub fn execute_fee_update(e: Env) -> Result<i128, Error> {
+        let pending: PendingFeeUpdate = e
+            .storage()
+            .instance()
+            .get(&DataKey::PendingFeeUpdate)
+            .ok_or(Error::NoPendingFeeUpdate)?;
+
+        if e.ledger().sequence() < pending.executable_after_ledger {
+            return Err(Error::TimelockNotElapsed);
+        }
+
+        let mut pool = load_pool(&e)?;
+        pool.fee_bps = pending.new_fee_bps;
+        save_pool(&e, &pool);
+        e.storage().instance().remove(&DataKey::PendingFeeUpdate);
+        Ok(pending.new_fee_bps)
+    }
+
+    pub fn get_pending_fee_update(e: Env) -> Option<PendingFeeUpdate> {
+        e.storage().instance().get(&DataKey::PendingFeeUpdate)
+    }
+
+    pub fn get_last_volatility_bps(e: Env) -> i128 {
+        e.storage()
+            .instance()
+            .get(&DataKey::LastVolatilityBps)
+            .unwrap_or(0)
+    }
+
+    pub fn deposit(e: Env, to: Address, amount_a: i128, amount_b: i128) -> Result<i128, Error> {
+        guard_check_not_paused(&e, pause_op::DEPOSIT)?;
         to.require_auth();
 
         let mut pool = load_pool(&e)?;
@@ -1218,6 +1622,10 @@ impl LiquidityPool {
         client_b.transfer(&to, &e.current_contract_address(), &amount_b);
 
         let shares = if pool.total_shares == 0 {
+            let product = amount_a
+                .checked_mul(amount_b)
+                .ok_or(Error::InsufficientLiquidity)?;
+            sqrt(product)
             sqrt(
                 amount_a
                     .checked_mul(amount_b)
@@ -1275,6 +1683,10 @@ impl LiquidityPool {
         let mut pool = load_pool(&e)?;
         let guard = load_or_init_guard_from_pool(&e, &pool);
         check_paused(&pool, PauseType::SWAP, &guard)?;
+        let mut pool = load_pool(&e)?;
+        let guard = load_or_init_guard_from_pool(&e, &pool);
+        check_paused(&pool, PauseType::SWAP, &guard)?;
+        guard_check_not_paused(&e, pause_op::SWAP)?;
         to.require_auth();
 
         let mut pool = load_pool(&e)?;
@@ -1352,6 +1764,10 @@ impl LiquidityPool {
         let mut pool = load_pool(&e)?;
         let guard = load_or_init_guard_from_pool(&e, &pool);
         check_paused(&pool, PauseType::WITHDRAW, &guard)?;
+        let mut pool = load_pool(&e)?;
+        let guard = load_or_init_guard_from_pool(&e, &pool);
+        check_paused(&pool, PauseType::WITHDRAW, &guard)?;
+        guard_check_not_paused(&e, pause_op::WITHDRAW)?;
         to.require_auth();
 
         let mut pool = load_pool(&e)?;
@@ -1386,12 +1802,16 @@ impl LiquidityPool {
 
         soroban_sdk::token::Client::new(&e, &token_a).transfer(
         soroban_sdk::token::Client::new(&e, &pool.token_a).transfer(
+        soroban_sdk::token::Client::new(&e, &pool.token_a).transfer(
+        soroban_sdk::token::Client::new(&e, &token_a).transfer(
             &e.current_contract_address(),
             &to,
             &amount_a,
         );
         soroban_sdk::token::Client::new(&e, &token_b).transfer(
         soroban_sdk::token::Client::new(&e, &pool.token_b).transfer(
+        soroban_sdk::token::Client::new(&e, &pool.token_b).transfer(
+        soroban_sdk::token::Client::new(&e, &token_b).transfer(
             &e.current_contract_address(),
             &to,
             &amount_b,
@@ -1415,6 +1835,10 @@ impl LiquidityPool {
         let mut pool = load_pool(&e)?;
         let guard = load_or_init_guard_from_pool(&e, &pool);
         check_paused(&pool, PauseType::BURN, &guard)?;
+        let mut pool = load_pool(&e)?;
+        let guard = load_or_init_guard_from_pool(&e, &pool);
+        check_paused(&pool, PauseType::BURN, &guard)?;
+        guard_check_not_paused(&e, pause_op::BURN)?;
         from.require_auth();
 
         let mut pool = load_pool(&e)?;
@@ -1607,6 +2031,7 @@ impl EmergencyGuardTrait for LiquidityPool {
             guard.pause_state &= !operation;
         }
         save_guard(env, &guard);
+        emit_pause_state_changed(env, &admin, operation, paused);
 
         Ok(())
     }
@@ -1616,6 +2041,7 @@ impl EmergencyGuardTrait for LiquidityPool {
         let mut guard = load_guard(env);
         guard.pause_state = u32::MAX;
         save_guard(env, &guard);
+        emit_emergency_paused_all(env, &approvers);
         Ok(())
     }
 
@@ -1624,6 +2050,7 @@ impl EmergencyGuardTrait for LiquidityPool {
         let mut guard = load_guard(env);
         guard.pause_state = 0;
         save_guard(env, &guard);
+        emit_resumed_all(env, &approvers);
         Ok(())
     }
 
@@ -1647,6 +2074,8 @@ impl EmergencyGuardTrait for LiquidityPool {
             save_pool(env, &pool);
         }
 
+        emit_guard_initialized(env, &admins, threshold);
+
         Ok(())
     }
 
@@ -1655,8 +2084,9 @@ impl EmergencyGuardTrait for LiquidityPool {
 
         let mut guard = load_guard(env);
         if !guard.admins.iter().any(|a| a == new_admin) {
-            guard.admins.push_back(new_admin);
+            guard.admins.push_back(new_admin.clone());
             save_guard(env, &guard);
+            emit_admin_added(env, &approvers, &new_admin);
         }
 
         Ok(())
@@ -1692,6 +2122,7 @@ impl EmergencyGuardTrait for LiquidityPool {
                 signature_threshold: guard.signature_threshold,
             },
         );
+        emit_admin_removed(env, &approvers, &admin);
 
         if let Ok(mut pool) = load_pool(env) {
             let updated_guard = load_guard(env);

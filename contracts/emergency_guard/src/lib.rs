@@ -122,6 +122,45 @@ fn emit_guard_event(env: &Env, event: EmergencyGuardEvent) {
         ),
         event,
     );
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GuardInitializedEvent {
+    pub admins: Vec<Address>,
+    pub threshold: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PauseStateChangedEvent {
+    pub admin: Address,
+    pub operation: u32,
+    pub paused: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmergencyPausedEvent {
+    pub approvers: Vec<Address>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResumedEvent {
+    pub approvers: Vec<Address>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminAddedEvent {
+    pub approvers: Vec<Address>,
+    pub new_admin: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminRemovedEvent {
+    pub approvers: Vec<Address>,
+    pub admin: Address,
 }
 /// Result type for guard operations
 // Result type for guard operations replaced inline
@@ -171,6 +210,72 @@ pub trait EmergencyGuardTrait {
     fn is_admin(env: &Env, addr: &Address) -> bool;
 }
 
+const EVENT_INIT_GUARD: &str = "emergency_guard_initialized";
+const EVENT_SET_PAUSE: &str = "emergency_guard_pause_state_changed";
+const EVENT_EMERGENCY_PAUSE_ALL: &str = "emergency_guard_emergency_paused_all";
+const EVENT_RESUME_ALL: &str = "emergency_guard_resumed_all";
+const EVENT_ADD_ADMIN: &str = "emergency_guard_admin_added";
+const EVENT_REMOVE_ADMIN: &str = "emergency_guard_admin_removed";
+
+pub fn emit_guard_initialized(e: &Env, admins: &Vec<Address>, threshold: u32) {
+    e.events().publish(
+        (String::from_str(e, EVENT_INIT_GUARD),),
+        GuardInitializedEvent {
+            admins: admins.clone(),
+            threshold,
+        },
+    );
+}
+
+pub fn emit_pause_state_changed(e: &Env, admin: &Address, operation: u32, paused: bool) {
+    e.events().publish(
+        (String::from_str(e, EVENT_SET_PAUSE), admin.clone()),
+        PauseStateChangedEvent {
+            admin: admin.clone(),
+            operation,
+            paused,
+        },
+    );
+}
+
+pub fn emit_emergency_paused_all(e: &Env, approvers: &Vec<Address>) {
+    e.events().publish(
+        (String::from_str(e, EVENT_EMERGENCY_PAUSE_ALL),),
+        EmergencyPausedEvent {
+            approvers: approvers.clone(),
+        },
+    );
+}
+
+pub fn emit_resumed_all(e: &Env, approvers: &Vec<Address>) {
+    e.events().publish(
+        (String::from_str(e, EVENT_RESUME_ALL),),
+        ResumedEvent {
+            approvers: approvers.clone(),
+        },
+    );
+}
+
+pub fn emit_admin_added(e: &Env, approvers: &Vec<Address>, new_admin: &Address) {
+    e.events().publish(
+        (String::from_str(e, EVENT_ADD_ADMIN), new_admin.clone()),
+        AdminAddedEvent {
+            approvers: approvers.clone(),
+            new_admin: new_admin.clone(),
+        },
+    );
+}
+
+pub fn emit_admin_removed(e: &Env, approvers: &Vec<Address>, admin: &Address) {
+    e.events().publish(
+        (String::from_str(e, EVENT_REMOVE_ADMIN), admin.clone()),
+        AdminRemovedEvent {
+            approvers: approvers.clone(),
+            admin: admin.clone(),
+        },
+    );
+}
+
 #[contract]
 pub struct EmergencyGuard;
 
@@ -212,6 +317,7 @@ impl EmergencyGuard {
                 approver_count: 0,
             },
         );
+        emit_guard_initialized(&env, &admins, threshold);
 
         Ok(())
     }
@@ -269,6 +375,14 @@ impl EmergencyGuard {
             "Pause state updated: op={}, paused={}",
             operation,
             paused
+        emit_pause_state_changed(&env, &admin, operation, paused);
+        // Emit standardized EmergencyGuard event
+        env.events().publish(
+            (
+                String::from_str(&env, "emergency_guard.set_pause"),
+                admin.clone(),
+            ),
+            (operation, paused),
         );
         Ok(())
     }
@@ -295,6 +409,13 @@ impl EmergencyGuard {
                 admin_count: Self::get_admins(env.clone()).len(),
                 approver_count: approvers.len(),
             },
+        emit_emergency_paused_all(&env, &approvers);
+        env.events().publish(
+            (String::from_str(
+                &env,
+                "emergency_guard.emergency_pause_all",
+            ),),
+            (approvers.clone(),),
         );
         log!(&env, "Emergency pause all activated");
         Ok(())
@@ -320,6 +441,10 @@ impl EmergencyGuard {
                 admin_count: Self::get_admins(env.clone()).len(),
                 approver_count: approvers.len(),
             },
+        emit_resumed_all(&env, &approvers);
+        env.events().publish(
+            (String::from_str(&env, "emergency_guard.resume_all"),),
+            (approvers.clone(),),
         );
         log!(&env, "Resume all activated");
         Ok(())
@@ -348,6 +473,13 @@ impl EmergencyGuard {
                     admin_count: admins.len(),
                     approver_count: approvers.len(),
                 },
+            emit_admin_added(&env, &approvers, &new_admin);
+            env.events().publish(
+                (
+                    String::from_str(&env, "emergency_guard.admin_added"),
+                    new_admin.clone(),
+                ),
+                (),
             );
             log!(&env, "Admin added: {}", new_admin);
         }
@@ -396,6 +528,13 @@ impl EmergencyGuard {
                 admin_count: new_admins.len(),
                 approver_count: approvers.len(),
             },
+        emit_admin_removed(&env, &approvers, &admin);
+        env.events().publish(
+            (
+                String::from_str(&env, "emergency_guard.admin_removed"),
+                admin.clone(),
+            ),
+            (),
         );
         log!(&env, "Admin removed: {}", admin);
         Ok(())
