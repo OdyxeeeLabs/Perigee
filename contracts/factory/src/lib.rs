@@ -68,6 +68,14 @@ fn set_pause_state(env: &Env, operation: u32, paused: bool) {
         .set(&DataKey::GuardPauseState, &state);
 }
 
+fn clear_pause_state(env: &Env, operation: u32) {
+    let mut state = pause_state(env);
+    state &= !operation;
+    env.storage()
+        .instance()
+        .set(&DataKey::GuardPauseState, &state);
+}
+
 fn check_not_paused(env: &Env, operation: u32) -> Result<(), Error> {
     if pause_state(env).is_paused(operation) {
         Err(Error::Paused)
@@ -184,6 +192,21 @@ impl LiquidityPoolFactory {
         }
 
         set_pause_state(&env, operation, paused);
+        Ok(())
+    }
+
+    /// Unpause a granular factory operation without touching other paused bits.
+    pub fn guard_unpause(env: Env, admin: Address, operation: u32) -> Result<(), Error> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        if stored_admin != admin {
+            return Err(Error::Unauthorized);
+        }
+        clear_pause_state(&env, operation);
         Ok(())
     }
 

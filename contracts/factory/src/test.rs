@@ -124,6 +124,28 @@ fn test_guard_pause_create_pair_success() {
 }
 
 #[test]
+fn test_guard_unpause_preserves_other_bits() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let factory_id = env.register(LiquidityPoolFactory, ());
+    let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
+    let admin = Address::generate(&env);
+    const EXTRA_BIT: u32 = 1 << 7;
+    let combined = emergency_guard::PauseType::CREATE_PAIR | EXTRA_BIT;
+
+    factory_client.initialize(&admin);
+
+    factory_client.guard_pause(&admin, &combined, &true);
+    assert!(factory_client.guard_is_paused(&emergency_guard::PauseType::CREATE_PAIR));
+    assert!(factory_client.guard_is_paused(&EXTRA_BIT));
+
+    factory_client.guard_unpause(&admin, &emergency_guard::PauseType::CREATE_PAIR);
+    assert!(!factory_client.guard_is_paused(&emergency_guard::PauseType::CREATE_PAIR));
+    assert!(factory_client.guard_is_paused(&EXTRA_BIT));
+}
+
+#[test]
 fn test_guard_pause_create_pair_unauthorized() {
     let env = Env::default();
     env.mock_all_auths();
