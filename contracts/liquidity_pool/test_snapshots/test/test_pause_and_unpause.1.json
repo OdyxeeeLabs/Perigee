@@ -186,6 +186,7 @@
                 },
                 {
                   "u32": 2
+                  "u32": 3
                 },
                 {
                   "bool": true
@@ -199,6 +200,7 @@
     ],
     [],
     [],
+    [],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
@@ -207,6 +209,7 @@
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
               "function_name": "guard_pause",
+              "function_name": "guard_unpause",
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -224,6 +227,7 @@
         }
       ]
     ],
+    [],
     [],
     [
       [
@@ -594,7 +598,7 @@
                           ]
                         },
                         "val": {
-                          "u32": 0
+                          "u32": 1
                         }
                       },
                       {

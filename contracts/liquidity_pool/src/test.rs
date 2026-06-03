@@ -780,6 +780,20 @@ fn test_pause_and_unpause() {
     // Unpause deposits.
     client.guard_pause(&admin, &pause_op::DEPOSIT, &false);
     assert!(!client.guard_is_paused(&pause_op::DEPOSIT));
+    // Admin pauses deposits and swaps together.
+    client.guard_pause(
+        &admin,
+        &(emergency_guard::PauseType::DEPOSIT | emergency_guard::PauseType::SWAP),
+        &true,
+    );
+    assert!(client.guard_is_paused(&emergency_guard::PauseType::DEPOSIT));
+    assert!(client.guard_is_paused(&emergency_guard::PauseType::SWAP));
+    assert!(!client.guard_is_paused(&emergency_guard::PauseType::WITHDRAW));
+
+    // Unpause deposits only, leaving swaps paused.
+    client.guard_unpause(&admin, &emergency_guard::PauseType::DEPOSIT);
+    assert!(!client.guard_is_paused(&emergency_guard::PauseType::DEPOSIT));
+    assert!(client.guard_is_paused(&emergency_guard::PauseType::SWAP));
 
     // Operations should work again
     token_a_admin.mint(&user, &500);
