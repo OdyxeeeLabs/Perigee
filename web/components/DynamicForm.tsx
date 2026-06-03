@@ -4,6 +4,7 @@ import React from "react"
 
 import { useState } from 'react';
 import type { ContractFunction } from '../lib/sorobantypes';
+import { Loader2 } from 'lucide-react';
 
 interface DynamicFormProps {
   func: ContractFunction;
@@ -69,6 +70,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 value={formData[input.name] || ''}
                 onChange={(e) => handleChange(input.name, e.target.value)}
                 required={!input.optional}
+                disabled={loading}
                 style={{
                   padding: '8px 12px',
                   border: '1px solid #30363d',
@@ -87,6 +89,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 value={formData[input.name] || ''}
                 onChange={(e) => handleChange(input.name, e.target.value)}
                 required={!input.optional}
+                disabled={loading}
                 style={{
                   padding: '8px 12px',
                   border: '1px solid #30363d',
@@ -104,6 +107,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 value={formData[input.name] || ''}
                 onChange={(e) => handleChange(input.name, e.target.value)}
                 required={!input.optional}
+                disabled={loading}
                 style={{
                   padding: '8px 12px',
                   border: '1px solid #30363d',
@@ -119,6 +123,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 value={formData[input.name] === undefined ? '' : formData[input.name]}
                 onChange={(e) => handleChange(input.name, e.target.value === 'true')}
                 required={!input.optional}
+                disabled={loading}
                 style={{
                   padding: '8px 12px',
                   border: '1px solid #30363d',
@@ -140,6 +145,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 value={formData[input.name] || ''}
                 onChange={(e) => handleChange(input.name, e.target.value)}
                 required={!input.optional}
+                disabled={loading}
                 style={{
                   padding: '8px 12px',
                   border: '1px solid #30363d',
@@ -168,9 +174,20 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
             fontWeight: '600',
             cursor: loading ? 'not-allowed' : 'pointer',
             flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
           }}
         >
-          {loading ? 'Simulating...' : 'Simulate'}
+          {loading ? (
+            <>
+              <Loader2 size={16} className="animate-spin" />
+              <span>Simulating...</span>
+            </>
+          ) : (
+            'Simulate'
+          )}
         </button>
         <button
           type="button"
@@ -185,9 +202,20 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
             fontWeight: '600',
             cursor: loading ? 'not-allowed' : 'pointer',
             flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
           }}
         >
-          {loading ? 'Invoking...' : 'Live (Invoke)'}
+          {loading ? (
+            <>
+              <Loader2 size={16} className="animate-spin" />
+              <span>Invoking...</span>
+            </>
+          ) : (
+            'Live (Invoke)'
+          )}
         </button>
       </div>
     </form>
