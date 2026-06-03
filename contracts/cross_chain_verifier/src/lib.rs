@@ -40,6 +40,8 @@ pub enum DataKey {
     ProcessedMessages(BytesN<32>),
     Nonces(Address),
     SignerCount,
+    StateRoot(u32), // block height mapped to state root
+    ProcessedNonce(u64), // track consumed nonces for replay protection
 }
 
 #[contract]
@@ -451,6 +453,43 @@ impl CrossChainVerifier {
 
         let computed_root = BytesN::from_array(&env, &current_hash);
         computed_root == expected_root
+    }
+
+    /// Verify a cross-chain message and mark the provided nonce as consumed.
+    /// This prevents the same nonce from being processed twice.
+    pub fn verify_message_and_consume(
+        env: Env,
+        block_height: u32,
+        nonce: u64,
+        leaf: BytesN<32>,
+        proof: Vec<BytesN<32>>,
+        proof_flags: Vec<bool>,
+    ) -> bool {
+        if Self::is_nonce_processed(env.clone(), nonce) {
+            panic!("nonce already processed");
+        }
+
+        let valid = Self::verify_message(env.clone(), block_height, leaf, proof, proof_flags);
+        if !valid {
+            return false;
+        }
+
+        Self::consume_nonce(&env, nonce);
+        true
+    }
+
+    /// Returns true if the nonce has already been consumed.
+    pub fn is_nonce_processed(env: Env, nonce: u64) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ProcessedNonce(nonce))
+            .unwrap_or(false)
+    }
+
+    fn consume_nonce(env: &Env, nonce: u64) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProcessedNonce(nonce), &true);
     }
 }
 
