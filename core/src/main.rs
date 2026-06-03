@@ -16,6 +16,7 @@ mod cache;
 mod simulation;
 mod wasm_branch_analysis;
 mod ws;
+mod merkle_tree;
 
 use crate::cache::{SimulationCache, ContractCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
@@ -31,20 +32,7 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() {
-    let db_path =
-        env::var("SOROSCOPE_DB_PATH").unwrap_or_else(|_| "soroscope_metrics.db".to_string());
-    let webhook_url = env::var("SOROSCOPE_ALERT_WEBHOOK_URL").ok();
-    let simulation_service = match SimulationService::new(db_path, webhook_url) {
-        Ok(service) => Arc::new(service),
-        Err(err) => {
-            eprintln!("Failed to initialize simulation service: {}", err);
-            return;
-        }
-    };
-
-    // CLI Argument Handling
+// CLI Argument Handling
 use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
 use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
 use crate::fee_store::FeeStore;
@@ -1638,16 +1626,83 @@ async fn main() {
         }
 
         if let Some(path) = wasm_path {
-            if let Err(e) = benchmarks::run_token_benchmark(path, simulation_service.as_ref()).await
-            {
+            if let Err(e) = benchmarks::run_token_benchmark(path, simulation_service.as_ref()).await {
                 eprintln!("Benchmark failed: {}", e);
-            if let Err(e) = benchmarks::run_token_benchmark(path) {
-                tracing::error!("Benchmark failed: {}", e);
             }
         } else {
             tracing::error!(
                 "Could not find soroban_token_contract.wasm. Build the contract first."
             );
+        }
+
+        return;
+    }
+
+    // ── CLI: merkle subcommand ──────────────────────────────────────────
+    if args.len() > 1 && args[1] == "merkle" {
+        if args.len() < 4 {
+            eprintln!("Usage: soroscope-core merkle <build|proof> <args>");
+            eprintln!("Commands:");
+            eprintln!("  build <leaf1> <leaf2> ...            Build a Merkle tree and print the root hash");
+            eprintln!("  proof <leaf_index> <leaf1> <leaf2> ... Generate a Merkle proof for the given leaf index");
+            std::process::exit(1);
+        }
+
+        let command = &args[2];
+        match command.as_str() {
+            "build" => {
+                if args.len() < 4 {
+                    eprintln!("Usage: soroscope-core merkle build <leaf1> <leaf2> ...");
+                    std::process::exit(1);
+                }
+                let leaves: Vec<Vec<u8>> = args[3..].iter().map(|arg| arg.as_bytes().to_vec()).collect();
+                let mut tree = merkle_tree::MerkleTree::new(32);
+                match tree.build(leaves) {
+                    Ok(()) => println!("{}", tree.get_root_hex()),
+                    Err(err) => {
+                        eprintln!("Error building Merkle tree: {}", err);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            "proof" => {
+                if args.len() < 5 {
+                    eprintln!("Usage: soroscope-core merkle proof <leaf_index> <leaf1> <leaf2> ...");
+                    std::process::exit(1);
+                }
+                let leaf_index = match args[3].parse::<usize>() {
+                    Ok(index) => index,
+                    Err(_) => {
+                        eprintln!("Leaf index must be a non-negative integer.");
+                        std::process::exit(1);
+                    }
+                };
+                let leaves: Vec<Vec<u8>> = args[4..].iter().map(|arg| arg.as_bytes().to_vec()).collect();
+                let mut tree = merkle_tree::MerkleTree::new(32);
+                if let Err(err) = tree.build(leaves) {
+                    eprintln!("Error building Merkle tree: {}", err);
+                    std::process::exit(1);
+                }
+                let proof = match tree.generate_proof(leaf_index) {
+                    Ok(proof) => proof,
+                    Err(err) => {
+                        eprintln!("Error generating Merkle proof: {}", err);
+                        std::process::exit(1);
+                    }
+                };
+                let output = serde_json::json!({
+                    "root": tree.get_root_hex(),
+                    "leaf_index": leaf_index,
+                    "leaf_count": tree.leaf_count(),
+                    "proof": proof,
+                });
+                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+            }
+            unknown => {
+                eprintln!("Unknown merkle command: {}", unknown);
+                eprintln!("Available commands: build, proof");
+                std::process::exit(1);
+            }
         }
 
         return;

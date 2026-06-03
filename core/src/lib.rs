@@ -6,6 +6,7 @@ pub mod insights;
 pub mod merkle_tree;
 pub mod parser;
 pub mod routing;
+pub mod merkle_tree;
 pub mod rpc_provider;
 pub mod runner;
 pub mod simulation;
