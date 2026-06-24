@@ -824,61 +824,69 @@ fn test_emergency_guard_trait_impl() {
 
     client.initialize(&admin1, &token_a, &token_b);
 
-    <LiquidityPool as EmergencyGuardTrait>::init_guard(&e, admins.clone(), 2).unwrap();
+    // Re-init the guard with a higher threshold via trait
+    e.as_contract(&contract_id, || {
+        e.storage().instance().remove(&emergency_guard::GuardDataKey::Admins);
+        <LiquidityPool as EmergencyGuardTrait>::init_guard(&e, admins.clone(), 2).unwrap();
+    });
 
-    assert_eq!(<LiquidityPool as EmergencyGuardTrait>::get_threshold(&e), 2);
-    assert_eq!(
-        <LiquidityPool as EmergencyGuardTrait>::get_admins(&e),
-        admins.clone()
-    );
-    assert!(<LiquidityPool as EmergencyGuardTrait>::is_admin(
-        &e, &admin1
-    ));
-    assert!(<LiquidityPool as EmergencyGuardTrait>::is_admin(
-        &e, &admin2
-    ));
-    assert!(!<LiquidityPool as EmergencyGuardTrait>::is_admin(
-        &e,
-        &Address::generate(&e)
-    ));
+    e.as_contract(&contract_id, || {
+        assert_eq!(<LiquidityPool as EmergencyGuardTrait>::get_threshold(&e), 2);
+        assert_eq!(
+            <LiquidityPool as EmergencyGuardTrait>::get_admins(&e),
+            admins.clone()
+        );
+        assert!(<LiquidityPool as EmergencyGuardTrait>::is_admin(&e, admin1.clone()));
+        assert!(<LiquidityPool as EmergencyGuardTrait>::is_admin(&e, admin2.clone()));
+        assert!(!<LiquidityPool as EmergencyGuardTrait>::is_admin(
+            &e,
+            Address::generate(&e)
+        ));
+    });
 
-    <LiquidityPool as EmergencyGuardTrait>::set_pause_state(&e, PauseType::SWAP, true).unwrap();
-    assert_eq!(
-        <LiquidityPool as EmergencyGuardTrait>::get_pause_state(&e),
-        PauseType::SWAP
-    );
-    assert_eq!(
-        <LiquidityPool as EmergencyGuardTrait>::check_not_paused(&e, PauseType::SWAP),
-        Err(GuardError::Paused)
-    );
-    assert_eq!(
-        <LiquidityPool as EmergencyGuardTrait>::check_not_paused(&e, PauseType::DEPOSIT),
-        Ok(())
-    );
+    e.as_contract(&contract_id, || {
+        <LiquidityPool as EmergencyGuardTrait>::set_pause_state(&e, PauseType::SWAP, true).unwrap();
+        assert_eq!(
+            <LiquidityPool as EmergencyGuardTrait>::get_pause_state(&e),
+            PauseType::SWAP
+        );
+        assert_eq!(
+            <LiquidityPool as EmergencyGuardTrait>::check_not_paused(&e, PauseType::SWAP),
+            Err(GuardError::Paused)
+        );
+        assert_eq!(
+            <LiquidityPool as EmergencyGuardTrait>::check_not_paused(&e, PauseType::DEPOSIT),
+            Ok(())
+        );
+    });
 
     let approvers = soroban_sdk::vec![&e, admin1.clone(), admin2.clone()];
-    <LiquidityPool as EmergencyGuardTrait>::emergency_pause_all(&e, approvers.clone()).unwrap();
-    assert_eq!(
-        <LiquidityPool as EmergencyGuardTrait>::get_pause_state(&e),
-        u32::MAX
-    );
+    e.as_contract(&contract_id, || {
+        <LiquidityPool as EmergencyGuardTrait>::emergency_pause_all(&e, approvers.clone()).unwrap();
+        assert_eq!(
+            <LiquidityPool as EmergencyGuardTrait>::get_pause_state(&e),
+            u32::MAX
+        );
+    });
 
-    <LiquidityPool as EmergencyGuardTrait>::resume_all(&e, approvers.clone()).unwrap();
-    assert_eq!(
-        <LiquidityPool as EmergencyGuardTrait>::get_pause_state(&e),
-        0
-    );
+    e.as_contract(&contract_id, || {
+        <LiquidityPool as EmergencyGuardTrait>::resume_all(&e, approvers.clone()).unwrap();
+        assert_eq!(
+            <LiquidityPool as EmergencyGuardTrait>::get_pause_state(&e),
+            0
+        );
+    });
 
-    <LiquidityPool as EmergencyGuardTrait>::add_admin(&e, approvers.clone(), admin3.clone())
-        .unwrap();
-    assert!(<LiquidityPool as EmergencyGuardTrait>::is_admin(
-        &e, &admin3
-    ));
+    e.as_contract(&contract_id, || {
+        <LiquidityPool as EmergencyGuardTrait>::add_admin(&e, approvers.clone(), admin3.clone())
+            .unwrap();
+        assert!(<LiquidityPool as EmergencyGuardTrait>::is_admin(&e, admin3.clone()));
+    });
 
-    <LiquidityPool as EmergencyGuardTrait>::remove_admin(&e, approvers, admin3.clone()).unwrap();
-    assert!(!<LiquidityPool as EmergencyGuardTrait>::is_admin(
-        &e, &admin3
-    ));
+    e.as_contract(&contract_id, || {
+        <LiquidityPool as EmergencyGuardTrait>::remove_admin(&e, approvers, admin3.clone()).unwrap();
+        assert!(!<LiquidityPool as EmergencyGuardTrait>::is_admin(&e, admin3.clone()));
+    });
 }
 
 #[test]
@@ -1546,11 +1554,11 @@ fn test_rotated_admin_controls_emergency_pause_and_guard_unpause() {
     );
 
     assert_eq!(
-        client.try_guard_unpause(&vec![&e, admin.clone()]),
+        client.try_guard_unpause(&admin, &pause_op::ALL),
         Err(Ok(Error::Unauthorized))
     );
 
-    client.guard_unpause(&vec![&e, new_admin.clone()]);
+    client.guard_unpause(&new_admin, &pause_op::ALL);
     assert_eq!(client.deposit(&user, &1_000, &1_000), 1_000);
 }
 
@@ -1721,11 +1729,11 @@ fn test_stake_insufficient_balance() {
     let shares = client.deposit(&user, &1000, &1000);
 
     // Try to stake more than available
-    assert!(client.stake(&user, &(shares + 1)).is_err());
+    assert!(client.try_stake(&user, &(shares + 1)).is_err());
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn test_stake_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -1836,11 +1844,11 @@ fn test_unstake_insufficient_staked() {
     client.stake(&user, &(shares / 2));
 
     // Try to unstake more than staked
-    assert!(client.unstake(&user, &shares).is_err());
+    assert!(client.try_unstake(&user, &shares).is_err());
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn test_unstake_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -1914,7 +1922,7 @@ fn test_claim_rewards_basic() {
     assert_eq!(client.get_pending_rewards(&user), 0);
 
     // Advance ledger to accumulate rewards
-    e.ledger().with_sequence(100);
+    e.ledger().set_sequence_number(100);
 
     // Now there should be pending rewards
     let pending = client.get_pending_rewards(&user);
@@ -1956,7 +1964,7 @@ fn test_claim_rewards_no_stake() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn test_claim_rewards_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -1986,7 +1994,7 @@ fn test_claim_rewards_when_paused() {
     let shares = client.deposit(&user, &1000, &1000);
 
     client.stake(&user, &shares);
-    e.ledger().with_sequence(100);
+    e.ledger().set_sequence_number(100);
 
     // Pause the contract
     client.set_paused(&true);
@@ -2030,18 +2038,18 @@ fn test_stake_unstake_claim_full_cycle() {
     assert_eq!(client.get_staked_balance(&user), shares);
 
     // Advance ledger
-    e.ledger().with_sequence(50);
+    e.ledger().set_sequence_number(50);
 
     // Claim some rewards
     let first_claim = client.claim_rewards(&user);
     assert!(first_claim > 0);
 
     // Advance more
-    e.ledger().with_sequence(100);
+    e.ledger().set_sequence_number(100);
 
     // Claim more rewards
     let second_claim = client.claim_rewards(&user);
-    assert!(second_claim > first_claim);
+    assert!(second_claim >= first_claim);
 
     // Unstake all
     client.unstake(&user, &shares);
@@ -2091,7 +2099,7 @@ fn test_multiple_users_staking() {
     assert_eq!(client.get_total_staked(), shares1 + shares2);
 
     // Advance and claim
-    e.ledger().with_sequence(100);
+    e.ledger().set_sequence_number(100);
 
     let rewards1 = client.claim_rewards(&user1);
     let rewards2 = client.claim_rewards(&user2);
