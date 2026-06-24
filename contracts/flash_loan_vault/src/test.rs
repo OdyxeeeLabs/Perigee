@@ -2,6 +2,7 @@ use super::*;
 use soroban_sdk::{
     contract, contractimpl, contracttype, testutils::Address as _, Address, Env,
 };
+use soroban_sdk::{contract, contractimpl, contracttype, testutils::Address as _, Address, Env};
 
 // ── Mock receivers ───────────────────────────────────────────────────────────
 
@@ -548,6 +549,7 @@ fn test_flash_loan_overpay() {
 
 #[test]
 #[should_panic(expected = "Contract re-entry is not allowed")]
+#[should_panic(expected = "InvalidAction")]
 fn test_reentrancy_guard() {
     let s = setup();
     fund_vault(&s, 10_000);

@@ -9,8 +9,11 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-soroban-sdk = "22.0.0"
 emergency_guard = { path = "../emergency_guard", default-features = false }
+soroban-sdk = "22.0.0"
+emergency_guard = { path = "../emergency_guard" }
+# Emergency guard provides standardized pause and admin management capabilities
+emergency_guard = { path = "../emergency_guard" }
 # Emergency guard provides standardized pause and admin management capabilities
 
 [dev-dependencies]
