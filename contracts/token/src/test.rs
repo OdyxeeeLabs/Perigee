@@ -1,8 +1,11 @@
 use crate::contract::{Token, TokenClient};
-use emergency_guard::{GuardError, PauseType};
-use soroban_sdk::{testutils::Address as _, vec, Address, Env, String, Vec};
+use emergency_guard::PauseType;
+use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
 
 // ── Existing Tests ─────────────────────────────────────────────────────────────
+use emergency_guard::{GuardError, PauseType};
+use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
+use soroban_sdk::{testutils::Address as _, Address, Env, String, vec, Vec};
 
 #[test]
 fn test_mint_and_transfer() {
@@ -24,7 +27,7 @@ fn test_mint_and_transfer() {
     );
 
     let approvers = vec![&env, admin.clone()];
-    client.mint(&user1, &1000);
+    client.mint(&approvers, &user1, &1000);
     assert_eq!(client.balance(&user1), 1000);
 
     client.transfer(&user1, &user2, &200);
@@ -52,7 +55,7 @@ fn test_allowance() {
     );
 
     let approvers = vec![&env, admin.clone()];
-    client.mint(&user1, &1000);
+    client.mint(&approvers, &user1, &1000);
 
     client.approve(&user1, &spender, &500, &200);
     assert_eq!(client.allowance(&user1, &spender), 500);
@@ -65,6 +68,10 @@ fn test_allowance() {
 
 // ── Token Guard Integration Tests ─────────────────────────────────────────────
 
+/// Verifies that pausing minting blocks new mint calls while leaving
+/// transfers untouched — confirms the PauseState bitmask works correctly.
+#[test]
+fn test_pause_minting_blocks_mint_only() {
 #[test]
 fn test_guard_initializes_with_token_admin() {
     let env = Env::default();
@@ -89,7 +96,7 @@ fn test_guard_initializes_with_token_admin() {
     assert_eq!(client.balance(&user), 500);
 
     // Pause minting.
-    client.guard_pause(&admin, &(PauseType::MINT as u32), &true);
+    client.pause_minting(&admin);
 
     // Mint should now panic.
     let result = client.try_mint(&user, &100);
@@ -104,11 +111,6 @@ fn test_guard_initializes_with_token_admin() {
 /// but leaves minting unaffected.
 #[test]
 fn test_pause_transfers_blocks_transfer_only() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(Token, ());
-    let client = TokenClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
     client.initialize(
         &admin,
         &7,
@@ -145,7 +147,7 @@ fn test_guard_pause_blocks_transfer_until_resume() {
     client.mint(&user, &1000);
 
     // Pause transfers.
-    client.guard_pause(&admin, &(PauseType::TRANSFER as u32), &true);
+    client.pause_transfers(&admin);
 
     // Transfer should fail.
     let result = client.try_transfer(&user, &user2, &100);
@@ -159,11 +161,6 @@ fn test_guard_pause_blocks_transfer_until_resume() {
 /// Verifies that pausing burning blocks burn/burn_from.
 #[test]
 fn test_pause_burning_blocks_burn() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(Token, ());
-    let client = TokenClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
     let user1 = Address::generate(&env);
     let user2 = Address::generate(&env);
     client.initialize(
@@ -206,14 +203,14 @@ fn test_emergency_pause_blocks_mint_and_burn_until_resume() {
     client.mint(&user, &1000);
 
     // Pause burning.
-    client.guard_pause(&admin, &(PauseType::BURN as u32), &true);
+    client.pause_burning(&admin);
 
     // Burn should fail.
     let result = client.try_burn(&user, &100);
     assert!(result.is_err(), "burn should fail when burning is paused");
 
     // Resume burning.
-    client.guard_pause(&admin, &(PauseType::BURN as u32), &false);
+    client.resume_burning(&admin);
 
     // Burn should succeed after resuming.
     client.burn(&user, &100);
@@ -225,13 +222,6 @@ fn test_emergency_pause_blocks_mint_and_burn_until_resume() {
 /// controls all operation types — no extra ledger entries.
 #[test]
 fn test_emergency_pause_all_freezes_everything() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(Token, ());
-    let client = TokenClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let user = Address::generate(&env);
-    let user2 = Address::generate(&env);
     client.initialize(
         &admin,
         &7,
@@ -274,7 +264,7 @@ fn test_guard_admin_management() {
 
     // Emergency pause: all operations freeze via single bitmask write.
     let approvers = vec![&env, admin.clone()];
-    client.emergency_pause(&approvers);
+    client.emergency_pause_all(&approvers);
 
     // Confirm all operations are blocked.
     assert!(
@@ -291,7 +281,7 @@ fn test_guard_admin_management() {
     );
 
     // Resume all via multi-sig.
-    client.guard_resume(&approvers);
+    client.resume_all(&approvers);
 
     // All operations should work again.
     client.mint(&user2, &100);
@@ -305,11 +295,6 @@ fn test_guard_admin_management() {
 /// extra footprint entries.
 #[test]
 fn test_guard_admin_queries() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(Token, ());
-    let client = TokenClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
     let new_admin = Address::generate(&env);
     let stranger = Address::generate(&env);
     client.initialize(
@@ -354,17 +339,17 @@ fn test_set_admin_rotates_token_and_guard_admin() {
     );
 
     // Guard admin should be the token admin.
-    let guard_admins = client.guard_admins();
+    let guard_admins = client.get_guard_admins();
     assert_eq!(guard_admins.len(), 1);
     assert_eq!(guard_admins.get(0).unwrap(), admin);
 
     // Threshold should be 1 (single-admin setup).
-    assert_eq!(client.guard_threshold(), 1);
+    assert_eq!(client.get_guard_threshold(), 1);
 
     // No operation should be paused at initialization.
-    assert!(!client.guard_is_paused(&(PauseType::MINT as u32)));
-    assert!(!client.guard_is_paused(&(PauseType::TRANSFER as u32)));
-    assert!(!client.guard_is_paused(&(PauseType::BURN as u32)));
+    assert!(!client.is_operation_paused(&PauseType::MINT));
+    assert!(!client.is_operation_paused(&PauseType::TRANSFER));
+    assert!(!client.is_operation_paused(&PauseType::BURN));
 }
 
 /// Storage efficiency test: confirms that after guard integration the
@@ -393,8 +378,14 @@ fn test_initialize_storage_efficiency() {
     assert_eq!(client.decimals(), 18);
     assert_eq!(client.name(), String::from_str(&env, "Efficiency Token"));
     assert_eq!(client.symbol(), String::from_str(&env, "EFFT"));
-    assert_eq!(client.guard_threshold(), 1);
+    assert_eq!(client.get_guard_threshold(), 1);
     let new_admin = Address::generate(&env);
+    client.initialize(
+        &admin,
+        &7,
+        &String::from_str(&env, "Test Token"),
+        &String::from_str(&env, "TEST"),
+    );
 
     client.set_admin(&new_admin);
 
