@@ -19,4 +19,5 @@ members = [
     "contracts/emergency_guard",
     "contracts/staking_rewards",
     "contracts/cross_chain_verifier",
+    "contracts/crucible-example-gasless",
 ]
