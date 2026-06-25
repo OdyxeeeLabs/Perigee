@@ -1,4 +1,5 @@
 #![no_std]
+<<<<<<< Updated upstream
 //! # Flash Loan Vault
 //!
 //! A dedicated vault contract that enables atomic flash loans on Soroban.
@@ -34,16 +35,23 @@
 
 use emergency_guard::EmergencyGuard;
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec};
+=======
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
+>>>>>>> Stashed changes
 
 #[cfg(test)]
 mod test;
 
+<<<<<<< Updated upstream
 // ── Errors ───────────────────────────────────────────────────────────────────
 
+=======
+>>>>>>> Stashed changes
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
+<<<<<<< Updated upstream
     /// Contract has already been initialized.
     AlreadyInitialized = 1,
     /// Contract has not been initialized yet.
@@ -77,10 +85,19 @@ pub struct FlashLoanEvent {
     pub token: Address,
     pub amount: i128,
     pub fee: i128,
+=======
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    Unauthorized = 3,
+    InsufficientLiquidity = 4,
+    Paused = 5,
+    InvalidAmount = 6,
+>>>>>>> Stashed changes
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+<<<<<<< Updated upstream
 pub struct VaultDepositEvent {
     pub admin: Address,
     pub amount: i128,
@@ -156,12 +173,37 @@ pub const FLASH_LOAN_PAUSE_FLAG: u32 = 1 << 6;
 
 fn check_not_paused(e: &Env) -> Result<(), Error> {
     if EmergencyGuard::is_paused(e.clone(), FLASH_LOAN_PAUSE_FLAG) {
+=======
+pub enum PauseType {
+    BORROW,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    Admin,
+    Token,
+    Reserve,
+    PausedBorrow,
+}
+
+fn check_not_paused(e: &Env, pause_type: PauseType) -> Result<(), Error> {
+    let paused: bool = match pause_type {
+        PauseType::BORROW => e
+            .storage()
+            .instance()
+            .get(&DataKey::PausedBorrow)
+            .unwrap_or(false),
+    };
+    if paused {
+>>>>>>> Stashed changes
         Err(Error::Paused)
     } else {
         Ok(())
     }
 }
 
+<<<<<<< Updated upstream
 fn load_admin(e: &Env) -> Result<Address, Error> {
     e.storage()
         .instance()
@@ -240,11 +282,14 @@ fn set_borrow_paused(e: &Env, paused: bool) {
 
 // ── Contract ─────────────────────────────────────────────────────────────────
 
+=======
+>>>>>>> Stashed changes
 #[contract]
 pub struct FlashLoanVault;
 
 #[contractimpl]
 impl FlashLoanVault {
+<<<<<<< Updated upstream
     // ── Initialization ───────────────────────────────────────────────────────
 
     /// Initialize the vault with an admin and the token to lend.
@@ -614,5 +659,77 @@ impl FlashLoanVault {
     /// Returns the total amount deposited by the admin.
     pub fn get_total_deposited(e: Env) -> i128 {
         get_total_deposited(&e)
+=======
+    pub fn initialize(e: Env, admin: Address, token: Address) -> Result<(), Error> {
+        if e.storage().instance().has(&DataKey::Token) {
+            return Err(Error::AlreadyInitialized);
+        }
+        admin.require_auth();
+        e.storage().instance().set(&DataKey::Admin, &admin);
+        e.storage().instance().set(&DataKey::Token, &token);
+        e.storage().instance().set(&DataKey::Reserve, &0i128);
+        e.storage().instance().set(&DataKey::PausedBorrow, &false);
+        Ok(())
+    }
+
+    pub fn deposit(e: Env, from: Address, amount: i128) -> Result<(), Error> {
+        from.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let token: Address = e
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(Error::NotInitialized)?;
+        let client = soroban_sdk::token::Client::new(&e, &token);
+        client.transfer(&from, &e.current_contract_address(), &amount);
+        let reserve: i128 = e.storage().instance().get(&DataKey::Reserve).unwrap_or(0);
+        e.storage().instance().set(&DataKey::Reserve, &(reserve + amount));
+        Ok(())
+    }
+
+    pub fn pause_borrow(e: Env, paused: bool) -> Result<(), Error> {
+        let admin: Address = e
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+        e.storage().instance().set(&DataKey::PausedBorrow, &paused);
+        Ok(())
+    }
+
+    pub fn execute_flash_loan(
+        e: Env,
+        borrower: Address,
+        amount: i128,
+        callback_contract: Address,
+    ) -> Result<(), Error> {
+        check_not_paused(&e, PauseType::BORROW)?;
+        borrower.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let token: Address = e
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(Error::NotInitialized)?;
+        let reserve: i128 = e.storage().instance().get(&DataKey::Reserve).unwrap_or(0);
+        if amount > reserve {
+            return Err(Error::InsufficientLiquidity);
+        }
+
+        let token_client = soroban_sdk::token::Client::new(&e, &token);
+        token_client.transfer(&e.current_contract_address(), &borrower, &amount);
+
+        let symbol = Symbol::new(&e, "receive_loan");
+        e.invoke_contract(&callback_contract, &symbol, (&borrower, &token, &amount));
+
+        let repay_amount = amount; // no premium for simplicity
+        token_client.transfer(&borrower, &e.current_contract_address(), &repay_amount);
+        Ok(())
+>>>>>>> Stashed changes
     }
 }

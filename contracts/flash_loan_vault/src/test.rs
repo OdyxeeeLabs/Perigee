@@ -1,4 +1,5 @@
 use super::*;
+<<<<<<< Updated upstream
 use soroban_sdk::{
     contract, contractimpl, contracttype, testutils::Address as _, Address, Env,
 };
@@ -748,4 +749,45 @@ fn test_get_available_after_deposit() {
     let s = setup();
     fund_vault(&s, 5_000);
     assert_eq!(s.vault_client.get_available(), 5_000);
+=======
+use soroban_sdk::{testutils::{Address as _, Ledger}, contract, contractimpl, contracttype, Address, Env};
+
+extern crate alloc;
+use alloc::vec::Vec;
+
+#[contract]
+struct MockReceiver;
+
+#[contractimpl]
+impl MockReceiver {
+    pub fn receive_loan(e: Env, borrower: Address, _token: Address, amount: i128) {
+        e.storage().instance().set(&borrower, &amount);
+    }
+}
+
+#[test]
+fn test_flash_loan_paused() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(FlashLoanVault, ());
+    let client = FlashLoanVaultClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let token = e.register_stellar_asset_contract_v2(admin.clone()).address();
+    let receiver_id = e.register(MockReceiver, ());
+    let receiver = MockReceiverClient::new(&e, &receiver_id);
+
+    client.initialize(&admin, &token);
+    client.deposit(&admin, &1000);
+    client.pause_borrow(&true);
+
+    let borrower = Address::generate(&e);
+
+    let result = std::panic::catch_unwind(|| {
+        client.execute_flash_loan(&borrower, &100, &receiver_id);
+    });
+
+    assert!(result.is_err());
+>>>>>>> Stashed changes
 }
