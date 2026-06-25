@@ -14,13 +14,8 @@ members = [
     "contracts/factory",
     "contracts/math",
     "contracts/typed_data_auth",
-<<<<<<< Updated upstream
     "contracts/proxy",
     "contracts/flash_loan_vault",
-    "contracts/emergency_guard",
     "contracts/staking_rewards",
     "contracts/cross_chain_verifier",
-=======
-    "contracts/flash_loan_vault",
->>>>>>> Stashed changes
 ]
