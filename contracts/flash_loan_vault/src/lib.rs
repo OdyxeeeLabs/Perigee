@@ -616,3 +616,4 @@ impl FlashLoanVault {
         get_total_deposited(&e)
     }
 }
+

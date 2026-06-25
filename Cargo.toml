@@ -16,7 +16,6 @@ members = [
     "contracts/typed_data_auth",
     "contracts/proxy",
     "contracts/flash_loan_vault",
-    "contracts/emergency_guard",
     "contracts/staking_rewards",
     "contracts/cross_chain_verifier",
 ]

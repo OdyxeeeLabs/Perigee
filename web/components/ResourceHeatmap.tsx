@@ -423,7 +423,7 @@ export function ResourceHeatmap({ resourceCost }: ResourceHeatmapProps) {
                   <div className="mt-4">
                     <h4 className="text-sm font-bold text-slate-400">Hover over matrix core blocks</h4>
                     <p className="text-xs text-slate-500 mt-2 leading-relaxed">
-                      Each tile in this 6x6 grid maps a segment of your contract's resources. Highly optimized structures keep blocks within deep teal (Optimal). High-load areas transition into orange (Warning) and red (Critical).
+                      Each tile in this 6x6 grid maps a segment of your contract&apos;s resources. Highly optimized structures keep blocks within deep teal (Optimal). High-load areas transition into orange (Warning) and red (Critical).
                     </p>
                     <div className="mt-6 flex flex-wrap gap-4 text-[10px] font-mono text-slate-500">
                       <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded bg-emerald-950 border border-emerald-500/20"></div> Optimal (&lt;20%)</div>
