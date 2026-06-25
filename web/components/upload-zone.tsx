@@ -182,14 +182,6 @@ export interface UploadZoneProps {
   enableBackendValidation?: boolean;
 }
 
-export function UploadZone({ onFileReady }: UploadZoneProps) {
-  onReset?: () => void;
-}
-
-export function UploadZone({ onFileReady, onReset }: UploadZoneProps) {
-}
-
-export function UploadZone({ onFileReady }: UploadZoneProps) {
 export function UploadZone({ 
   onFileReady, 
   backendUrl = 'http://localhost:8080/analyze/wasm',
