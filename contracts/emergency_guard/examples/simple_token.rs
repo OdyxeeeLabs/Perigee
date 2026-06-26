@@ -1,6 +1,6 @@
 #![no_std]
-use emergency_guard::{EmergencyGuard, PauseType};
-use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env};
+use emergency_guard::{EmergencyGuard, DefaultEmergencyGuard, EmergencyGuardTrait, PauseType};
+use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, Vec};
 
 #[contracttype]
 pub enum DataKey {
@@ -163,8 +163,8 @@ impl SimpleToken {
     }
 
     /// Emergency: pause all operations
-    pub fn emergency_pause_all(env: Env) {
-        DefaultEmergencyGuard::emergency_pause_all(&env).expect("Unauthorized");
+    pub fn emergency_pause_all(env: Env, approvers: Vec<Address>) {
+        DefaultEmergencyGuard::emergency_pause_all(&env, approvers).expect("Unauthorized");
     }
 
     /// Resume all operations
@@ -195,20 +195,20 @@ impl SimpleToken {
     }
 
     /// Add new admin (requires existing admin authorization)
-    pub fn add_admin(env: Env, new_admin: Address) {
-        DefaultEmergencyGuard::add_admin(&env, new_admin)
+    pub fn add_admin(env: Env, approvers: Vec<Address>, new_admin: Address) {
+        DefaultEmergencyGuard::add_admin(&env, approvers, new_admin)
             .expect("Unauthorized or threshold would be violated");
     }
 
     /// Remove admin
-    pub fn remove_admin(env: Env, admin: Address) {
-        DefaultEmergencyGuard::remove_admin(&env, admin)
+    pub fn remove_admin(env: Env, approvers: Vec<Address>, admin: Address) {
+        DefaultEmergencyGuard::remove_admin(&env, approvers, admin)
             .expect("Unauthorized or threshold would be violated");
     }
 
     /// Rotate admin (current admin transfers authority to new admin)
-    pub fn rotate_admin(env: Env, new_admin: Address) {
-        DefaultEmergencyGuard::rotate_admin(&env, new_admin).expect("Unauthorized");
+    pub fn rotate_admin(env: Env, approvers: Vec<Address>, old_admin: Address, new_admin: Address) {
+        DefaultEmergencyGuard::rotate_admin(&env, approvers, old_admin, new_admin).expect("Unauthorized");
     }
 
     // ==== READ-ONLY FUNCTIONS ====
