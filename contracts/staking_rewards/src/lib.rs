@@ -249,6 +249,13 @@ impl StakingRewards {
         e.storage().instance().set(&DataKey::TotalStaked, &0i128);
         e.storage().instance().extend_ttl(10000, 10000);
 
+        // Initialize the embedded EmergencyGuard so granular pause checks
+        // (e.g. PauseType::CLAIM_REWARDS) can be toggled by the owner.
+        // Threshold of 1 means the single owner can trigger any pause.
+        let admins = soroban_sdk::vec![&e, config.owner.clone()];
+        EmergencyGuard::initialize(e, admins, 1)
+            .map_err(|_| ContractError::AlreadyInitialized)?;
+
         Ok(())
     }
 
@@ -482,7 +489,7 @@ impl StakingRewards {
         Ok(staked_amount)
     }
 
-    /// Sets the paused state (owner only).
+    /// Sets the global paused state (owner only).
     pub fn set_paused(e: Env, paused: bool) -> Result<(), ContractError> {
         let mut config = Self::get_config(e.clone())?;
         config.owner.require_auth();
@@ -497,6 +504,17 @@ impl StakingRewards {
         );
 
         Ok(())
+    }
+
+    /// Granularly pause or unpause the claim_rewards operation (owner only).
+    /// This is independent of the global `is_paused` flag and uses the
+    /// embedded EmergencyGuard bitmask (PauseType::CLAIM_REWARDS).
+    pub fn set_claim_rewards_paused(e: Env, paused: bool) -> Result<(), ContractError> {
+        let config = Self::get_config(e.clone())?;
+        config.owner.require_auth();
+
+        EmergencyGuard::set_pause(e, config.owner, PauseType::CLAIM_REWARDS, paused)
+            .map_err(|_| ContractError::Paused)
     }
 
     // ── View Functions ──────────────────────────────────────────
