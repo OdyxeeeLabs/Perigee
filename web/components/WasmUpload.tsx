@@ -49,7 +49,7 @@ export default function WasmUpload({
   maxFiles = 5,
   className,
 }: WasmUploadProps) {
-  const [files, setFiles] = useState<<WasmFile[]>([]);
+  const [files, setFiles] = useState<WasmFile[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
 
   //validate WASM file

@@ -55,9 +55,6 @@ export default function Home() {
     let errorType: string | undefined;
     const activeWasmData = customWasmData || wasmData;
     try {
-      const report = await analyzeService.analyze({
-        contract_id: contractId,
-        function_name: selectedFunction.name,
       const url = activeWasmData ? 'http://localhost:8080/analyze/wasm' : 'http://localhost:8080/analyze';
       const body = activeWasmData
         ? {
