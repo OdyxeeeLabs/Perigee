@@ -49,16 +49,18 @@ impl LiquidityPoolFactory {
             .with_current_contract(salt)
             .deploy_v2(wasm_hash, soroban_sdk::Vec::<soroban_sdk::Val>::new(&env));
 
-        // We need to call the `initialize` function on the new contract.
-        // Assuming the LP contract has `fn initialize(e: Env, token_a: Address, token_b: Address)`
-        // We use Val::from_void() as a placeholder if types are tricky, but here we need Address.
+        // Call `initialize` on the newly deployed LP contract.
+        // LP signature: fn initialize(e: Env, admin: Address, token_a: Address, token_b: Address)
+        // The factory itself acts as the pool admin.
+        let admin = env.current_contract_address();
         let init_args = soroban_sdk::vec![
             &env,
+            admin.into_val(&env),
             token_0.clone().into_val(&env),
             token_1.clone().into_val(&env)
         ];
 
-        // Invoke the initialize function. Symbol::new(&env, "initialize")
+        // Invoke the initialize function.
         let _res: () = env.invoke_contract(
             &deployed_address,
             &soroban_sdk::Symbol::new(&env, "initialize"),
