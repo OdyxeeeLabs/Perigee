@@ -392,9 +392,8 @@ mod tests {
         t2.build(data).unwrap();
         assert_eq!(t1.root, t2.root);
     }
-}
 
-    // ── #491: Even and odd leaf count tests with reference values ────────
+    // ── Even and odd leaf count tests with reference values ────────────────
 
     #[test]
     fn test_even_leaf_count_root_matches_reference() {
@@ -462,3 +461,145 @@ mod tests {
             assert!(proof.verify(), "proof for leaf {i} failed");
         }
     }
+}
+
+// ── Property-based fuzz tests for MerkleTree ──────────────────────────────────
+//
+// Run with: cargo test (as part of the normal test suite)
+// For libfuzzer-based fuzzing, see core/fuzz/fuzz_targets/merkle_build.rs
+//
+// To run with higher iteration counts:
+//   PROPTEST_CASES=10000 cargo test fuzz_
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_leaf() -> impl Strategy<Value = Vec<u8>> {
+        prop::collection::vec(any::<u8>(), 0..=256)
+    }
+
+    fn arb_leaves(min: usize, max: usize) -> impl Strategy<Value = Vec<Vec<u8>>> {
+        prop::collection::vec(arb_leaf(), min..=max)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(500))]
+
+        /// Builder must never panic on any non-empty input.
+        #[test]
+        fn fuzz_build_never_panics(leaves in arb_leaves(1, 64)) {
+            let mut tree = MerkleTree::new(32);
+            let _ = tree.build(leaves);
+        }
+
+        /// Empty input must return an error, never panic.
+        #[test]
+        fn fuzz_empty_input_returns_err(_dummy in any::<u8>()) {
+            let mut tree = MerkleTree::new(32);
+            prop_assert!(tree.build(vec![]).is_err());
+        }
+
+        /// Every proof produced by the builder must verify against the tree root.
+        #[test]
+        fn fuzz_all_proofs_verify(leaves in arb_leaves(1, 32)) {
+            let mut tree = MerkleTree::new(32);
+            tree.build(leaves).expect("build succeeds");
+            for i in 0..tree.leaf_count() {
+                let proof = tree.generate_proof(i).expect("proof exists");
+                prop_assert!(proof.verify(), "proof for leaf {i} failed");
+                prop_assert!(MerkleTree::verify_proof(&proof, &tree.root));
+            }
+        }
+
+        /// Root must be deterministic: same leaves always produce the same root.
+        #[test]
+        fn fuzz_build_is_deterministic(leaves in arb_leaves(1, 32)) {
+            let mut t1 = MerkleTree::new(32);
+            let mut t2 = MerkleTree::new(32);
+            t1.build(leaves.clone()).unwrap();
+            t2.build(leaves).unwrap();
+            prop_assert_eq!(t1.root, t2.root);
+        }
+
+        /// A tampered leaf hash must cause proof.verify() to return false.
+        #[test]
+        fn fuzz_tampered_leaf_invalidates_proof(leaves in arb_leaves(2, 32)) {
+            let mut tree = MerkleTree::new(32);
+            tree.build(leaves).unwrap();
+            let mut proof = tree.generate_proof(0).unwrap();
+            proof.leaf_hash[0] ^= 0xff;
+            prop_assert!(!proof.verify());
+        }
+
+        /// A tampered sibling hash must cause verify_proof to return false.
+        #[test]
+        fn fuzz_tampered_sibling_invalidates_proof(leaves in arb_leaves(2, 32)) {
+            let mut tree = MerkleTree::new(32);
+            tree.build(leaves).unwrap();
+            let mut proof = tree.generate_proof(0).unwrap();
+            if !proof.proof.is_empty() {
+                proof.proof[0].hash = [0xFFu8; 32];
+                prop_assert!(!MerkleTree::verify_proof(&proof, &tree.root));
+            }
+        }
+
+        /// All leaves in a tree of power-of-two size must produce valid proofs.
+        #[test]
+        fn fuzz_power_of_two_leaf_counts_valid(
+            log2_size in 1usize..=6usize,
+            seed in any::<u64>(),
+        ) {
+            let size = 1 << log2_size;
+            let leaves: Vec<Vec<u8>> = (0..size)
+                .map(|i| {
+                    let mut v = seed.to_le_bytes().to_vec();
+                    v.extend_from_slice(&(i as u64).to_le_bytes());
+                    v
+                })
+                .collect();
+            let mut tree = MerkleTree::new(32);
+            tree.build(leaves).unwrap();
+            for i in 0..tree.leaf_count() {
+                let proof = tree.generate_proof(i).unwrap();
+                prop_assert!(MerkleTree::verify_proof(&proof, &tree.root));
+            }
+        }
+
+        /// Duplicate leaves must not cause panics and must produce a valid tree.
+        #[test]
+        fn fuzz_duplicate_leaves_no_panic(
+            leaf in arb_leaf(),
+            count in 2usize..=16usize,
+        ) {
+            let leaves = vec![leaf; count];
+            let mut tree = MerkleTree::new(32);
+            if tree.build(leaves).is_ok() {
+                prop_assert_eq!(tree.leaf_count(), count);
+            }
+        }
+
+        /// Very large individual leaves (up to 64 KiB) must not cause panics.
+        #[test]
+        fn fuzz_large_leaf_values(
+            leaf in prop::collection::vec(any::<u8>(), 0..=65536usize),
+        ) {
+            let mut tree = MerkleTree::new(32);
+            let _ = tree.build(vec![leaf]);
+        }
+
+        /// hex-string round-trip: encode leaves to hex, build via from_hex_strings,
+        /// result must equal direct build.
+        #[test]
+        fn fuzz_hex_roundtrip(leaves in arb_leaves(1, 16)) {
+            let hex_leaves: Vec<String> = leaves.iter().map(hex::encode).collect();
+            let tree_via_hex = MerkleTree::from_hex_strings(hex_leaves);
+            let mut tree_direct = MerkleTree::new(32);
+            tree_direct.build(leaves).unwrap();
+            match tree_via_hex {
+                Ok(t) => prop_assert_eq!(t.root, tree_direct.root),
+                Err(_) => {}
+            }
+        }
+    }
+}
