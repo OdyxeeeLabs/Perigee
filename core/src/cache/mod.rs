@@ -8,6 +8,7 @@
 //! L1 → L2 → miss (and promote L2 hits into L1), and writes populate both
 //! layers so state survives restarts.
 
+use crate::simulation::{SimulationResult, SorobanResources};
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,7 +16,6 @@ use sled::{Db, Tree};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use crate::simulation::{SimulationResult, SorobanResources};
 
 const CACHE_TTL_SECS: u64 = 3_600;
 const CACHE_MAX_CAPACITY: u64 = 1_000;
@@ -41,7 +41,9 @@ impl SimulationCache {
             .time_to_live(Duration::from_secs(CACHE_TTL_SECS))
             .build();
 
-        let l2 = db.open_tree("simulation_results").expect("Failed to open simulation_results tree");
+        let l2 = db
+            .open_tree("simulation_results")
+            .expect("Failed to open simulation_results tree");
 
         Arc::new(Self {
             l1,
@@ -117,8 +119,12 @@ pub struct ContractCache {
 
 impl ContractCache {
     pub fn new(db: &Db) -> Self {
-        let wasm_tree = db.open_tree("wasm_bytes").expect("Failed to open wasm_bytes tree");
-        let ledger_tree = db.open_tree("ledger_entries").expect("Failed to open ledger_entries tree");
+        let wasm_tree = db
+            .open_tree("wasm_bytes")
+            .expect("Failed to open wasm_bytes tree");
+        let ledger_tree = db
+            .open_tree("ledger_entries")
+            .expect("Failed to open ledger_entries tree");
         Self {
             wasm_tree,
             ledger_tree,
@@ -126,7 +132,11 @@ impl ContractCache {
     }
 
     pub fn get_wasm(&self, hash_hex: &str) -> Option<Vec<u8>> {
-        self.wasm_tree.get(hash_hex).ok().flatten().map(|v| v.to_vec())
+        self.wasm_tree
+            .get(hash_hex)
+            .ok()
+            .flatten()
+            .map(|v| v.to_vec())
     }
 
     pub fn set_wasm(&self, hash_hex: String, wasm_bytes: Vec<u8>) {
