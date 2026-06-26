@@ -1,12 +1,12 @@
 #![cfg(test)]
 
 use crate::*;
-use soroban_sdk::{Bytes, BytesN, String, Symbol, Vec, Env};
+use soroban_sdk::{Bytes, BytesN, Env, String, Symbol, Vec};
 
 #[test]
 fn test_chain_info_creation() {
     let bridge_contract = BytesN::from_array(&[0u8; 32]);
-    
+
     let chain_info = ChainInfo {
         chain_id: 1,
         chain_name: String::from_small_str("stellar"),
@@ -15,7 +15,7 @@ fn test_chain_info_creation() {
         consensus_round: 100,
         is_active: true,
     };
-    
+
     assert_eq!(chain_info.chain_id, 1);
     assert_eq!(chain_info.consensus_round, 100);
     assert!(chain_info.is_active);
@@ -24,7 +24,7 @@ fn test_chain_info_creation() {
 #[test]
 fn test_bridge_endpoint_creation() {
     let bridge_contract = BytesN::from_array(&[0u8; 32]);
-    
+
     let source_chain = ChainInfo {
         chain_id: 1,
         chain_name: String::from_small_str("chain-1"),
@@ -33,7 +33,7 @@ fn test_bridge_endpoint_creation() {
         consensus_round: 100,
         is_active: true,
     };
-    
+
     let dest_chain = ChainInfo {
         chain_id: 2,
         chain_name: String::from_small_str("chain-2"),
@@ -42,7 +42,7 @@ fn test_bridge_endpoint_creation() {
         consensus_round: 100,
         is_active: true,
     };
-    
+
     let endpoint = BridgeEndpoint {
         source_chain,
         destination_chain: dest_chain,
@@ -50,7 +50,7 @@ fn test_bridge_endpoint_creation() {
         min_liquidity: 1000000,
         is_enabled: true,
     };
-    
+
     assert_eq!(endpoint.fee_percentage, 100);
     assert!(endpoint.is_enabled);
 }
@@ -60,7 +60,7 @@ fn test_cross_chain_payload_creation() {
     let payload_id = BytesN::from_array(&[1u8; 32]);
     let nonce = BytesN::from_array(&[2u8; 32]);
     let payload_hash = BytesN::from_array(&[3u8; 32]);
-    
+
     let metadata = PayloadMetadata {
         version: 1,
         timestamp: 1000000,
@@ -68,11 +68,11 @@ fn test_cross_chain_payload_creation() {
         expiration_height: 10000,
         nonce,
     };
-    
+
     let sender = Bytes::new(&soroban_sdk::Env::default());
     let recipient = Bytes::new(&soroban_sdk::Env::default());
     let data = Bytes::new(&soroban_sdk::Env::default());
-    
+
     let payload = CrossChainPayload {
         payload_id,
         source_chain_id: 1,
@@ -85,7 +85,7 @@ fn test_cross_chain_payload_creation() {
         payload_hash,
         gas_limit: 1000000,
     };
-    
+
     assert_eq!(payload.source_chain_id, 1);
     assert_eq!(payload.destination_chain_id, 2);
     assert_eq!(payload.gas_limit, 1000000);
@@ -95,7 +95,7 @@ fn test_cross_chain_payload_creation() {
 fn test_payload_batch_creation() {
     let batch_id = BytesN::from_array(&[4u8; 32]);
     let merkle_root = BytesN::from_array(&[5u8; 32]);
-    
+
     let batch = PayloadBatch {
         batch_id,
         source_chain_id: 1,
@@ -104,7 +104,7 @@ fn test_payload_batch_creation() {
         batch_timestamp: 1000000,
         batch_ttl_seconds: 3600,
     };
-    
+
     assert_eq!(batch.payload_count, 10);
     assert_eq!(batch.batch_ttl_seconds, 3600);
 }
@@ -112,7 +112,7 @@ fn test_payload_batch_creation() {
 #[test]
 fn test_verification_result_creation() {
     let error_msg = String::from_small_str("test error");
-    
+
     let result = VerificationResult {
         status: VerificationStatus::Verified,
         signatures_verified: 5,
@@ -122,7 +122,7 @@ fn test_verification_result_creation() {
         has_rejections: false,
         rejection_count: 0,
     };
-    
+
     assert_eq!(result.status, VerificationStatus::Verified);
     assert_eq!(result.signatures_verified, 5);
     assert!(!result.has_rejections);
@@ -136,7 +136,7 @@ fn test_signature_schemes() {
         SignatureScheme::BLS12381,
         SignatureScheme::ECDSA,
     ];
-    
+
     assert_eq!(schemes.len(), 4);
 }
 
@@ -158,7 +158,7 @@ fn test_verification_status_variants() {
         VerificationStatus::Expired,
         VerificationStatus::Cancelled,
     ];
-    
+
     assert_eq!(statuses.len(), 5);
     assert_eq!(statuses[1], VerificationStatus::Verified);
 }
@@ -172,7 +172,7 @@ fn test_payload_route_creation() {
         priority: 100,
         is_critical: true,
     };
-    
+
     assert_eq!(route.from_chain, 1);
     assert_eq!(route.to_chain, 3);
     assert!(route.is_critical);
@@ -183,7 +183,7 @@ fn test_encoded_payload_creation() {
     let encoded_data = Bytes::new(&soroban_sdk::Env::default());
     let encoding_scheme = String::from_small_str("borsh");
     let compression_type = String::from_small_str("gzip");
-    
+
     let encoded = EncodedPayload {
         encoded_data,
         encoding_scheme,
@@ -191,7 +191,7 @@ fn test_encoded_payload_creation() {
         original_size: 1000,
         compressed_size: 600,
     };
-    
+
     assert_eq!(encoded.original_size, 1000);
     assert_eq!(encoded.compressed_size, 600);
 }
@@ -199,7 +199,7 @@ fn test_encoded_payload_creation() {
 #[test]
 fn test_recovery_key_creation() {
     let compressed_key = BytesN::from_array(&[6u8; 33]);
-    
+
     let key = RecoveryKey {
         compressed_key,
         key_type: SignatureScheme::Secp256k1,
@@ -208,7 +208,7 @@ fn test_recovery_key_creation() {
         activation_height: 1000,
         deactivation_height: u64::MAX,
     };
-    
+
     assert!(key.is_active);
     assert_eq!(key.chain_id, 1);
 }
