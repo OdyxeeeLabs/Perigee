@@ -5,6 +5,7 @@ import Head from 'next/head';
 import { useState, useEffect } from 'react';
 import { ResultViewer } from '../components/Resultviewer';
 import { InvocationHistory, useInvocationHistory } from '../components/InnovocationHistory';
+import { InvocationHistorySidebar } from '../components/InvocationHistorySidebar';
 import { NutritionLabel } from '../components/NutritionLabel';
 import { FunctionSidebar } from '../components/FunctionSidebar';
 import { ContractInteraction } from '../components/ContractInteraction';
@@ -405,7 +406,8 @@ export default function Home() {
           )}
         </div>
 
-        <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="mb-6 flex gap-6 items-start">
+          <div className="flex-1 grid grid-cols-1 gap-6 lg:grid-cols-2 min-w-0">
           {/* Left Column - Function Selection & Form */}
           <div>
             <FunctionSidebar
@@ -558,6 +560,13 @@ export default function Home() {
               )}
             </div>
           </div>
+          </div>
+          <InvocationHistorySidebar
+            onSelectResult={(result) => {
+              setCurrentResult(result);
+              setTab('explorer');
+            }}
+          />
         </div>
 
         {/* Info Cards */}
