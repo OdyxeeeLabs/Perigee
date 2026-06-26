@@ -130,6 +130,8 @@ fn emit_guard_event(env: &Env, event: EmergencyGuardEvent) {
         ),
         event,
     );
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GuardInitializedEvent {
@@ -394,6 +396,7 @@ impl EmergencyGuard {
             "Pause state updated: op={}, paused={}",
             operation,
             paused
+        );
         emit_pause_state_changed(&env, &admin, operation, paused);
         // Emit standardized EmergencyGuard event
         env.events().publish(
@@ -428,6 +431,7 @@ impl EmergencyGuard {
                 admin_count: Self::get_admins(env.clone()).len(),
                 approver_count: approvers.len(),
             },
+        );
         emit_emergency_paused_all(&env, &approvers);
         env.events().publish(
             (String::from_str(
@@ -460,6 +464,7 @@ impl EmergencyGuard {
                 admin_count: Self::get_admins(env.clone()).len(),
                 approver_count: approvers.len(),
             },
+        );
         emit_resumed_all(&env, &approvers);
         env.events().publish(
             (String::from_str(&env, "emergency_guard.resume_all"),),
@@ -492,6 +497,7 @@ impl EmergencyGuard {
                     admin_count: admins.len(),
                     approver_count: approvers.len(),
                 },
+            );
             emit_admin_added(&env, &approvers, &new_admin);
             env.storage().instance().set(&GuardDataKey::Admins, &admins);
             env.events().publish(
@@ -548,6 +554,7 @@ impl EmergencyGuard {
                 admin_count: new_admins.len(),
                 approver_count: approvers.len(),
             },
+        );
         emit_admin_removed(&env, &approvers, &admin);
         env.storage().instance().set(&GuardDataKey::Admins, &new_admins);
         env.events().publish(
@@ -910,6 +917,8 @@ impl DefaultEmergencyGuard {
     /// Pause a specific operation
     pub fn pause(env: &Env, operation: u32) -> Result<(), GuardError> {
         Self::set_pause_state(env, operation, true)
+    }
+
     /// Public wrapper to validate a set of approvers against the stored threshold.
     pub fn validate_multi_sig(env: Env, approvers: Vec<Address>) -> Result<(), GuardError> {
         Self::check_multi_sig(&env, &approvers)

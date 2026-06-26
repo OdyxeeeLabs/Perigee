@@ -289,3 +289,156 @@ fn test_pause_safeguards_claim() {
     client.set_paused(&true);
     client.claim(&user);
 }
+
+#[test]
+fn test_successful_withdrawal() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    // Stake tokens
+    client.stake(&user, &STAKE_AMOUNT);
+    assert_eq!(client.get_staked_balance(&user), STAKE_AMOUNT);
+
+    // Withdraw the full stake
+    client.withdraw(&user, &STAKE_AMOUNT);
+    
+    // Verify stake balance is zero
+    assert_eq!(client.get_staked_balance(&user), 0);
+    
+    // Verify tokens returned to user
+    let token_balance = token::Client::new(&e, &staking_token).balance(&user);
+    assert_eq!(token_balance, STAKE_AMOUNT);
+}
+
+#[test]
+fn test_partial_withdrawal() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    // Stake tokens
+    client.stake(&user, &STAKE_AMOUNT);
+    assert_eq!(client.get_staked_balance(&user), STAKE_AMOUNT);
+
+    // Withdraw half the stake
+    let withdraw_amount = STAKE_AMOUNT / 2;
+    client.withdraw(&user, &withdraw_amount);
+    
+    // Verify remaining stake balance
+    assert_eq!(client.get_staked_balance(&user), withdraw_amount);
+    
+    // Verify tokens returned to user
+    let token_balance = token::Client::new(&e, &staking_token).balance(&user);
+    assert_eq!(token_balance, withdraw_amount);
+}
+
+#[test]
+#[should_panic(expected = "Contract, #17")]
+fn test_withdraw_zero_amount() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    
+    // Attempt to withdraw zero amount should fail
+    client.withdraw(&user, &0);
+}
+
+#[test]
+#[should_panic(expected = "Contract, #17")]
+fn test_withdraw_negative_amount() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    
+    // Attempt to withdraw negative amount should fail
+    client.withdraw(&user, &-100);
+}
+
+#[test]
+#[should_panic(expected = "Contract, #4")]
+fn test_withdraw_insufficient_balance() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    
+    // Attempt to withdraw more than staked should fail
+    client.withdraw(&user, &(STAKE_AMOUNT + 1000));
+}
+
+#[test]
+fn test_withdraw_preserves_accrued_rewards() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    // Stake tokens
+    client.stake(&user, &STAKE_AMOUNT);
+    
+    // Advance ledger to accrue rewards
+    advance_ledger(&e, 10);
+    
+    // Check pending rewards before withdrawal
+    let pending_before = client.get_pending_rewards(&user);
+    assert!(pending_before > 0);
+    
+    // Withdraw partial amount
+    let withdraw_amount = STAKE_AMOUNT / 2;
+    client.withdraw(&user, &withdraw_amount);
+    
+    // Verify accrued rewards are preserved
+    let accrued_after = client.get_accrued_rewards(&user);
+    assert_eq!(accrued_after, pending_before);
+    
+    // Verify remaining stake balance
+    assert_eq!(client.get_staked_balance(&user), withdraw_amount);
+}
+
+#[test]
+fn test_complete_withdrawal_state_cleanup() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    // Stake tokens
+    client.stake(&user, &STAKE_AMOUNT);
+    
+    // Advance ledger to accrue rewards
+    advance_ledger(&e, 10);
+    
+    // Claim rewards first
+    client.claim(&user);
+    assert_eq!(client.get_accrued_rewards(&user), 0);
+    
+    // Withdraw full stake
+    client.withdraw(&user, &STAKE_AMOUNT);
+    
+    // Verify stake balance is zero
+    assert_eq!(client.get_staked_balance(&user), 0);
+    
+    // Verify accrued rewards remain zero
+    assert_eq!(client.get_accrued_rewards(&user), 0);
+    
+    // Verify user state is cleaned up (no pending rewards)
+    assert_eq!(client.get_pending_rewards(&user), 0);
+}
