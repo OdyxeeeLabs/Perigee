@@ -1,9 +1,9 @@
 #![no_std]
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String};
 
+use emergency_guard::{DefaultEmergencyGuard, EmergencyGuardTrait, PauseType};
 pub use soroscope_error_codes::ContractError;
 use soroscope_math::Fixed;
-use emergency_guard::{DefaultEmergencyGuard, EmergencyGuardTrait, PauseType};
 
 pub const SCALE: i128 = 1_000_000_000_000_000_000; // 18 decimals
 
@@ -244,13 +244,11 @@ impl StakingRewards {
             start_block,
             is_paused: false,
         };
-        
 
-        
         e.storage().instance().set(&DataKey::Config, &config);
         e.storage().instance().set(&DataKey::TotalStaked, &0i128);
         e.storage().instance().extend_ttl(10000, 10000);
-        
+
         Ok(())
     }
 
@@ -282,11 +280,17 @@ impl StakingRewards {
             .ok_or(ContractError::Overflow)?;
 
         // Update total staked
-        let mut total_staked: i128 = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
+        let mut total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
         total_staked = total_staked
             .checked_add(amount)
             .ok_or(ContractError::Overflow)?;
-        e.storage().instance().set(&DataKey::TotalStaked, &total_staked);
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &total_staked);
 
         e.storage()
             .persistent()
@@ -327,13 +331,19 @@ impl StakingRewards {
             .staked_amount
             .checked_sub(amount)
             .ok_or(ContractError::Overflow)?;
-        
+
         // Update total staked
-        let mut total_staked: i128 = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
+        let mut total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
         total_staked = total_staked
             .checked_sub(amount)
             .ok_or(ContractError::Overflow)?;
-        e.storage().instance().set(&DataKey::TotalStaked, &total_staked);
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &total_staked);
 
         if state.staked_amount == 0 && state.accrued_rewards == 0 {
             e.storage()
@@ -431,13 +441,19 @@ impl StakingRewards {
 
         let state: UserStakingState = e.storage().persistent().get(&state_key).unwrap();
         let staked_amount = state.staked_amount;
-        
+
         // Update total staked
-        let mut total_staked: i128 = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
+        let mut total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
         total_staked = total_staked
             .checked_sub(staked_amount)
             .ok_or(ContractError::Overflow)?;
-        e.storage().instance().set(&DataKey::TotalStaked, &total_staked);
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &total_staked);
 
         if staked_amount <= 0 {
             return Ok(0);
