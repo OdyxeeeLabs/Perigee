@@ -870,6 +870,10 @@ impl LiquidityPool {
         EmergencyGuard::get_pause_state(e)
     }
 
+    pub fn get_pause_mask(e: Env) -> u32 {
+        guard_pause_state(&e)
+    }
+
     pub fn is_paused_op(e: Env, operation: u32) -> bool {
         EmergencyGuard::is_paused(e, operation)
     }
