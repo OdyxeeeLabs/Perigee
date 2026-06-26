@@ -198,8 +198,11 @@ impl MerkleTree {
     fn hash_leaf(data: &[u8]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(data);
-        let digest = hasher.finalize();
-        digest.into()
+        let digest1 = hasher.finalize();
+        let mut hasher2 = Sha256::new();
+        hasher2.update(digest1);
+        let digest2 = hasher2.finalize();
+        digest2.into()
     }
 
     fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
