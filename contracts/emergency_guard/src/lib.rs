@@ -29,6 +29,8 @@ impl PauseType {
     /// Pause liquidity-pool pair creation in factory contracts
     /// Pause factory pair creation
     pub const CREATE_PAIR: u32 = 1 << 6;
+    /// Pause borrow/flash-loan operations
+    pub const BORROW: u32 = 1 << 7;
 
     pub fn new(value: u32) -> Self {
         PauseType(value)
@@ -206,7 +208,12 @@ pub trait EmergencyGuardTrait {
     fn remove_admin(env: &Env, approvers: Vec<Address>, admin: Address) -> Result<(), GuardError>;
 
     /// Rotate admin (multi-sig required)
-    fn rotate_admin(env: &Env, approvers: Vec<Address>, old_admin: Address, new_admin: Address) -> Result<(), GuardError>;
+    fn rotate_admin(
+        env: &Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError>;
 
     /// Get list of current admins
     fn get_admins(env: &Env) -> Vec<Address>;
@@ -549,7 +556,9 @@ impl EmergencyGuard {
                 approver_count: approvers.len(),
             },
         emit_admin_removed(&env, &approvers, &admin);
-        env.storage().instance().set(&GuardDataKey::Admins, &new_admins);
+        env.storage()
+            .instance()
+            .set(&GuardDataKey::Admins, &new_admins);
         env.events().publish(
             (
                 String::from_str(&env, "emergency_guard.admin_removed"),
