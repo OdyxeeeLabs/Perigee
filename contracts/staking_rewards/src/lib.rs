@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String};
 
-use emergency_guard::{DefaultEmergencyGuard, EmergencyGuardTrait, PauseType};
+use emergency_guard::{EmergencyGuard, PauseType};
 pub use soroscope_error_codes::ContractError;
 use soroscope_math::Fixed;
 
@@ -381,8 +381,9 @@ impl StakingRewards {
             return Err(ContractError::Paused);
         }
 
-        DefaultEmergencyGuard::check_not_paused(&e, PauseType::CLAIM_REWARDS)
-            .map_err(|_| ContractError::Paused)?;
+        if EmergencyGuard::is_paused(e.clone(), PauseType::CLAIM_REWARDS) {
+            return Err(ContractError::Paused);
+        }
 
         user.require_auth();
 

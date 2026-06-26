@@ -385,7 +385,7 @@ impl EmergencyGuard {
 
     /// Verify that `approvers` contains at least `threshold` distinct valid admins,
     /// each having provided their authorization.
-    pub fn check_multi_sig(env: &Env, approvers: &Vec<Address>) -> Result<(), GuardError> {
+    fn check_multi_sig(env: &Env, approvers: &Vec<Address>) -> Result<(), GuardError> {
         let threshold: u32 = env
             .storage()
             .instance()
