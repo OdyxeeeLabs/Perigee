@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 use thiserror::Error;
 use tracing;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 /// Errors that can occur during fee store operations
@@ -19,7 +20,7 @@ pub enum FeeStoreError {
 }
 
 /// Historical fee sample from a ledger header
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct LedgerFeeSample {
     pub ledger_sequence: i64,
     pub collected_at: DateTime<Utc>,
@@ -32,7 +33,7 @@ pub struct LedgerFeeSample {
 }
 
 /// Individual transaction fee record
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
 pub struct TransactionFeeRecord {
     pub id: String,
     pub ledger_sequence: i64,
@@ -60,7 +61,7 @@ impl FeeStore {
         &self,
         sample: &LedgerFeeSample,
     ) -> Result<(), FeeStoreError> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO ledger_fee_samples (
                 ledger_sequence, collected_at, base_reserve, base_fee, 
@@ -76,15 +77,15 @@ impl FeeStore {
                 transaction_count = excluded.transaction_count,
                 ledger_close_time = excluded.ledger_close_time
             "#,
-            sample.ledger_sequence,
-            sample.collected_at,
-            sample.base_reserve,
-            sample.base_fee,
-            sample.max_fee,
-            sample.fee_charged,
-            sample.transaction_count,
-            sample.ledger_close_time,
         )
+        .bind(sample.ledger_sequence)
+        .bind(sample.collected_at)
+        .bind(sample.base_reserve)
+        .bind(sample.base_fee)
+        .bind(sample.max_fee)
+        .bind(sample.fee_charged)
+        .bind(sample.transaction_count)
+        .bind(sample.ledger_close_time)
         .execute(&self.pool)
         .await?;
 
@@ -96,7 +97,7 @@ impl FeeStore {
         &self,
         record: &TransactionFeeRecord,
     ) -> Result<(), FeeStoreError> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO transaction_fee_records (
                 id, ledger_sequence, tx_hash, fee_bid, fee_charged,
@@ -104,15 +105,15 @@ impl FeeStore {
             )
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
-            record.id,
-            record.ledger_sequence,
-            record.tx_hash,
-            record.fee_bid,
-            record.fee_charged,
-            record.resource_fee,
-            record.inclusion_success,
-            record.recorded_at,
         )
+        .bind(&record.id)
+        .bind(record.ledger_sequence)
+        .bind(&record.tx_hash)
+        .bind(record.fee_bid)
+        .bind(record.fee_charged)
+        .bind(record.resource_fee)
+        .bind(record.inclusion_success)
+        .bind(record.recorded_at)
         .execute(&self.pool)
         .await?;
 
@@ -120,9 +121,11 @@ impl FeeStore {
     }
 
     /// Get recent ledger fee samples (most recent first)
-    pub async fn get_recent_samples(&self, limit: i64) -> Result<Vec<LedgerFeeSample>, FeeStoreError> {
-        let samples = sqlx::query_as!(
-            LedgerFeeSample,
+    pub async fn get_recent_samples(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<LedgerFeeSample>, FeeStoreError> {
+        let samples = sqlx::query_as::<_, LedgerFeeSample>(
             r#"
             SELECT 
                 ledger_sequence, collected_at, base_reserve, base_fee,
@@ -131,8 +134,8 @@ impl FeeStore {
             ORDER BY ledger_sequence DESC
             LIMIT ?1
             "#,
-            limit
         )
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
 
@@ -145,8 +148,7 @@ impl FeeStore {
         from_sequence: i64,
         to_sequence: i64,
     ) -> Result<Vec<LedgerFeeSample>, FeeStoreError> {
-        let samples = sqlx::query_as!(
-            LedgerFeeSample,
+        let samples = sqlx::query_as::<_, LedgerFeeSample>(
             r#"
             SELECT 
                 ledger_sequence, collected_at, base_reserve, base_fee,
@@ -155,9 +157,9 @@ impl FeeStore {
             WHERE ledger_sequence BETWEEN ?1 AND ?2
             ORDER BY ledger_sequence ASC
             "#,
-            from_sequence,
-            to_sequence
         )
+        .bind(from_sequence)
+        .bind(to_sequence)
         .fetch_all(&self.pool)
         .await?;
 
@@ -166,15 +168,15 @@ impl FeeStore {
 
     /// Get the latest ledger sequence in the database
     pub async fn get_latest_sequence(&self) -> Result<Option<i64>, FeeStoreError> {
-        let result = sqlx::query!(
+        let latest = sqlx::query_scalar::<_, Option<i64>>(
             r#"
             SELECT MAX(ledger_sequence) as latest FROM ledger_fee_samples
-            "#
+            "#,
         )
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(result.latest)
+        Ok(latest)
     }
 
     /// Get transaction records for a specific ledger
@@ -182,8 +184,7 @@ impl FeeStore {
         &self,
         ledger_sequence: i64,
     ) -> Result<Vec<TransactionFeeRecord>, FeeStoreError> {
-        let records = sqlx::query_as!(
-            TransactionFeeRecord,
+        let records = sqlx::query_as::<_, TransactionFeeRecord>(
             r#"
             SELECT 
                 id, ledger_sequence, tx_hash, fee_bid, fee_charged,
@@ -192,8 +193,8 @@ impl FeeStore {
             WHERE ledger_sequence = ?1
             ORDER BY recorded_at ASC
             "#,
-            ledger_sequence
         )
+        .bind(ledger_sequence)
         .fetch_all(&self.pool)
         .await?;
 
@@ -202,18 +203,18 @@ impl FeeStore {
 
     /// Delete old samples beyond retention period
     pub async fn cleanup_old_samples(&self, retention_days: i32) -> Result<u64, FeeStoreError> {
-        let result = sqlx::query!(
+        let result = sqlx::query(
             r#"
             DELETE FROM ledger_fee_samples
             WHERE ledger_close_time < datetime('now', ? || ' days')
             "#,
-            format!("-{}", retention_days)
         )
+        .bind(format!("-{}", retention_days))
         .execute(&self.pool)
         .await?;
 
         let deleted = result.rows_affected();
-        
+
         if deleted > 0 {
             tracing::info!(deleted, "Cleaned up old fee samples");
         }
@@ -223,15 +224,15 @@ impl FeeStore {
 
     /// Get count of stored samples
     pub async fn get_sample_count(&self) -> Result<i64, FeeStoreError> {
-        let result = sqlx::query!(
+        let count = sqlx::query_scalar::<_, i64>(
             r#"
             SELECT COUNT(*) as count FROM ledger_fee_samples
-            "#
+            "#,
         )
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(result.count)
+        Ok(count)
     }
 
     /// Batch insert multiple ledger samples
@@ -246,7 +247,7 @@ impl FeeStore {
         let mut tx = self.pool.begin().await?;
 
         for sample in samples {
-            sqlx::query!(
+            sqlx::query(
                 r#"
                 INSERT INTO ledger_fee_samples (
                     ledger_sequence, collected_at, base_reserve, base_fee, 
@@ -255,15 +256,15 @@ impl FeeStore {
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                 ON CONFLICT(ledger_sequence) DO NOTHING
                 "#,
-                sample.ledger_sequence,
-                sample.collected_at,
-                sample.base_reserve,
-                sample.base_fee,
-                sample.max_fee,
-                sample.fee_charged,
-                sample.transaction_count,
-                sample.ledger_close_time,
             )
+            .bind(sample.ledger_sequence)
+            .bind(sample.collected_at)
+            .bind(sample.base_reserve)
+            .bind(sample.base_fee)
+            .bind(sample.max_fee)
+            .bind(sample.fee_charged)
+            .bind(sample.transaction_count)
+            .bind(sample.ledger_close_time)
             .execute(&mut *tx)
             .await?;
         }
@@ -302,14 +303,7 @@ mod tests {
 
     #[test]
     fn test_transaction_fee_record_creation() {
-        let record = TransactionFeeRecord::new(
-            12345,
-            "abc123".to_string(),
-            100,
-            100,
-            50,
-            true,
-        );
+        let record = TransactionFeeRecord::new(12345, "abc123".to_string(), 100, 100, 50, true);
 
         assert_eq!(record.ledger_sequence, 12345);
         assert_eq!(record.tx_hash, "abc123");

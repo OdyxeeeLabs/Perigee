@@ -11,6 +11,23 @@ env:
 
 jobs:
   # ------------------------------------------------------------------
+  # Job 0: Cargo Check (fast compile check for all targets)
+  # ------------------------------------------------------------------
+  check:
+    name: Cargo Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          target: wasm32-unknown-unknown
+      - name: Install System Dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libdbus-1-dev libudev-dev
+      - name: Cargo Check
+        run: cargo check --locked --all-targets
+
+  # ------------------------------------------------------------------
   # Job 1: Formatter Check (Rust)
   # ------------------------------------------------------------------
   fmt:
@@ -41,9 +58,9 @@ jobs:
       - name: Install System Dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libdbus-1-dev libudev-dev
       - name: Install Soroban CLI
-        run: cargo install soroban-cli
+        run: cargo install soroban-cli --version 22.0.0 --locked
       - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   # ------------------------------------------------------------------
   # Job 3: Tests (Unit & Integration)
@@ -60,9 +77,9 @@ jobs:
       - name: Install System Dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libdbus-1-dev libudev-dev
       - name: Install Soroban CLI
-        run: cargo install soroban-cli
+        run: cargo install soroban-cli --version 22.0.0 --locked
       - name: Run Tests
-        run: cargo test
+        run: cargo test --locked
 
   # ------------------------------------------------------------------
   # Job 4: Frontend (Lint & Typecheck)

@@ -82,9 +82,9 @@ export const NutritionLabel: React.FC<NutritionLabelProps> = ({
     };
 
     return (
-        <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-6 font-mono">
-            <div className="border-b-2 border-[#30363d] pb-2 mb-4 flex justify-between items-end">
-                <h2 className="text-2xl font-black text-[#c9d1d9] uppercase tracking-wider">Nutrition Facts</h2>
+        <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-4 sm:p-6 font-mono">
+            <div className="border-b-2 border-[#30363d] pb-2 mb-4 flex flex-wrap justify-between items-end gap-2">
+                <h2 className="text-xl sm:text-2xl font-black text-[#c9d1d9] uppercase tracking-wider">Nutrition Facts</h2>
                 <span className="text-xs text-[#8b949e]">Per Transaction</span>
             </div>
 

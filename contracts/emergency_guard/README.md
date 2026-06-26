@@ -111,7 +111,7 @@ impl MyContract {
 
     // Resume operations
     pub fn resume(env: Env) {
-        DefaultEmergencyGuard::resume_all(&env)
+        DefaultEmergencyGuard::unpause_all(&env)
             .expect("Unauthorized");
     }
 

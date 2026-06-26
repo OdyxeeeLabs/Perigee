@@ -97,8 +97,8 @@ pub async fn run_comparison(
             let base_id = base_wasm.to_string_lossy().to_string();
 
             let (current_result, base_result) = tokio::join!(
-                engine.simulate_from_contract_id(&current_id, "compare", vec![], None),
-                engine.simulate_from_contract_id(&base_id, "compare", vec![], None)
+                engine.simulate_from_contract_id(&current_id, "compare", vec![], None, None, None),
+                engine.simulate_from_contract_id(&base_id, "compare", vec![], None, None, None)
             );
 
             (current_result?.resources, base_result?.resources)
@@ -112,8 +112,22 @@ pub async fn run_comparison(
             let current_id = current_wasm.to_string_lossy().to_string();
 
             let (current_result, base_result) = tokio::join!(
-                engine.simulate_from_contract_id(&current_id, &function_name, args.clone(), None),
-                engine.simulate_from_contract_id(&contract_id, &function_name, args, None)
+                engine.simulate_from_contract_id(
+                    &current_id,
+                    &function_name,
+                    args.clone(),
+                    None,
+                    None,
+                    None,
+                ),
+                engine.simulate_from_contract_id(
+                    &contract_id,
+                    &function_name,
+                    args,
+                    None,
+                    None,
+                    None
+                )
             );
 
             (current_result?.resources, base_result?.resources)

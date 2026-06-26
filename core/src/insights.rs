@@ -241,6 +241,12 @@ pub struct InsightsEngine {
     rules: Vec<Box<dyn InsightRule>>,
 }
 
+impl Clone for InsightsEngine {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
 impl InsightsEngine {
     /// Create an engine pre-loaded with all built-in rules.
     pub fn new() -> Self {

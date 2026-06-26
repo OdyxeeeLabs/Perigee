@@ -1,5 +1,6 @@
+#![allow(clippy::unnecessary_cast)]
+
 use crate::fee_store::LedgerFeeSample;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -134,9 +135,9 @@ impl FeeAnalyticsEngine {
         let fees: Vec<i64> = samples.iter().map(|s| s.base_fee).collect();
 
         // Calculate statistical models
-        let sma_10 = self.calculate_sma(&fees, self.sma_short_window);
-        let sma_50 = self.calculate_sma(&fees, self.sma_medium_window);
-        let ema_12 = self.calculate_ema(&fees, self.ema_period);
+        let _sma_10 = self.calculate_sma(&fees, self.sma_short_window);
+        let _sma_50 = self.calculate_sma(&fees, self.sma_medium_window);
+        let _ema_12 = self.calculate_ema(&fees, self.ema_period);
         let p50 = self.calculate_percentile(&fees, 50.0);
         let p75 = self.calculate_percentile(&fees, 75.0);
         let p95 = self.calculate_percentile(&fees, 95.0);
@@ -144,11 +145,7 @@ impl FeeAnalyticsEngine {
         let mean = self.calculate_mean(&fees);
 
         // Calculate coefficient of variation
-        let cv = if mean > 0.0 {
-            std_dev / mean
-        } else {
-            0.0
-        };
+        let cv = if mean > 0.0 { std_dev / mean } else { 0.0 };
 
         // Determine trend direction
         let trend = self.detect_trend(&fees);
@@ -164,7 +161,7 @@ impl FeeAnalyticsEngine {
 
         // Next ledger bid should be aggressive (use 95th percentile)
         let next_ledger_bid = urgent_bid;
-        
+
         // Next 3 ledgers can be more conservative
         let next_3_ledgers_bid = standard_bid;
 
@@ -273,7 +270,7 @@ impl FeeAnalyticsEngine {
             .map(|s| s.transaction_count as f64)
             .sum::<f64>()
             / samples.len() as f64;
-        
+
         // Normalize to 0-1 range (assuming max ~100 tx per ledger)
         let transaction_pressure = (avg_tx_count / 100.0).min(1.0);
 
@@ -374,10 +371,10 @@ impl FeeAnalyticsEngine {
         let recent_window = 5.min(data.len() / 2);
         let older_window = 5.min(data.len() / 2);
 
-        let recent: Vec<i64> = data.iter().take(recent_window).cloned().collect();
-        let older: Vec<i64> = data
+        let older: Vec<i64> = data.iter().take(older_window).cloned().collect();
+        let recent: Vec<i64> = data
             .iter()
-            .skip(data.len() - older_window)
+            .skip(data.len() - recent_window)
             .take(older_window)
             .cloned()
             .collect();
@@ -408,6 +405,7 @@ impl Default for FeeAnalyticsEngine {
 mod tests {
     use super::*;
     use crate::fee_store::LedgerFeeSample;
+    use chrono::Utc;
 
     fn create_sample(ledger: i64, base_fee: i64) -> LedgerFeeSample {
         LedgerFeeSample {
@@ -536,9 +534,8 @@ mod tests {
     #[test]
     fn test_market_conditions() {
         let engine = FeeAnalyticsEngine::new();
-        let samples: Vec<LedgerFeeSample> = (0..30)
-            .map(|i| create_sample(i as i64 + 1, 100))
-            .collect();
+        let samples: Vec<LedgerFeeSample> =
+            (0..30).map(|i| create_sample(i as i64 + 1, 100)).collect();
 
         let conditions = engine.get_market_conditions(&samples, 100);
 

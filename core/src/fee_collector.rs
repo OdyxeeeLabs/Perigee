@@ -77,9 +77,8 @@ impl FeeCollector {
 
     /// Run the background collection loop
     pub async fn run_collection_loop(self: Arc<Self>) {
-        let mut interval = tokio::time::interval(Duration::from_secs(
-            self.config.collection_interval_secs,
-        ));
+        let mut interval =
+            tokio::time::interval(Duration::from_secs(self.config.collection_interval_secs));
 
         tracing::info!(
             interval_secs = self.config.collection_interval_secs,
@@ -99,9 +98,11 @@ impl FeeCollector {
     async fn collect_latest_fees(&self) -> Result<(), FeeCollectorError> {
         // Get latest ledger sequence
         let latest_sequence = self.get_latest_ledger_sequence().await?;
-        
-        let last_collected = self.last_collected_sequence.load(std::sync::atomic::Ordering::Relaxed);
-        
+
+        let last_collected = self
+            .last_collected_sequence
+            .load(std::sync::atomic::Ordering::Relaxed);
+
         // Skip if we've already collected this ledger
         if latest_sequence <= last_collected {
             tracing::debug!(
@@ -114,7 +115,7 @@ impl FeeCollector {
 
         // Fetch ledger details
         let sample = self.fetch_ledger_fee_data(latest_sequence).await?;
-        
+
         // Store in database
         self.store
             .upsert_ledger_sample(&sample)
@@ -143,7 +144,7 @@ impl FeeCollector {
         }
 
         // Try the first healthy provider
-        let provider = providers[0];
+        let provider = &providers[0];
 
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -176,21 +177,24 @@ impl FeeCollector {
             .await
             .map_err(|e| FeeCollectorError::ParseError(e.to_string()))?;
 
-        let sequence = json["result"]["sequence"]
-            .as_u64()
-            .ok_or_else(|| FeeCollectorError::ParseError("Missing sequence in response".to_string()))?;
+        let sequence = json["result"]["sequence"].as_u64().ok_or_else(|| {
+            FeeCollectorError::ParseError("Missing sequence in response".to_string())
+        })?;
 
         Ok(sequence)
     }
 
     /// Fetch detailed fee data for a specific ledger
-    async fn fetch_ledger_fee_data(&self, sequence: u64) -> Result<LedgerFeeSample, FeeCollectorError> {
+    async fn fetch_ledger_fee_data(
+        &self,
+        sequence: u64,
+    ) -> Result<LedgerFeeSample, FeeCollectorError> {
         let providers = self.registry.healthy_providers().await;
         if providers.is_empty() {
             return Err(FeeCollectorError::NoHealthyProviders);
         }
 
-        let provider = providers[0];
+        let provider = &providers[0];
 
         // Try getLedgers endpoint first (if available)
         // Fallback to parsing from getTransactions if needed
@@ -248,7 +252,9 @@ impl FeeCollector {
             .ok_or_else(|| FeeCollectorError::ParseError("Missing ledgers array".to_string()))?;
 
         if ledgers.is_empty() {
-            return Err(FeeCollectorError::ParseError("No ledger data returned".to_string()));
+            return Err(FeeCollectorError::ParseError(
+                "No ledger data returned".to_string(),
+            ));
         }
 
         let ledger = &ledgers[0];
@@ -294,9 +300,9 @@ impl FeeCollector {
             .await
             .map_err(|e| FeeCollectorError::ParseError(e.to_string()))?;
 
-        let transactions = json["result"]["transactions"]
-            .as_array()
-            .ok_or_else(|| FeeCollectorError::ParseError("Missing transactions array".to_string()))?;
+        let transactions = json["result"]["transactions"].as_array().ok_or_else(|| {
+            FeeCollectorError::ParseError("Missing transactions array".to_string())
+        })?;
 
         // Calculate fee statistics from transactions
         let mut total_fee_charged: i64 = 0;
@@ -318,11 +324,6 @@ impl FeeCollector {
         } else {
             100 // Default base fee
         };
-
-        // Get close time from response
-        let close_time = json["result"]["latestLedger"]
-            .as_u64()
-            .unwrap_or(sequence);
 
         Ok(LedgerFeeSample {
             ledger_sequence: sequence as i64,
@@ -352,22 +353,15 @@ impl FeeCollector {
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(0);
 
-        let tx_count = ledger["header"]["txSetSize"]
-            .as_u64()
-            .unwrap_or(0) as i32;
+        let tx_count = ledger["header"]["txSetSize"].as_u64().unwrap_or(0) as i32;
 
         // Parse close time
-        let close_time_str = ledger["header"]["closeTime"]
-            .as_str()
-            .unwrap_or("0");
-        
-        let close_timestamp = close_time_str
-            .parse::<i64>()
-            .unwrap_or(0);
+        let close_time_str = ledger["header"]["closeTime"].as_str().unwrap_or("0");
+
+        let close_timestamp = close_time_str.parse::<i64>().unwrap_or(0);
 
         let ledger_close_time = if close_timestamp > 0 {
-            chrono::DateTime::from_timestamp(close_timestamp, 0)
-                .unwrap_or_else(|| Utc::now())
+            chrono::DateTime::from_timestamp(close_timestamp, 0).unwrap_or_else(Utc::now)
         } else {
             Utc::now()
         };
@@ -386,7 +380,8 @@ impl FeeCollector {
 
     /// Get the last collected sequence
     pub fn get_last_collected(&self) -> u64 {
-        self.last_collected_sequence.load(std::sync::atomic::Ordering::Relaxed)
+        self.last_collected_sequence
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 

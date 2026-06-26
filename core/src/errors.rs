@@ -5,6 +5,7 @@ use axum::{
 };
 use serde::Serialize;
 use thiserror::Error;
+use utoipa::ToSchema;
 
 use crate::simulation::SimulationError;
 
@@ -24,9 +25,11 @@ pub enum AppError {
     Unauthorized(String),
 }
 
-#[derive(Serialize)]
-struct ErrorResponse {
+#[derive(Serialize, ToSchema)]
+pub struct ErrorResponse {
+    /// Error type identifier (e.g., "NOT_FOUND", "BAD_REQUEST")
     error: String,
+    /// Human-readable error message
     message: String,
 }
 
@@ -95,6 +98,22 @@ impl From<SimulationError> for AppError {
             SimulationError::Io(e) => AppError::Internal(format!("IO error: {}", e)),
             SimulationError::SerializationError(e) => {
                 AppError::Internal(format!("Serialization error: {}", e))
+            }
+
+            // Local-runner errors. `LocalUnavailable` should normally be
+            // handled upstream by falling back to RPC, so if it reaches the
+            // HTTP boundary treat it as an internal misconfiguration.
+            SimulationError::LocalUnavailable => AppError::Internal(
+                "Local WASM execution unavailable and no RPC fallback succeeded".to_string(),
+            ),
+            SimulationError::ExecutionFailed(msg) => {
+                AppError::BadRequest(format!("Contract execution failed: {}", msg))
+            }
+            SimulationError::InsufficientConsensusProviders(msg) => {
+                AppError::Internal(format!("Insufficient consensus providers: {}", msg))
+            }
+            SimulationError::ConsensusMismatch(msg) => {
+                AppError::Internal(format!("Consensus mismatch: {}", msg))
             }
         }
     }

@@ -1,5 +1,13 @@
 export type SorobanType = 'address' | 'u32' | 'i128' | 'u128' | 'string' | 'symbol' | 'bool' | 'struct' | 'enum';
 
+export interface SorobanResources {
+  cpu_instructions: number;
+  ram_bytes: number;
+  ledger_read_bytes: number;
+  ledger_write_bytes: number;
+  transaction_size_bytes: number;
+}
+
 export interface ContractFunction {
   name: string;
   inputs: ContractInput[];
@@ -13,12 +21,32 @@ export interface ContractInput {
   optional?: boolean;
 }
 
+export interface ResourceCost {
+  fee?: string;
+  cost_stroops?: number;
+  cpu_instructions: number;
+  ram_bytes: number;
+  ledger_read_bytes: number;
+  ledger_write_bytes: number;
+  transaction_size_bytes: number;
+  testnet_averages?: TestnetAverages;
+}
+
+export interface TestnetAverages {
+  cpu_instructions: number;
+  ram_bytes: number;
+  ledger_read_bytes: number;
+  ledger_write_bytes: number;
+  transaction_size_bytes: number;
+}
+
 export interface InvocationResult {
   id: string;
   functionName: string;
   inputs: Record<string, any>;
   result?: any;
   error?: string;
+  errorType?: string; // Error type from backend (e.g., BAD_REQUEST, INTERNAL_SERVER_ERROR)
   resourceCost?: {
     fee?: string;
     cpu_instructions: number;
@@ -27,6 +55,11 @@ export interface InvocationResult {
     ledger_write_bytes: number;
     transaction_size_bytes: number;
   };
+  /** Primary `/analyze` response payload for the latest invocation. */
+  analysisReport?: ResourceReport;
+  /** Backward-compatible alias for older stored history entries. */
+  resourceCost?: ResourceReport;
+  resourceCost?: ResourceCost;
   callGraph?: CallGraph;
   callGraphMermaid?: string;
   stateSnapshot?: SimulationStateSnapshot;
@@ -44,11 +77,62 @@ export interface CallGraph {
   root: CallNode;
 }
 
+export interface StateDependencyReport {
+  key: string;
+  source: 'Live' | 'Injected';
+}
+
+export interface TtlEntryApiReport {
+  key: string;
+  live_until_ledger: number;
+  remaining_ledgers: number;
+}
+
+export interface ExtendTtlSuggestionApi {
+  key: string;
+  current_live_until_ledger: number;
+  remaining_ledgers: number;
+  extend_to_ledger: number;
+  ledgers_to_extend_by: number;
+  suggested_operation: string;
+}
+
+export interface TtlAnalysisApiReport {
+  current_ledger: number;
+  touched_entries: TtlEntryApiReport[];
+  extend_ttl_suggestions: ExtendTtlSuggestionApi[];
+}
+
+export interface InsightEntry {
+  severity: string;
+  rule: string;
+  message: string;
+  suggested_fix: string;
+}
+
+export interface NutritionReport {
+  efficiency_score: number;
+  insights: InsightEntry[];
+}
+
 export interface SimulationStateSnapshot {
   ledger_entries: Record<string, string>;
   ttl_entries: Record<string, number>;
   latest_ledger: number;
 }
+
+export interface ResourceReport extends SorobanResources {
+  cost_stroops: number;
+  state_dependency: StateDependencyReport[] | null;
+  ttl_analysis: TtlAnalysisApiReport | null;
+  nutrition: NutritionReport;
+  call_graph: CallGraph | null;
+  call_graph_mermaid: string | null;
+  state_snapshot: SimulationStateSnapshot | null;
+  protocol_version: number;
+}
+
+export type AnalyzeResponse = ResourceReport;
 
 // Mock contract functions for demo
 export const MOCK_CONTRACT_FUNCTIONS: ContractFunction[] = [

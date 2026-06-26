@@ -49,7 +49,7 @@ export function ResultViewer({ result }: ResultViewerProps) {
         border: `1px solid #30363d`,
       }}
     >
-      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h3
             style={{
@@ -91,18 +91,67 @@ export function ResultViewer({ result }: ResultViewerProps) {
         <div
           style={{
             backgroundColor: '#0d1117',
-            padding: '12px',
+            padding: '16px',
             borderRadius: '6px',
             marginBottom: '12px',
             fontSize: '13px',
-            color: '#fb8500',
-            fontFamily: 'monospace',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-all',
-            border: '1px solid #30363d',
+            border: '1px solid #fb8500',
           }}
         >
-          {result.error}
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ color: '#fb8500', fontWeight: '600', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              Error Details
+              {result.errorType && (
+                <span
+                  style={{
+                    fontSize: '11px',
+                    backgroundColor: '#2d1810',
+                    color: '#f0883e',
+                    padding: '2px 8px',
+                    borderRadius: '3px',
+                    border: '1px solid #fb8500',
+                    fontFamily: 'monospace',
+                    fontWeight: 'normal',
+                  }}
+                >
+                  {result.errorType}
+                </span>
+              )}
+            </div>
+            <div
+              style={{
+                backgroundColor: '#1a1f26',
+                padding: '12px',
+                borderRadius: '4px',
+                color: '#f0883e',
+                fontFamily: 'monospace',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                border: '1px solid #30363d',
+              }}
+            >
+              {result.error}
+            </div>
+          </div>
+          <div style={{ fontSize: '12px', color: '#8b949e', lineHeight: 1.6 }}>
+            {result.errorType === 'NETWORK_ERROR' ? (
+              <>
+                ⚠️ The analyzer backend isn’t responding — it may have crashed or isn’t running.
+                <br />
+                Start it with <code style={{ color: '#00d9ff' }}>cargo run</code> (expected at{' '}
+                <code style={{ color: '#00d9ff' }}>localhost:8080</code>), then retry.
+              </>
+            ) : result.errorType === 'PARSE_ERROR' ? (
+              <>
+                ⚠️ The backend returned a malformed response — it may have crashed mid-analysis.
+                Check the analyzer logs, then retry.
+              </>
+            ) : result.errorType === 'INTERNAL_SERVER_ERROR' ? (
+              <>💡 The analyzer hit an internal error during simulation. Check the analyzer logs for the panic trace.</>
+            ) : (
+              <>💡 Tip: Check if the backend is running and all parameters are correct.</>
+            )}
+          </div>
         </div>
       ) : (
         result.result && (

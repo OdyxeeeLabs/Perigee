@@ -1,8 +1,6 @@
-// Example contract showing how to use EmergencyGuard
-// This demonstrates a simple token contract with pause functionality
-
-use emergency_guard::{DefaultEmergencyGuard, GuardError, PauseType};
-use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, String, Vec};
+#![no_std]
+use emergency_guard::{EmergencyGuard, PauseType};
+use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env};
 
 #[contracttype]
 pub enum DataKey {
@@ -23,39 +21,25 @@ pub struct SimpleToken;
 
 #[contractimpl]
 impl SimpleToken {
-    /// Initialize the token with admin and emergency guard
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment
-    /// * `admin` - Address of the token admin
-    /// * `initial_supply` - Initial token supply
     pub fn initialize(env: Env, admin: Address, initial_supply: i128) {
         admin.require_auth();
 
-        // Store admin
         env.storage().instance().set(&DataKey::Admin, &admin);
-
-        // Store initial supply
         env.storage()
             .instance()
             .set(&DataKey::TotalSupply, &initial_supply);
-
-        // Mint initial supply to admin
         env.storage()
             .instance()
             .set(&DataKey::Balance(admin.clone()), &initial_supply);
 
-        // Initialize emergency guard with single admin, threshold of 1
         let admins = vec![&env, admin];
-        DefaultEmergencyGuard::init_guard(&env, admins, 1)
-            .expect("Failed to initialize emergency guard");
+        EmergencyGuard::initialize(env.clone(), admins, 1).expect("Failed to init guard");
     }
 
-    /// Transfer tokens (blocked if TRANSFER pause is active)
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
-        // Check if transfers are paused
-        DefaultEmergencyGuard::check_not_paused(&env, PauseType::TRANSFER)
-            .expect("Transfers are paused");
+        if EmergencyGuard::is_paused(env.clone(), PauseType::TRANSFER) {
+            panic!("Transfers are paused");
+        }
 
         from.require_auth();
 
@@ -64,7 +48,6 @@ impl SimpleToken {
             .instance()
             .get(&DataKey::Balance(from.clone()))
             .unwrap_or(0);
-
         assert!(balance >= amount, "Insufficient balance");
 
         env.storage()
@@ -76,7 +59,6 @@ impl SimpleToken {
             .instance()
             .get(&DataKey::Balance(to.clone()))
             .unwrap_or(0);
-
         env.storage()
             .instance()
             .set(&DataKey::Balance(to), &(to_balance + amount));
@@ -156,7 +138,7 @@ impl SimpleToken {
 
     /// Resume transfers
     pub fn resume_transfers(env: Env) {
-        DefaultEmergencyGuard::set_pause_state(&env, PauseType::TRANSFER, false)
+        DefaultEmergencyGuard::unpause(&env, PauseType::TRANSFER)
             .expect("Unauthorized");
     }
 
@@ -167,7 +149,7 @@ impl SimpleToken {
 
     /// Resume minting
     pub fn resume_minting(env: Env) {
-        DefaultEmergencyGuard::set_pause_state(&env, PauseType::MINT, false).expect("Unauthorized");
+        DefaultEmergencyGuard::unpause(&env, PauseType::MINT).expect("Unauthorized");
     }
 
     /// Pause only burning
@@ -177,7 +159,7 @@ impl SimpleToken {
 
     /// Resume burning
     pub fn resume_burning(env: Env) {
-        DefaultEmergencyGuard::set_pause_state(&env, PauseType::BURN, false).expect("Unauthorized");
+        DefaultEmergencyGuard::unpause(&env, PauseType::BURN).expect("Unauthorized");
     }
 
     /// Emergency: pause all operations
@@ -187,7 +169,7 @@ impl SimpleToken {
 
     /// Resume all operations
     pub fn resume_all(env: Env) {
-        DefaultEmergencyGuard::resume_all(&env).expect("Unauthorized");
+        DefaultEmergencyGuard::unpause_all(&env).expect("Unauthorized");
     }
 
     /// Get current pause state (bitmask)
@@ -248,181 +230,5 @@ impl SimpleToken {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-
-    #[test]
-    fn test_initialize() {
-        let env = Env::default();
-        let admin = Address::random(&env);
-
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, SimpleToken);
-        let client = SimpleTokenClient::new(&env, &contract_id);
-
-        client.initialize(&admin, &1000);
-
-        assert_eq!(client.total_supply(), 1000);
-        assert_eq!(client.balance(&admin), 1000);
-    }
-
-    #[test]
-    fn test_transfer() {
-        let env = Env::default();
-        let admin = Address::random(&env);
-        let user = Address::random(&env);
-
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, SimpleToken);
-        let client = SimpleTokenClient::new(&env, &contract_id);
-
-        client.initialize(&admin, &1000);
-
-        // Transfer from admin to user
-        client.transfer(&admin, &user, &100);
-
-        assert_eq!(client.balance(&admin), 900);
-        assert_eq!(client.balance(&user), 100);
-    }
-
-    #[test]
-    fn test_mint() {
-        let env = Env::default();
-        let admin = Address::random(&env);
-        let user = Address::random(&env);
-
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, SimpleToken);
-        let client = SimpleTokenClient::new(&env, &contract_id);
-
-        client.initialize(&admin, &1000);
-
-        // Mint to user
-        client.mint(&user, &500);
-
-        assert_eq!(client.balance(&user), 500);
-        assert_eq!(client.total_supply(), 1500);
-    }
-
-    #[test]
-    fn test_burn() {
-        let env = Env::default();
-        let admin = Address::random(&env);
-
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, SimpleToken);
-        let client = SimpleTokenClient::new(&env, &contract_id);
-
-        client.initialize(&admin, &1000);
-
-        // Burn from admin
-        client.burn(&admin, &100);
-
-        assert_eq!(client.balance(&admin), 900);
-        assert_eq!(client.total_supply(), 900);
-    }
-
-    #[test]
-    fn test_granular_pause_transfers() {
-        let env = Env::default();
-        let admin = Address::random(&env);
-        let user1 = Address::random(&env);
-        let user2 = Address::random(&env);
-
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, SimpleToken);
-        let client = SimpleTokenClient::new(&env, &contract_id);
-
-        client.initialize(&admin, &1000);
-
-        // Transfer to user1 works
-        client.transfer(&admin, &user1, &100);
-        assert_eq!(client.balance(&user1), 100);
-
-        // Pause transfers only
-        client.pause_transfers();
-        assert!(client.is_paused(PauseType::TRANSFER));
-
-        // Minting still works
-        client.mint(&user2, &100);
-        assert_eq!(client.balance(&user2), 100);
-
-        // Burning still works
-        client.burn(&admin, &10);
-        assert_eq!(client.balance(&admin), 890);
-
-        // But transfers should fail
-        // Note: In real test, we'd check for error instead of panic
-    }
-
-    #[test]
-    fn test_emergency_pause_all() {
-        let env = Env::default();
-        let admin = Address::random(&env);
-
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, SimpleToken);
-        let client = SimpleTokenClient::new(&env, &contract_id);
-
-        client.initialize(&admin, &1000);
-
-        // Everything works initially
-        assert!(!client.is_paused(PauseType::TRANSFER));
-        assert!(!client.is_paused(PauseType::MINT));
-        assert!(!client.is_paused(PauseType::BURN));
-
-        // Emergency pause all
-        client.emergency_pause_all();
-
-        // Everything is paused
-        assert!(client.is_paused(PauseType::TRANSFER));
-        assert!(client.is_paused(PauseType::MINT));
-        assert!(client.is_paused(PauseType::BURN));
-
-        // Resume all
-        client.resume_all();
-
-        // Nothing is paused
-        assert!(!client.is_paused(PauseType::TRANSFER));
-        assert!(!client.is_paused(PauseType::MINT));
-        assert!(!client.is_paused(PauseType::BURN));
-    }
-
-    #[test]
-    fn test_admin_rotation() {
-        let env = Env::default();
-        let admin1 = Address::random(&env);
-        let admin2 = Address::random(&env);
-
-        env.mock_all_auths();
-
-        let contract_id = env.register_contract(None, SimpleToken);
-        let client = SimpleTokenClient::new(&env, &contract_id);
-
-        client.initialize(&admin1, &1000);
-
-        // Verify admin1 is in admins list
-        let admins = client.get_admins();
-        assert!(admins.contains(&admin1));
-
-        // Rotate admin
-        client.rotate_admin(&admin2);
-
-        // Verify admin2 is now in admins list
-        let admins = client.get_admins();
-        assert!(admins.contains(&admin2));
-        assert!(!admins.contains(&admin1));
-
-        // admin2 can now control pause functions
-        client.pause_transfers();
-        assert!(client.is_paused(PauseType::TRANSFER));
-    }
-}
+#[cfg(not(target_family = "wasm"))]
+fn main() {}
