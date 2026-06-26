@@ -3,6 +3,7 @@ use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Str
 
 pub use soroscope_error_codes::ContractError;
 use soroscope_math::Fixed;
+use emergency_guard::{DefaultEmergencyGuard, EmergencyGuardTrait, PauseType};
 
 pub const SCALE: i128 = 1_000_000_000_000_000_000; // 18 decimals
 
@@ -369,6 +370,9 @@ impl StakingRewards {
         if config.is_paused {
             return Err(ContractError::Paused);
         }
+
+        DefaultEmergencyGuard::check_not_paused(&e, PauseType::CLAIM_REWARDS)
+            .map_err(|_| ContractError::Paused)?;
 
         user.require_auth();
 
