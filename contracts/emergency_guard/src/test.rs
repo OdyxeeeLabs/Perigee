@@ -196,7 +196,7 @@ fn test_add_admin_fails_with_non_admin_approvers() {
     let outsider = Address::random(&env);
     let approvers = vec![&env, outsider];
     let result = client.try_add_admin(&approvers, &new_admin);
-    assert_eq!(result, Err(Ok(GuardError::InsufficientSignatures)));
+    assert_eq!(result, Err(Ok(GuardError::Unauthorized)));
 }
 
 #[test]
@@ -271,12 +271,12 @@ fn test_remove_admin_fails_when_would_drop_below_threshold() {
 }
 
 #[test]
-fn test_remove_admin_fails_with_non_admin_approvers() {
+fn test_unauthorized_admin_removal() {
     let (env, client, admins) = setup(1, 2);
     let outsider = Address::random(&env);
     let approvers = vec![&env, outsider];
     let result = client.try_remove_admin(&approvers, &admins[1]);
-    assert_eq!(result, Err(Ok(GuardError::InsufficientSignatures)));
+    assert_eq!(result, Err(Ok(GuardError::Unauthorized)));
 }
 
 // ─── Full rotation cycle ─────────────────────────────────────────────────────

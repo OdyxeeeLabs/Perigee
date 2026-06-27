@@ -395,16 +395,24 @@ impl EmergencyGuard {
         }
 
         let mut valid = 0u32;
-        let mut seen = Vec::new(env);
-        for addr in approvers.iter() {
-            if seen.iter().any(|a| a == addr) {
+        let len = approvers.len();
+        for i in 0..len {
+            let addr = approvers.get(i).unwrap();
+            if !Self::is_admin_internal(env, &addr) {
+                return Err(GuardError::Unauthorized);
+            }
+            let mut is_duplicate = false;
+            for j in 0..i {
+                if addr == approvers.get(j).unwrap() {
+                    is_duplicate = true;
+                    break;
+                }
+            }
+            if is_duplicate {
                 continue;
             }
-            seen.push_back(addr.clone());
-            if Self::is_admin_internal(env, &addr) {
-                addr.require_auth();
-                valid += 1;
-            }
+            addr.require_auth();
+            valid += 1;
         }
 
         if valid < threshold {
