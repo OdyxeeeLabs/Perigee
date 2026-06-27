@@ -1129,4 +1129,405 @@ fn test_complex_multisig_scenario() {
     assert_eq!(final_config.threshold, 3);
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Issue #453 — Multi-sig threshold tests for the factory contract
+//
+// These tests exercise every threshold boundary for admin actions submitted
+// through the factory's propose → approve → execute multi-sig flow.
+// Each scenario covers one of the four acceptance-criteria cases:
+//   1. Too few signers          → execute panics with "Insufficient approvals"
+//   2. Exactly threshold met    → execute succeeds
+//   3. Exactly one below threshold → execute panics with "Insufficient approvals"
+//   4. More than threshold      → execute succeeds
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Helper: register a fresh factory and initialise a K-of-N multi-sig config.
+/// Returns (client, [admin_0, admin_1, ..., admin_{n-1}]).
+fn setup_multisig(
+    env: &Env,
+    n: usize,
+    threshold: u32,
+) -> (LiquidityPoolFactoryClient<'_>, soroban_sdk::Vec<Address>) {
+    env.mock_all_auths();
+    let factory_id = env.register(LiquidityPoolFactory, ());
+    let client = LiquidityPoolFactoryClient::new(env, &factory_id);
+
+    let mut admins_vec = soroban_sdk::Vec::new(env);
+    for _ in 0..n {
+        admins_vec.push_back(Address::generate(env));
+    }
+
+    client.init_multisig(&admins_vec, &threshold);
+    (client, admins_vec)
+}
+
+/// Approve an action with the first `count` admins from the list,
+/// skipping the proposer (index 0) who already counts as approval 1.
+fn approve_n(
+    env: &Env,
+    client: &LiquidityPoolFactoryClient<'_>,
+    admins: &soroban_sdk::Vec<Address>,
+    action_id: u32,
+    extra_approvals: u32,
+) {
+    for i in 1..=(extra_approvals as usize) {
+        client.approve_admin_action(&admins.get(i as u32).unwrap(), &action_id);
+    }
+}
+
+// ── 1. Too few signers → should fail ─────────────────────────────────────────
+
+/// 2-of-3: only the proposer approves (1 approval) — execute must fail.
+#[test]
+#[should_panic(expected = "Insufficient approvals")]
+fn test_multisig_threshold_too_few_signers_2of3() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 3, 2);
+
+    let new_admin = Address::generate(&env);
+    let action = AdminAction::AddAdmin(new_admin);
+    // propose counts as 1 approval; threshold is 2 → still 1 short
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+
+    client.execute_admin_action(&action_id); // must panic
+}
+
+/// 3-of-4: only 2 approvals collected — execute must fail.
+#[test]
+#[should_panic(expected = "Insufficient approvals")]
+fn test_multisig_threshold_too_few_signers_3of4() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 4, 3);
+
+    let new_admin = Address::generate(&env);
+    let action = AdminAction::AddAdmin(new_admin);
+    // proposer = 1 approval; add 1 more = 2 total, need 3
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+    client.approve_admin_action(&admins.get(1).unwrap(), &action_id);
+
+    client.execute_admin_action(&action_id); // must panic
+}
+
+// ── 2. Exact threshold met → should succeed ──────────────────────────────────
+
+/// 2-of-3: exactly 2 approvals (proposer + 1 more) — execute must succeed.
+#[test]
+fn test_multisig_threshold_exact_2of3_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 3, 2);
+
+    let new_admin = Address::generate(&env);
+    let action = AdminAction::AddAdmin(new_admin.clone());
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+    // proposer = 1; add 1 more to reach threshold of 2
+    approve_n(&env, &client, &admins, action_id, 1);
+    client.execute_admin_action(&action_id);
+
+    assert!(client.is_admin(&new_admin), "new admin must be present after exact-threshold approval");
+}
+
+/// 3-of-5: exactly 3 approvals — execute must succeed.
+#[test]
+fn test_multisig_threshold_exact_3of5_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 5, 3);
+
+    let new_admin = Address::generate(&env);
+    let action = AdminAction::AddAdmin(new_admin.clone());
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+    // proposer = 1; add 2 more to reach threshold of 3
+    approve_n(&env, &client, &admins, action_id, 2);
+    client.execute_admin_action(&action_id);
+
+    assert!(client.is_admin(&new_admin), "new admin must be present after exact-threshold approval");
+}
+
+/// 1-of-3: threshold is 1, proposer alone is enough — execute must succeed immediately.
+#[test]
+fn test_multisig_threshold_exact_1of3_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 3, 1);
+
+    let new_admin = Address::generate(&env);
+    let action = AdminAction::AddAdmin(new_admin.clone());
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+    // no extra approvals needed
+    client.execute_admin_action(&action_id);
+
+    assert!(client.is_admin(&new_admin));
+}
+
+// ── 3. Exactly one below threshold → should fail ─────────────────────────────
+
+/// 3-of-3: only 2 approvals (threshold − 1) — execute must fail.
+#[test]
+#[should_panic(expected = "Insufficient approvals")]
+fn test_multisig_threshold_one_below_3of3() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 3, 3);
+
+    let new_admin = Address::generate(&env);
+    let action = AdminAction::AddAdmin(new_admin);
+    // proposer = 1, add 1 more = 2 total; need 3
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+    client.approve_admin_action(&admins.get(1).unwrap(), &action_id);
+
+    client.execute_admin_action(&action_id); // must panic
+}
+
+/// 4-of-5: only 3 approvals (threshold − 1) — execute must fail.
+#[test]
+#[should_panic(expected = "Insufficient approvals")]
+fn test_multisig_threshold_one_below_4of5() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 5, 4);
+
+    let new_admin = Address::generate(&env);
+    let action = AdminAction::AddAdmin(new_admin);
+    // proposer = 1, add 2 more = 3 total; need 4
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+    approve_n(&env, &client, &admins, action_id, 2);
+
+    client.execute_admin_action(&action_id); // must panic
+}
+
+// ── 4. More than threshold → should succeed ───────────────────────────────────
+
+/// 2-of-4: all 4 admins approve — execute must succeed even with extra approvals.
+#[test]
+fn test_multisig_threshold_above_2of4_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 4, 2);
+
+    let new_admin = Address::generate(&env);
+    let action = AdminAction::AddAdmin(new_admin.clone());
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+    // add 3 more approvals (total = 4, threshold = 2)
+    approve_n(&env, &client, &admins, action_id, 3);
+    client.execute_admin_action(&action_id);
+
+    assert!(client.is_admin(&new_admin), "new admin must be present after above-threshold approval");
+}
+
+/// 1-of-3: all 3 approve — execute must succeed.
+#[test]
+fn test_multisig_threshold_above_1of3_all_approve_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 3, 1);
+
+    let new_admin = Address::generate(&env);
+    let action = AdminAction::AddAdmin(new_admin.clone());
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+    // add both remaining admins even though only 1 is needed
+    approve_n(&env, &client, &admins, action_id, 2);
+    client.execute_admin_action(&action_id);
+
+    assert!(client.is_admin(&new_admin));
+}
+
+// ── 5. Threshold edge cases for remove_admin and set_threshold ───────────────
+
+/// remove_admin: 2-of-3, only 1 approval → should fail.
+#[test]
+#[should_panic(expected = "Insufficient approvals")]
+fn test_multisig_remove_admin_too_few_approvals() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 3, 2);
+
+    let action = AdminAction::RemoveAdmin(admins.get(2).unwrap());
+    // proposer only = 1 approval; need 2
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+
+    client.execute_admin_action(&action_id); // must panic
+}
+
+/// remove_admin: 2-of-3, exactly 2 approvals → should succeed.
+#[test]
+fn test_multisig_remove_admin_exact_threshold_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 3, 2);
+
+    let target = admins.get(2).unwrap();
+    let action = AdminAction::RemoveAdmin(target.clone());
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+    client.approve_admin_action(&admins.get(1).unwrap(), &action_id);
+    client.execute_admin_action(&action_id);
+
+    assert!(!client.is_admin(&target), "removed admin must not appear in admin list");
+    assert_eq!(client.get_multisig_config().admins.len(), 2);
+}
+
+/// set_threshold: 2-of-3, only 1 approval → should fail.
+#[test]
+#[should_panic(expected = "Insufficient approvals")]
+fn test_multisig_set_threshold_too_few_approvals() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 3, 2);
+
+    let action = AdminAction::SetThreshold(1);
+    // proposer only = 1 approval; need 2
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+
+    client.execute_admin_action(&action_id); // must panic
+}
+
+/// set_threshold: 2-of-3, exactly 2 approvals → should succeed and new threshold is stored.
+#[test]
+fn test_multisig_set_threshold_exact_threshold_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_multisig(&env, 3, 2);
+
+    let action = AdminAction::SetThreshold(3);
+    let action_id = client.propose_admin_action(&admins.get(0).unwrap(), &action);
+    client.approve_admin_action(&admins.get(1).unwrap(), &action_id);
+    client.execute_admin_action(&action_id);
+
+    assert_eq!(client.get_multisig_config().threshold, 3, "threshold must be updated to 3");
+}
+
+// ── 6. Guard-based multi-sig threshold tests (EmergencyGuard path) ────────────
+//
+// The factory also exposes EmergencyGuard through initialize_guard /
+// add_guard_admin / remove_guard_admin / emergency_guard_pause / resume_guard.
+// These tests verify threshold enforcement on that path.
+
+fn setup_guard_multisig(
+    env: &Env,
+    n: usize,
+    threshold: u32,
+) -> (LiquidityPoolFactoryClient<'_>, soroban_sdk::Vec<Address>) {
+    env.mock_all_auths();
+    let factory_id = env.register(LiquidityPoolFactory, ());
+    let client = LiquidityPoolFactoryClient::new(env, &factory_id);
+
+    let mut admins_vec = soroban_sdk::Vec::new(env);
+    for _ in 0..n {
+        admins_vec.push_back(Address::generate(env));
+    }
+
+    client.initialize_guard(&admins_vec, &threshold);
+    (client, admins_vec)
+}
+
+/// Guard add_admin: 2-of-3, only 1 approver → InsufficientSignatures.
+#[test]
+fn test_guard_multisig_add_admin_too_few_approvers() {
+    let env = Env::default();
+    let (client, admins) = setup_guard_multisig(&env, 3, 2);
+
+    let new_admin = Address::generate(&env);
+    let single = soroban_sdk::vec![&env, admins.get(0).unwrap()];
+
+    let result = client.try_add_guard_admin(&single, &new_admin);
+    assert!(result.is_err(), "add_guard_admin must fail with only 1-of-2 required approvers");
+}
+
+/// Guard add_admin: 2-of-3, exactly 2 approvers → success.
+#[test]
+fn test_guard_multisig_add_admin_exact_threshold_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_guard_multisig(&env, 3, 2);
+
+    let new_admin = Address::generate(&env);
+    let two_approvers = soroban_sdk::vec![
+        &env,
+        admins.get(0).unwrap(),
+        admins.get(1).unwrap(),
+    ];
+
+    client.add_guard_admin(&two_approvers, &new_admin);
+    assert!(client.is_admin(&new_admin), "new admin must be present after exact-threshold guard approval");
+}
+
+/// Guard add_admin: 2-of-3, all 3 approvers (above threshold) → success.
+#[test]
+fn test_guard_multisig_add_admin_above_threshold_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_guard_multisig(&env, 3, 2);
+
+    let new_admin = Address::generate(&env);
+    let all_approvers = soroban_sdk::vec![
+        &env,
+        admins.get(0).unwrap(),
+        admins.get(1).unwrap(),
+        admins.get(2).unwrap(),
+    ];
+
+    client.add_guard_admin(&all_approvers, &new_admin);
+    assert!(client.is_admin(&new_admin));
+}
+
+/// Guard emergency_guard_pause: 3-of-3, only 2 approvers → InsufficientSignatures.
+#[test]
+fn test_guard_multisig_emergency_pause_one_below_threshold() {
+    let env = Env::default();
+    let (client, admins) = setup_guard_multisig(&env, 3, 3);
+
+    let two_approvers = soroban_sdk::vec![
+        &env,
+        admins.get(0).unwrap(),
+        admins.get(1).unwrap(),
+    ];
+
+    let result = client.try_emergency_guard_pause(&two_approvers);
+    assert!(result.is_err(), "emergency pause must fail when 1 below threshold (2 of 3 required)");
+}
+
+/// Guard emergency_guard_pause: 3-of-3, all 3 approvers → success.
+#[test]
+fn test_guard_multisig_emergency_pause_exact_threshold_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_guard_multisig(&env, 3, 3);
+
+    let all_approvers = soroban_sdk::vec![
+        &env,
+        admins.get(0).unwrap(),
+        admins.get(1).unwrap(),
+        admins.get(2).unwrap(),
+    ];
+
+    client.emergency_guard_pause(&all_approvers);
+    assert!(
+        client.is_guard_paused(&emergency_guard::PauseType::MINT),
+        "all operations must be paused after emergency pause"
+    );
+}
+
+/// Guard resume: 2-of-3, only 1 approver → InsufficientSignatures.
+#[test]
+fn test_guard_multisig_resume_too_few_approvers() {
+    let env = Env::default();
+    let (client, admins) = setup_guard_multisig(&env, 3, 2);
+
+    // First pause everything with valid quorum
+    let two = soroban_sdk::vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.emergency_guard_pause(&two);
+
+    // Attempt resume with only 1 approver
+    let one = soroban_sdk::vec![&env, admins.get(0).unwrap()];
+    let result = client.try_resume_guard(&one);
+    assert!(result.is_err(), "resume must fail when below threshold");
+    assert!(
+        client.is_guard_paused(&emergency_guard::PauseType::MINT),
+        "contract must remain paused after failed resume"
+    );
+}
+
+/// Guard resume: 2-of-3, exactly 2 approvers → success.
+#[test]
+fn test_guard_multisig_resume_exact_threshold_succeeds() {
+    let env = Env::default();
+    let (client, admins) = setup_guard_multisig(&env, 3, 2);
+
+    let two = soroban_sdk::vec![&env, admins.get(0).unwrap(), admins.get(1).unwrap()];
+    client.emergency_guard_pause(&two);
+    assert!(client.is_guard_paused(&emergency_guard::PauseType::MINT));
+
+    client.resume_guard(&two);
+    assert!(
+        !client.is_guard_paused(&emergency_guard::PauseType::MINT),
+        "all operations must be unpaused after successful resume"
+    );
+}
+
 }
