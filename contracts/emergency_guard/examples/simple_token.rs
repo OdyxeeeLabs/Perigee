@@ -138,8 +138,7 @@ impl SimpleToken {
 
     /// Resume transfers
     pub fn resume_transfers(env: Env) {
-        DefaultEmergencyGuard::unpause(&env, PauseType::TRANSFER)
-            .expect("Unauthorized");
+        DefaultEmergencyGuard::unpause(&env, PauseType::TRANSFER).expect("Unauthorized");
     }
 
     /// Pause only minting

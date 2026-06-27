@@ -253,8 +253,7 @@ impl StakingRewards {
         // (e.g. PauseType::CLAIM_REWARDS) can be toggled by the owner.
         // Threshold of 1 means the single owner can trigger any pause.
         let admins = soroban_sdk::vec![&e, config.owner.clone()];
-        EmergencyGuard::initialize(e, admins, 1)
-            .map_err(|_| ContractError::AlreadyInitialized)?;
+        EmergencyGuard::initialize(e, admins, 1).map_err(|_| ContractError::AlreadyInitialized)?;
 
         Ok(())
     }

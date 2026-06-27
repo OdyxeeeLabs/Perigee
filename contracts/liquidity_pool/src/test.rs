@@ -825,7 +825,10 @@ fn test_emergency_guard_trait_impl() {
 
     // Re-initialize guard with 3 admins and threshold=2 via add_admin calls.
     client.add_admin(&soroban_sdk::vec![&e, admin1.clone()], &admin2);
-    client.add_admin(&soroban_sdk::vec![&e, admin1.clone(), admin2.clone()], &admin3);
+    client.add_admin(
+        &soroban_sdk::vec![&e, admin1.clone(), admin2.clone()],
+        &admin3,
+    );
     // Lower threshold by rotating to a 3-admin setup — just verify via get_admins/threshold.
     assert!(client.get_guard_admins().len() >= 1);
 
@@ -844,7 +847,10 @@ fn test_emergency_guard_trait_impl() {
     assert_eq!(client.get_pause_state(), 0);
 
     // Add and remove admin3 (already added above, so remove it).
-    client.remove_admin(&soroban_sdk::vec![&e, admin1.clone(), admin2.clone()], &admin3);
+    client.remove_admin(
+        &soroban_sdk::vec![&e, admin1.clone(), admin2.clone()],
+        &admin3,
+    );
     assert!(!client.get_guard_admins().iter().any(|a| a == admin3));
 }
 
@@ -2066,4 +2072,3 @@ fn test_multiple_users_staking() {
     // User2 staked more, so should get more rewards (approximately 2x)
     assert!(rewards2 > rewards1);
 }
-

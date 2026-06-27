@@ -310,4 +310,3 @@ fn test_granular_claim_rewards_pause() {
     // Claim MUST fail with ContractError::Paused (error code 14).
     client.claim(&user);
 }
-

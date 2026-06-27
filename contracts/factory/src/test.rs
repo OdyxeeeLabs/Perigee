@@ -3,14 +3,14 @@ extern crate std;
 use super::*;
 
 use emergency_guard::{EmergencyGuardAction, EmergencyGuardEvent, PauseType};
+use soroban_sdk::{testutils::Address as _, vec, Address, BytesN, Env};
+use soroban_sdk::{testutils::Address as _, BytesN, Env};
+use soroban_sdk::{testutils::Address as _, Env, Vec};
 use soroban_sdk::{
     testutils::{Address as _, Events},
     vec, Address, BytesN, Env, String as SorobanString, TryIntoVal,
 };
 use std::vec::Vec;
-use soroban_sdk::{testutils::Address as _, vec, Address, BytesN, Env};
-use soroban_sdk::{testutils::Address as _, Env, Vec};
-use soroban_sdk::{testutils::Address as _, BytesN, Env};
 
 // Issue #310: Import the compiled Liquidity Pool WASM so integration tests deploy
 // the real contract instead of relying on a placeholder zero-hash.
@@ -21,8 +21,7 @@ mod liquidity_pool {
 }
 
 fn pool_wasm_hash(env: &Env) -> BytesN<32> {
-    env.deployer()
-        .upload_contract_wasm(liquidity_pool::WASM)
+    env.deployer().upload_contract_wasm(liquidity_pool::WASM)
 }
 
 #[test]
@@ -87,7 +86,10 @@ fn test_guard_admin_threshold_checks() {
     );
 
     let full_approvals = vec![&env, admin1.clone(), admin2.clone()];
-    assert_eq!(factory_client.add_admin(&full_approvals, &new_admin), Ok(()));
+    assert_eq!(
+        factory_client.add_admin(&full_approvals, &new_admin),
+        Ok(())
+    );
     assert!(factory_client.is_admin(&new_admin));
 
     assert_eq!(
@@ -95,7 +97,10 @@ fn test_guard_admin_threshold_checks() {
         Err(GuardError::InsufficientSignatures)
     );
 
-    assert_eq!(factory_client.remove_admin(&full_approvals, &new_admin), Ok(()));
+    assert_eq!(
+        factory_client.remove_admin(&full_approvals, &new_admin),
+        Ok(())
+    );
     assert!(!factory_client.is_admin(&new_admin));
 }
 
@@ -230,7 +235,9 @@ fn test_pause_create_pair() {
     assert_eq!(result, Err(Error::Paused));
 
     factory_client.set_paused(&admin, &false).unwrap();
-    let created = factory_client.create_pair(&token_a, &token_b, &pool_hash).unwrap();
+    let created = factory_client
+        .create_pair(&token_a, &token_b, &pool_hash)
+        .unwrap();
     assert!(created != factory_id);
 }
 
@@ -489,8 +496,7 @@ fn test_factory_paused_creation() {
     assert!(!factory_client.is_paused(&create_pair_op));
 
     // Pause create_pair
-    factory_client
-        .set_operation_paused(&admin, &create_pair_op, &true);
+    factory_client.set_operation_paused(&admin, &create_pair_op, &true);
     assert!(factory_client.is_paused(&create_pair_op));
 
     // Setup Tokens & WASM
@@ -511,133 +517,130 @@ fn test_factory_paused_creation() {
 
 #[test]
 fn test_factory_other_operation_independent() {
-// ==================== MULTI-SIG ADMIN TESTS ====================
+    // ==================== MULTI-SIG ADMIN TESTS ====================
 
-#[test]
-fn test_multisig_initialization() {
-    let env = Env::default();
-    env.mock_all_auths();
+    #[test]
+    fn test_multisig_initialization() {
+        let env = Env::default();
+        env.mock_all_auths();
 
-    let factory_id = env.register(LiquidityPoolFactory, ());
-    let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
+        let factory_id = env.register(LiquidityPoolFactory, ());
+        let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
 
-    let admin = Address::generate(&env);
-    factory_client.initialize(&admin);
+        let admin = Address::generate(&env);
+        factory_client.initialize(&admin);
 
-    // Pause a different operation (e.g. SWAP = 1 << 0)
-    let swap_op = PauseType::SWAP;
-    let create_pair_op = PauseType::CREATE_PAIR;
-    factory_client
-        .set_operation_paused(&admin, &swap_op, &true);
+        // Pause a different operation (e.g. SWAP = 1 << 0)
+        let swap_op = PauseType::SWAP;
+        let create_pair_op = PauseType::CREATE_PAIR;
+        factory_client.set_operation_paused(&admin, &swap_op, &true);
 
-    assert!(factory_client.is_paused(&swap_op));
-    assert!(!factory_client.is_paused(&create_pair_op));
+        assert!(factory_client.is_paused(&swap_op));
+        assert!(!factory_client.is_paused(&create_pair_op));
 
-    // Setup Tokens & WASM
-    let token_admin = Address::generate(&env);
-    let token_a = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let token_b = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let pool_hash = env
-        .deployer()
-        .upload_contract_wasm(liquidity_pool_contract::WASM);
+        // Setup Tokens & WASM
+        let token_admin = Address::generate(&env);
+        let token_a = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let token_b = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let pool_hash = env
+            .deployer()
+            .upload_contract_wasm(liquidity_pool_contract::WASM);
 
-    // Creating pair should still succeed because CREATE_PAIR is not paused
-    let _pool_address = factory_client.create_pair(&token_a, &token_b, &pool_hash);
+        // Creating pair should still succeed because CREATE_PAIR is not paused
+        let _pool_address = factory_client.create_pair(&token_a, &token_b, &pool_hash);
 
-    let stored_pair = factory_client.get_pair(&token_a, &token_b);
-    assert!(stored_pair.is_some());
-}
+        let stored_pair = factory_client.get_pair(&token_a, &token_b);
+        assert!(stored_pair.is_some());
+    }
 
-#[test]
-fn test_factory_unpause_resumes() {
-    let admin1 = Address::generate(&env);
-    let admin2 = Address::generate(&env);
-    let admin3 = Address::generate(&env);
+    #[test]
+    fn test_factory_unpause_resumes() {
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let admin3 = Address::generate(&env);
 
-    let admins = soroban_sdk::vec![&env, admin1.clone(), admin2.clone(), admin3.clone()];
+        let admins = soroban_sdk::vec![&env, admin1.clone(), admin2.clone(), admin3.clone()];
 
-    // Initialize with 2-of-3 multi-sig
-    factory_client.init_multisig(&admins, &2);
+        // Initialize with 2-of-3 multi-sig
+        factory_client.init_multisig(&admins, &2);
 
-    // Verify configuration
-    let config = factory_client.get_multisig_config();
-    assert_eq!(config.threshold, 2);
-    assert_eq!(config.admins.len(), 3);
-}
+        // Verify configuration
+        let config = factory_client.get_multisig_config();
+        assert_eq!(config.threshold, 2);
+        assert_eq!(config.admins.len(), 3);
+    }
 
-#[test]
-#[should_panic(expected = "MultiSig already initialized")]
-fn test_multisig_double_initialization_fails() {
-    let env = Env::default();
-    env.mock_all_auths();
+    #[test]
+    #[should_panic(expected = "MultiSig already initialized")]
+    fn test_multisig_double_initialization_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
 
-    let factory_id = env.register(LiquidityPoolFactory, ());
-    let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
+        let factory_id = env.register(LiquidityPoolFactory, ());
+        let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
 
-    let admin = Address::generate(&env);
-    factory_client.initialize(&admin);
+        let admin = Address::generate(&env);
+        factory_client.initialize(&admin);
 
-    let create_pair_op = PauseType::CREATE_PAIR;
-    factory_client
-        .set_operation_paused(&admin, &create_pair_op, &true);
-    assert!(factory_client.is_paused(&create_pair_op));
+        let create_pair_op = PauseType::CREATE_PAIR;
+        factory_client.set_operation_paused(&admin, &create_pair_op, &true);
+        assert!(factory_client.is_paused(&create_pair_op));
 
-    // Unpause CREATE_PAIR
-    factory_client
-        .set_operation_paused(&admin, &create_pair_op, &false);
-    assert!(!factory_client.is_paused(&create_pair_op));
+        // Unpause CREATE_PAIR
+        factory_client.set_operation_paused(&admin, &create_pair_op, &false);
+        assert!(!factory_client.is_paused(&create_pair_op));
 
-    // Setup Tokens & WASM
-    let token_admin = Address::generate(&env);
-    let token_a = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let token_b = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let pool_hash = env
-        .deployer()
-        .upload_contract_wasm(liquidity_pool_contract::WASM);
+        // Setup Tokens & WASM
+        let token_admin = Address::generate(&env);
+        let token_a = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let token_b = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let pool_hash = env
+            .deployer()
+            .upload_contract_wasm(liquidity_pool_contract::WASM);
 
-    // Creating pair should now succeed
-    let _pool_address = factory_client.create_pair(&token_a, &token_b, &pool_hash);
+        // Creating pair should now succeed
+        let _pool_address = factory_client.create_pair(&token_a, &token_b, &pool_hash);
 
-    let stored_pair = factory_client.get_pair(&token_a, &token_b);
-    assert!(stored_pair.is_some());
-}
+        let stored_pair = factory_client.get_pair(&token_a, &token_b);
+        assert!(stored_pair.is_some());
+    }
 
-#[test]
-fn test_factory_unauthorized_pause() {
-    let admin1 = Address::generate(&env);
-    let admin2 = Address::generate(&env);
-    let admins = soroban_sdk::vec![&env, admin1, admin2];
+    #[test]
+    fn test_factory_unauthorized_pause() {
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let admins = soroban_sdk::vec![&env, admin1, admin2];
 
-    factory_client.init_multisig(&admins, &2);
-    factory_client.init_multisig(&admins, &2); // Should panic
-}
+        factory_client.init_multisig(&admins, &2);
+        factory_client.init_multisig(&admins, &2); // Should panic
+    }
 
-#[test]
-#[should_panic(expected = "At least one admin required")]
-fn test_multisig_empty_admins_fails() {
-    let env = Env::default();
-    env.mock_all_auths();
+    #[test]
+    #[should_panic(expected = "At least one admin required")]
+    fn test_multisig_empty_admins_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
 
-    let factory_id = env.register(LiquidityPoolFactory, ());
-    let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
+        let factory_id = env.register(LiquidityPoolFactory, ());
+        let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
 
-    let admin = Address::generate(&env);
-    let non_admin = Address::generate(&env);
-    factory_client.initialize(&admin);
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        factory_client.initialize(&admin);
 
-    let create_pair_op = PauseType::CREATE_PAIR;
-    // Attempting to pause as non_admin should return Error::Unauthorized (value = 2)
-    let res = factory_client.try_set_operation_paused(&non_admin, &create_pair_op, &true);
-    assert_eq!(res, Err(Ok(Error::Unauthorized)));
-}
+        let create_pair_op = PauseType::CREATE_PAIR;
+        // Attempting to pause as non_admin should return Error::Unauthorized (value = 2)
+        let res = factory_client.try_set_operation_paused(&non_admin, &create_pair_op, &true);
+        assert_eq!(res, Err(Ok(Error::Unauthorized)));
+    }
     let admins: Vec<Address> = soroban_sdk::vec![&env];
     factory_client.init_multisig(&admins, &1);
 }
@@ -1127,6 +1130,4 @@ fn test_complex_multisig_scenario() {
     assert_eq!(final_config.admins.len(), 4);
     assert!(!factory_client.is_admin(&admin3));
     assert_eq!(final_config.threshold, 3);
-}
-
 }

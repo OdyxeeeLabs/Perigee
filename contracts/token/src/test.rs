@@ -146,7 +146,10 @@ fn test_guard_pause_blocks_transfer_until_resume() {
 
     // Transfer should fail.
     let result = client.try_transfer(&user, &user2, &100);
-    assert!(result.is_err(), "transfer should fail when transfers are paused");
+    assert!(
+        result.is_err(),
+        "transfer should fail when transfers are paused"
+    );
 
     // Minting is NOT paused — still works.
     client.mint(&user2, &50);

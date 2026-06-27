@@ -149,6 +149,8 @@ export const analyzeService = {
     return apiClient.post<any>('/analyze/wasm', req, { token });
   },
 };
+
+/**
  * Base URL of the SoroScope analyzer backend.
  *
  * Reads from NEXT_PUBLIC_API_URL (baked in at build time) and falls back to

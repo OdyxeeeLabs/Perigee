@@ -229,7 +229,11 @@ impl MerkleTree {
             let mut i = 0;
             while i < current_level.len() {
                 let left = &current_level[i];
-                let right = if i + 1 < current_level.len() { &current_level[i + 1] } else { left };
+                let right = if i + 1 < current_level.len() {
+                    &current_level[i + 1]
+                } else {
+                    left
+                };
                 next_level.push(Self::hash_pair(left, right));
                 i += 2;
             }

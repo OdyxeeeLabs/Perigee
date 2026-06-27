@@ -176,8 +176,7 @@ impl LiquidityPoolFactory {
 
     /// Pause/unpause pair creation specifically (maps to PauseType::CREATE_PAIR).
     pub fn set_paused(env: Env, admin: Address, paused: bool) -> Result<(), Error> {
-        EmergencyGuard::set_pause(env, admin, PAUSE_CREATE_PAIR_FLAG, paused)
-            .map_err(map_guard_err)
+        EmergencyGuard::set_pause(env, admin, PAUSE_CREATE_PAIR_FLAG, paused).map_err(map_guard_err)
     }
 
     /// Returns the raw pause-state bitmask.
