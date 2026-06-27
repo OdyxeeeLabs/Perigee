@@ -2,7 +2,7 @@
 extern crate std;
 use super::*;
 
-use emergency_guard::{EmergencyGuardAction, EmergencyGuardEvent, PauseType};
+use emergency_guard::PauseType;
 use soroban_sdk::{testutils::Address as _, vec, Address, BytesN, Env};
 use soroban_sdk::{testutils::Address as _, BytesN, Env};
 use soroban_sdk::{testutils::Address as _, Env, Vec};
@@ -275,10 +275,27 @@ fn test_duplicate_pair_errors() {
 // assert!(pool_address != factory_id);
 */
 
-fn guard_events(env: &Env, contract_id: &Address, action: &str) -> Vec<EmergencyGuardEvent> {
-    let guard_topic = SorobanString::from_str(env, "EmergencyGuard");
-    let action_topic = SorobanString::from_str(env, action);
+fn guard_initialized_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::GuardInitializedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_initialized");
+    env.events()
+        .all()
+        .iter()
+        .filter_map(|(event_contract, topics, data)| {
+            if event_contract != *contract_id || topics.len() != 1 {
+                return None;
+            }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
+                data.try_into_val(env).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
 
+fn pause_state_changed_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::PauseStateChangedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_pause_state_changed");
     env.events()
         .all()
         .iter()
@@ -286,11 +303,84 @@ fn guard_events(env: &Env, contract_id: &Address, action: &str) -> Vec<Emergency
             if event_contract != *contract_id || topics.len() != 2 {
                 return None;
             }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
+                data.try_into_val(env).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
 
-            let topic_guard: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
-            let topic_action: SorobanString = topics.get(1)?.try_into_val(env).ok()?;
+fn emergency_paused_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::EmergencyPausedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_emergency_paused_all");
+    env.events()
+        .all()
+        .iter()
+        .filter_map(|(event_contract, topics, data)| {
+            if event_contract != *contract_id || topics.len() != 1 {
+                return None;
+            }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
+                data.try_into_val(env).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
 
-            if topic_guard == guard_topic && topic_action == action_topic {
+fn resumed_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::ResumedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_resumed_all");
+    env.events()
+        .all()
+        .iter()
+        .filter_map(|(event_contract, topics, data)| {
+            if event_contract != *contract_id || topics.len() != 1 {
+                return None;
+            }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
+                data.try_into_val(env).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn admin_added_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::AdminAddedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_admin_added");
+    env.events()
+        .all()
+        .iter()
+        .filter_map(|(event_contract, topics, data)| {
+            if event_contract != *contract_id || topics.len() != 2 {
+                return None;
+            }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
+                data.try_into_val(env).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn admin_removed_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::AdminRemovedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_admin_removed");
+    env.events()
+        .all()
+        .iter()
+        .filter_map(|(event_contract, topics, data)| {
+            if event_contract != *contract_id || topics.len() != 2 {
+                return None;
+            }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
                 data.try_into_val(env).ok()
             } else {
                 None
@@ -324,20 +414,15 @@ fn setup_guard(
 #[test]
 fn test_initialize_guard_emits_standard_event() {
     let env = Env::default();
-    let (factory_id, _client, _admin1, _admin2, _admin3) = setup_guard(&env);
+    let (factory_id, _client, admin1, admin2, admin3) = setup_guard(&env);
 
-    let events = guard_events(&env, &factory_id, "initialized");
+    let events = guard_initialized_events(&env, &factory_id);
     assert_eq!(events.len(), 1);
     assert_eq!(
         events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::Initialized,
-            admin: None,
-            operation: 0,
-            paused: false,
+        emergency_guard::GuardInitializedEvent {
+            admins: vec![&env, admin1, admin2, admin3],
             threshold: 2,
-            admin_count: 3,
-            approver_count: 0,
         }
     );
 }
@@ -348,36 +433,28 @@ fn test_set_guard_pause_emits_standard_events() {
     let (factory_id, client, admin1, _admin2, _admin3) = setup_guard(&env);
 
     client.set_guard_pause(&admin1, &PauseType::MINT, &true);
-    let events = guard_events(&env, &factory_id, "pause_set");
+    let events = pause_state_changed_events(&env, &factory_id);
     assert_eq!(events.len(), 1);
     assert_eq!(
         events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::PauseSet,
-            admin: Some(admin1.clone()),
+        emergency_guard::PauseStateChangedEvent {
+            admin: admin1.clone(),
             operation: PauseType::MINT,
             paused: true,
-            threshold: 2,
-            admin_count: 3,
-            approver_count: 1,
         }
     );
 
     assert!(client.is_guard_paused(&PauseType::MINT));
 
     client.set_guard_pause(&admin1, &PauseType::MINT, &false);
-    let events = guard_events(&env, &factory_id, "pause_set");
-    assert_eq!(events.len(), 1);
+    let events = pause_state_changed_events(&env, &factory_id);
+    assert_eq!(events.len(), 2);
     assert_eq!(
-        events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::PauseSet,
-            admin: Some(admin1),
+        events[1],
+        emergency_guard::PauseStateChangedEvent {
+            admin: admin1,
             operation: PauseType::MINT,
             paused: false,
-            threshold: 2,
-            admin_count: 3,
-            approver_count: 1,
         }
     );
 }
@@ -386,38 +463,26 @@ fn test_set_guard_pause_emits_standard_events() {
 fn test_emergency_pause_and_resume_emit_standard_events() {
     let env = Env::default();
     let (factory_id, client, admin1, admin2, _admin3) = setup_guard(&env);
-    let approvers = vec![&env, admin1, admin2];
+    let approvers = vec![&env, admin1.clone(), admin2.clone()];
 
     client.emergency_guard_pause(&approvers);
-    let emergency_events = guard_events(&env, &factory_id, "emergency_pause");
+    let emergency_events = emergency_paused_events(&env, &factory_id);
     assert_eq!(emergency_events.len(), 1);
     assert_eq!(
         emergency_events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::EmergencyPause,
-            admin: None,
-            operation: u32::MAX,
-            paused: true,
-            threshold: 2,
-            admin_count: 3,
-            approver_count: 2,
+        emergency_guard::EmergencyPausedEvent {
+            approvers: vec![&env, admin1.clone(), admin2.clone()],
         }
     );
     assert!(client.is_guard_paused(&PauseType::MINT));
 
     client.resume_guard(&approvers);
-    let resume_events = guard_events(&env, &factory_id, "resume");
+    let resume_events = resumed_events(&env, &factory_id);
     assert_eq!(resume_events.len(), 1);
     assert_eq!(
         resume_events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::Resume,
-            admin: None,
-            operation: u32::MAX,
-            paused: false,
-            threshold: 2,
-            admin_count: 3,
-            approver_count: 2,
+        emergency_guard::ResumedEvent {
+            approvers: vec![&env, admin1, admin2],
         }
     );
     assert!(!client.is_guard_paused(&PauseType::MINT));
@@ -427,38 +492,28 @@ fn test_emergency_pause_and_resume_emit_standard_events() {
 fn test_admin_guard_actions_emit_standard_events() {
     let env = Env::default();
     let (factory_id, client, admin1, admin2, admin3) = setup_guard(&env);
-    let approvers = vec![&env, admin1, admin2];
+    let approvers = vec![&env, admin1.clone(), admin2.clone()];
     let admin4 = Address::generate(&env);
 
     client.add_guard_admin(&approvers, &admin4);
-    let added_events = guard_events(&env, &factory_id, "admin_added");
+    let added_events = admin_added_events(&env, &factory_id);
     assert_eq!(added_events.len(), 1);
     assert_eq!(
         added_events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::AdminAdded,
-            admin: Some(admin4),
-            operation: 0,
-            paused: false,
-            threshold: 2,
-            admin_count: 4,
-            approver_count: 2,
+        emergency_guard::AdminAddedEvent {
+            approvers: vec![&env, admin1.clone(), admin2.clone()],
+            new_admin: admin4,
         }
     );
 
     client.remove_guard_admin(&approvers, &admin3);
-    let removed_events = guard_events(&env, &factory_id, "admin_removed");
+    let removed_events = admin_removed_events(&env, &factory_id);
     assert_eq!(removed_events.len(), 1);
     assert_eq!(
         removed_events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::AdminRemoved,
-            admin: Some(admin3),
-            operation: 0,
-            paused: false,
-            threshold: 2,
-            admin_count: 3,
-            approver_count: 2,
+        emergency_guard::AdminRemovedEvent {
+            approvers: vec![&env, admin1, admin2],
+            admin: admin3,
         }
     );
 }
