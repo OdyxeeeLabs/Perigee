@@ -69,8 +69,6 @@ fn test_allowance() {
 /// transfers untouched — confirms the PauseState bitmask works correctly.
 #[test]
 fn test_pause_minting_blocks_mint_only() {
-#[test]
-fn test_guard_initializes_with_token_admin() {
     let env = Env::default();
     env.mock_all_auths();
 

@@ -192,6 +192,7 @@ fn default_fee_analysis_enabled() -> bool {
 
 fn default_emergency_verification_paused() -> bool {
     false
+}
 fn default_disk_cache_path() -> String {
     // Empty == L2 disabled. Operators who want persistence set this in
     // env / config.toml explicitly; we don't create a hidden directory
@@ -1636,8 +1637,6 @@ async fn main() {
         }
 
         if let Some(path) = wasm_path {
-            if let Err(e) = benchmarks::run_token_benchmark(path, simulation_service.as_ref()).await {
-                eprintln!("Benchmark failed: {}", e);
             let db_path = env::var("SOROSCOPE_DB_PATH")
                 .unwrap_or_else(|_| "soroscope_metrics.db".to_string());
             let webhook_url = env::var("SOROSCOPE_ALERT_WEBHOOK_URL").ok();
