@@ -16,7 +16,7 @@ fn ensure_not_paused(e: &Env, operation: u32) {
 pub trait TokenTrait {
     fn initialize(e: Env, admin: Address, decimal: u32, name: String, symbol: String);
     fn mint(e: Env, to: Address, amount: i128);
-    fn set_admin(e: Env, new_admin: Address);
+    fn set_admin(e: Env, approvers: Vec<Address>, new_admin: Address);
     fn allowance(e: Env, from: Address, spender: Address) -> i128;
     fn approve(e: Env, from: Address, spender: Address, amount: i128, expiration_ledger: u32);
     fn balance(e: Env, id: Address) -> i128;
@@ -56,18 +56,14 @@ impl TokenTrait for Token {
         receive_balance(&e, to, amount);
     }
 
-    fn set_admin(e: Env, new_admin: Address) {
+    fn set_admin(e: Env, approvers: Vec<Address>, new_admin: Address) {
         let admin = read_administrator(&e);
-        admin.require_auth();
         e.storage().instance().extend_ttl(100, 100);
-        // Use EmergencyGuard multi-sig to rotate the guard admin list, then update token admin.
-        EmergencyGuard::rotate_admin(
-            e.clone(),
-            vec![&e, admin.clone()],
-            admin,
-            new_admin.clone(),
-        )
-        .expect("failed to rotate admin via EmergencyGuard");
+        // Threshold validation: approvers must meet the guard signature threshold.
+        EmergencyGuard::check_multi_sig(&e, &approvers)
+            .expect("unauthorized: insufficient guard admin signatures");
+        EmergencyGuard::rotate_admin(e.clone(), approvers, admin, new_admin.clone())
+            .expect("failed to rotate admin via EmergencyGuard");
         write_administrator(&e, &new_admin);
     }
 
@@ -197,5 +193,29 @@ impl Token {
 
     pub fn get_guard_threshold(e: Env) -> u32 {
         EmergencyGuard::get_threshold(e)
+    }
+
+    pub fn guard_add_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
+        EmergencyGuard::add_admin(e, approvers, new_admin)
+    }
+
+    pub fn guard_remove_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        admin: Address,
+    ) -> Result<(), GuardError> {
+        EmergencyGuard::remove_admin(e, approvers, admin)
+    }
+
+    pub fn guard_admins(e: Env) -> Vec<Address> {
+        EmergencyGuard::get_admins(e)
+    }
+
+    pub fn guard_is_paused(e: Env, operation: u32) -> bool {
+        EmergencyGuard::is_paused(e, operation)
     }
 }
