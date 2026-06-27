@@ -16,6 +16,7 @@ use sled::{Db, Tree};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use thiserror::Error;
 
 const CACHE_TTL_SECS: u64 = 3_600;
 const CACHE_MAX_CAPACITY: u64 = 1_000;
