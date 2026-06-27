@@ -152,7 +152,7 @@ export default function WasmUpload({
       //auto-upload valid files
       validFiles.forEach((f) => uploadFile(f));
     },
-    [files, maxFiles, onFileSelect]
+    [files, maxFiles, onFileSelect, uploadFile, validateWasm]
   );
 
   const { getRootProps, getInputProps, isDragReject } = useDropzone({
