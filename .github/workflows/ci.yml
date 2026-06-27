@@ -19,11 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          targets: wasm32-unknown-unknown
+        uses: dtolnay/rust-toolchain@stable
+      - name: Ensure WASM target is installed
+        run: rustup target add wasm32-unknown-unknown
       - name: Build liquidity_pool WASM
         run: cargo build -p liquidity_pool --target wasm32-unknown-unknown --release
       - name: Install System Dependencies
@@ -40,10 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          override: true
           components: rustfmt
       - name: Check Formatting
         run: cargo fmt --all -- --check
@@ -57,12 +53,11 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          override: true
           components: clippy
-          targets: wasm32-unknown-unknown
+      - name: Ensure WASM target is installed
+        run: rustup target add wasm32-unknown-unknown
       - name: Install System Dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libdbus-1-dev libudev-dev
       - name: Build liquidity_pool WASM
@@ -81,11 +76,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
-          targets: wasm32-unknown-unknown
+        uses: dtolnay/rust-toolchain@stable
+      - name: Ensure WASM target is installed
+        run: rustup target add wasm32-unknown-unknown
       - name: Install System Dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libdbus-1-dev libudev-dev
       - name: Build liquidity_pool WASM
