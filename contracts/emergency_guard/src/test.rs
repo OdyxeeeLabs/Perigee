@@ -302,6 +302,37 @@ fn test_full_admin_rotation_add_then_remove_old() {
 }
 
 #[test]
+fn test_rotate_admin() {
+    let (env, client, admins) = setup(2, 3);
+    let old_admin = admins[2].clone();
+    let new_admin = Address::random(&env);
+    
+    let approvers = vec![&env, admins[0].clone(), admins[1].clone()];
+    client.rotate_admin(&approvers, &old_admin, &new_admin).unwrap();
+    
+    let stored: Vec<Address> = client.get_admins().iter().collect();
+    assert_eq!(stored.len(), 3);
+    assert!(!stored.contains(&old_admin));
+    assert!(stored.contains(&new_admin));
+}
+
+#[test]
+fn test_rotate_admin_duplicate_prevented() {
+    let (env, client, admins) = setup(2, 3);
+    let old_admin = admins[2].clone();
+    let new_admin = admins[1].clone(); // already an admin
+    
+    let approvers = vec![&env, admins[0].clone(), admins[1].clone()];
+    // Rotating to an existing admin should just remove the old admin and reduce the list size
+    client.rotate_admin(&approvers, &old_admin, &new_admin).unwrap();
+    
+    let stored: Vec<Address> = client.get_admins().iter().collect();
+    assert_eq!(stored.len(), 2); // 3 - 1
+    assert!(!stored.contains(&old_admin));
+    assert!(stored.contains(&new_admin));
+}
+
+#[test]
 fn test_removed_admin_cannot_approve_operations() {
     let (env, client, admins) = setup(1, 3);
 

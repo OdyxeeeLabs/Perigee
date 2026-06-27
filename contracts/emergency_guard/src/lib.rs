@@ -1,7 +1,7 @@
 #![no_std]
 
 #[cfg(feature = "contract")]
-use soroban_sdk::{contract, contractimpl};
+use soroban_sdk::{contract, contractimpl, contracttrait};
 use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
 
 /// Granular pause types using bitmask for efficient storage
@@ -177,8 +177,62 @@ pub fn emit_admin_removed(e: &Env, approvers: &Vec<Address>, admin: &Address) {
     );
 }
 
+#[cfg_attr(feature = "contract", contracttrait)]
+pub trait EmergencyGuardTrait {
+    fn rotate_admin(
+        env: Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError>;
+}
+
 #[cfg_attr(feature = "contract", contract)]
 pub struct EmergencyGuard;
+
+#[cfg_attr(feature = "contract", contractimpl)]
+impl EmergencyGuardTrait for EmergencyGuard {
+    fn rotate_admin(
+        env: Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
+        EmergencyGuard::check_multi_sig(&env, &approvers)?;
+        let mut admins = EmergencyGuard::get_admins(env.clone());
+        
+        let mut old_idx = None;
+        let mut new_exists = false;
+        let len = admins.len();
+        
+        for i in 0..len {
+            let a = admins.get(i).unwrap();
+            if a == old_admin {
+                old_idx = Some(i);
+            }
+            if a == new_admin {
+                new_exists = true;
+            }
+        }
+        
+        let idx = old_idx.ok_or(GuardError::AdminNotFound)?;
+        
+        if new_exists {
+            admins.remove(idx);
+            let threshold = EmergencyGuard::get_threshold(env.clone());
+            if admins.len() < threshold {
+                return Err(GuardError::InvalidThreshold);
+            }
+        } else {
+            admins.set(idx, new_admin);
+        }
+        
+        env.storage()
+            .instance()
+            .set(&GuardDataKey::Admins, &admins);
+        Ok(())
+    }
+}
 
 #[cfg_attr(feature = "contract", contractimpl)]
 impl EmergencyGuard {
@@ -314,35 +368,7 @@ impl EmergencyGuard {
         Ok(())
     }
 
-    /// Rotate admin (multi-sig required).
-    pub fn rotate_admin(
-        env: Env,
-        approvers: Vec<Address>,
-        old_admin: Address,
-        new_admin: Address,
-    ) -> Result<(), GuardError> {
-        Self::check_multi_sig(&env, &approvers)?;
-        let admins = Self::get_admins(env.clone());
-        let mut new_admins = Vec::new(&env);
-        let mut found = false;
-        for a in admins.iter() {
-            if a == old_admin {
-                found = true;
-                if !new_admins.iter().any(|x| x == new_admin) {
-                    new_admins.push_back(new_admin.clone());
-                }
-            } else if !new_admins.iter().any(|x| x == a) {
-                new_admins.push_back(a);
-            }
-        }
-        if !found {
-            return Err(GuardError::AdminNotFound);
-        }
-        env.storage()
-            .instance()
-            .set(&GuardDataKey::Admins, &new_admins);
-        Ok(())
-    }
+    // rotate_admin extracted to EmergencyGuardTrait
 
     /// Get list of current admins.
     pub fn get_admins(env: Env) -> Vec<Address> {
