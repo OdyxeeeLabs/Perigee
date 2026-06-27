@@ -441,12 +441,11 @@ export default function Home() {
                   padding: '12px 16px',
                   backgroundColor: 'transparent',
                   border: 'none',
-                  borderBottom: tab === 'explorer' ? '2px solid #00d9ff' : '2px solid transparent',
+                  borderBottom: tab === 'explorer' ? '2px solid #00d9ff' : 'none',
                   cursor: 'pointer',
                   fontSize: '14px',
                   fontWeight: tab === 'explorer' ? '600' : '500',
                   color: tab === 'explorer' ? '#00d9ff' : '#8b949e',
-                  transition: 'color 0.2s, border-bottom-color 0.2s',
                 }}
               >
                 Result
@@ -458,12 +457,11 @@ export default function Home() {
                   padding: '12px 16px',
                   backgroundColor: 'transparent',
                   border: 'none',
-                  borderBottom: tab === 'history' ? '2px solid #00d9ff' : '2px solid transparent',
+                  borderBottom: tab === 'history' ? '2px solid #00d9ff' : 'none',
                   cursor: 'pointer',
                   fontSize: '14px',
                   fontWeight: tab === 'history' ? '600' : '500',
                   color: tab === 'history' ? '#00d9ff' : '#8b949e',
-                  transition: 'color 0.2s, border-bottom-color 0.2s',
                 }}
               >
                 History ({history.length})
@@ -478,8 +476,6 @@ export default function Home() {
                 padding: '24px',
                 border: '1px solid #30363d',
                 borderTop: 'none',
-                transition: 'opacity 0.2s',
-                opacity: 1,
               }}
             >
               {tab === 'explorer' ? (
