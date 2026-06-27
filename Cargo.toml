@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "core",
+    "contracts/auction_factory",
     "contracts/emergency_guard",
     "contracts/error_codes",
     "contracts/token",
