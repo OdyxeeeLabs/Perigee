@@ -919,7 +919,7 @@ fn test_execute_add_duplicate_admin_fails() {
     factory_client.init_multisig(&admins, &2);
 
     // Try to add admin2 again
-    let action = AdminAction::AddAdmin(admin2);
+    let action = AdminAction::AddAdmin(admin2.clone());
     let action_id = factory_client.propose_admin_action(&admin1, &action);
 
     factory_client.approve_admin_action(&admin2, &action_id);

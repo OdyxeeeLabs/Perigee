@@ -45,9 +45,9 @@ pub enum DataKey {
     /// Multi-sig configuration (admins + threshold).
     MultiSigConfig,
     /// Pending admin action keyed by action ID.
-    PendingAction(u32),
+    PendingAction(u64),
     /// Approval count for a pending action.
-    ApprovalCount(u32),
+    ApprovalCount(u64),
 }
 
 // ── Multi-sig types ───────────────────────────────────────────────────────────
@@ -337,7 +337,7 @@ impl LiquidityPoolFactory {
     }
 
     /// Propose an admin action. Returns the action ID.
-    pub fn propose_admin_action(env: Env, proposer: Address, action: AdminAction) -> u32 {
+    pub fn propose_admin_action(env: Env, proposer: Address, action: AdminAction) -> u64 {
         let config = Self::get_multisig_config(env.clone());
         if !config.admins.iter().any(|a| a == proposer) {
             panic!("Only admins can propose actions");
@@ -353,7 +353,7 @@ impl LiquidityPoolFactory {
     }
 
     /// Approve a pending admin action.
-    pub fn approve_admin_action(env: Env, approver: Address, action_id: u32) {
+    pub fn approve_admin_action(env: Env, approver: Address, action_id: u64) {
         let config = Self::get_multisig_config(env.clone());
         if !config.admins.iter().any(|a| a == approver) {
             panic!("Only admins can approve actions");
@@ -377,7 +377,7 @@ impl LiquidityPoolFactory {
     }
 
     /// Execute a pending admin action once the approval threshold is met.
-    pub fn execute_admin_action(env: Env, action_id: u32) {
+    pub fn execute_admin_action(env: Env, action_id: u64) {
         let config = Self::get_multisig_config(env.clone());
         let count: u32 = env
             .storage()
