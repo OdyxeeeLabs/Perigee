@@ -185,7 +185,6 @@ pub mod disk;
 
 pub use disk::{DiskCache, DiskCacheConfig};
 
-
 /// Errors surfaced by the cache subsystem.
 ///
 /// These bubble up from Sled's disk store, JSON (de)serialisation, and

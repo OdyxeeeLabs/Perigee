@@ -510,8 +510,9 @@ impl StakingRewards {
     /// embedded EmergencyGuard bitmask (PauseType::CLAIM_REWARDS).
     pub fn set_claim_rewards_paused(e: Env, paused: bool) -> Result<(), ContractError> {
         let config = Self::get_config(e.clone())?;
-        config.owner.require_auth();
-
+        // `EmergencyGuard::set_pause` performs the ownership auth check itself,
+        // so we pass the owner through directly to avoid double-auth failures
+        // when the same signer is reused within the same transaction.
         EmergencyGuard::set_pause(e, config.owner, PauseType::CLAIM_REWARDS, paused)
             .map_err(|_| ContractError::Paused)
     }

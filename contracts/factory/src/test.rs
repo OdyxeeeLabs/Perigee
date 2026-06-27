@@ -3,9 +3,6 @@ extern crate std;
 use super::*;
 
 use emergency_guard::PauseType;
-use soroban_sdk::{testutils::Address as _, vec, Address, BytesN, Env};
-use soroban_sdk::{testutils::Address as _, BytesN, Env};
-use soroban_sdk::{testutils::Address as _, Env, Vec};
 use soroban_sdk::{
     testutils::{Address as _, Events},
     vec, Address, BytesN, Env, String as SorobanString, TryIntoVal,
@@ -275,7 +272,10 @@ fn test_duplicate_pair_errors() {
 // assert!(pool_address != factory_id);
 */
 
-fn guard_initialized_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::GuardInitializedEvent> {
+fn guard_initialized_events(
+    env: &Env,
+    contract_id: &Address,
+) -> Vec<emergency_guard::GuardInitializedEvent> {
     let topic = SorobanString::from_str(env, "emergency_guard_initialized");
     env.events()
         .all()
@@ -294,7 +294,10 @@ fn guard_initialized_events(env: &Env, contract_id: &Address) -> Vec<emergency_g
         .collect()
 }
 
-fn pause_state_changed_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::PauseStateChangedEvent> {
+fn pause_state_changed_events(
+    env: &Env,
+    contract_id: &Address,
+) -> Vec<emergency_guard::PauseStateChangedEvent> {
     let topic = SorobanString::from_str(env, "emergency_guard_pause_state_changed");
     env.events()
         .all()
@@ -313,7 +316,10 @@ fn pause_state_changed_events(env: &Env, contract_id: &Address) -> Vec<emergency
         .collect()
 }
 
-fn emergency_paused_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::EmergencyPausedEvent> {
+fn emergency_paused_events(
+    env: &Env,
+    contract_id: &Address,
+) -> Vec<emergency_guard::EmergencyPausedEvent> {
     let topic = SorobanString::from_str(env, "emergency_guard_emergency_paused_all");
     env.events()
         .all()
@@ -370,7 +376,10 @@ fn admin_added_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::
         .collect()
 }
 
-fn admin_removed_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::AdminRemovedEvent> {
+fn admin_removed_events(
+    env: &Env,
+    contract_id: &Address,
+) -> Vec<emergency_guard::AdminRemovedEvent> {
     let topic = SorobanString::from_str(env, "emergency_guard_admin_removed");
     env.events()
         .all()

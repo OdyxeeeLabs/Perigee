@@ -319,7 +319,7 @@ impl LiquidityPoolFactory {
         if admins.len() == 0 {
             panic!("At least one admin required");
         }
-        if threshold == 0 || threshold as usize > admins.len() {
+        if threshold == 0 || threshold > admins.len() as u32 {
             panic!("Invalid threshold");
         }
         let config = MultiSigConfig { admins, threshold };
@@ -421,7 +421,7 @@ impl LiquidityPoolFactory {
                 if new_admins.len() == 0 {
                     panic!("Cannot remove last admin");
                 }
-                if new_config.threshold as usize > new_admins.len() {
+                if new_config.threshold > new_admins.len() as u32 {
                     new_config.threshold = new_admins.len() as u32;
                 }
                 new_config.admins = new_admins;
@@ -430,7 +430,7 @@ impl LiquidityPoolFactory {
                     .set(&DataKey::MultiSigConfig, &new_config);
             }
             AdminAction::SetThreshold(new_threshold) => {
-                if new_threshold == 0 || new_threshold as usize > config.admins.len() {
+                if new_threshold == 0 || new_threshold > config.admins.len() as u32 {
                     panic!("Invalid threshold");
                 }
                 let mut new_config = config.clone();

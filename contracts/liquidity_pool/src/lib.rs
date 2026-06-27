@@ -1,9 +1,6 @@
 #![no_std]
 
-use emergency_guard::{
-    emit_admin_added, emit_admin_removed, emit_emergency_paused_all, emit_guard_initialized,
-    emit_pause_state_changed, emit_resumed_all, EmergencyGuard, GuardError, PauseType,
-};
+use emergency_guard::{EmergencyGuard, GuardError, PauseType};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, vec, Address, Env, String, Vec,
 };

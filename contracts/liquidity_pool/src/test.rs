@@ -812,7 +812,7 @@ fn test_emergency_guard_trait_impl() {
     let admin1 = Address::generate(&e);
     let admin2 = Address::generate(&e);
     let admin3 = Address::generate(&e);
-    let admins = soroban_sdk::vec![&e, admin1.clone(), admin2.clone(), admin3.clone()];
+    let _admins = soroban_sdk::vec![&e, admin1.clone(), admin2.clone(), admin3.clone()];
 
     let token_a = e
         .register_stellar_asset_contract_v2(admin1.clone())
@@ -1887,7 +1887,9 @@ fn test_claim_rewards_basic() {
     assert_eq!(client.get_pending_rewards(&user), 0);
 
     // Advance ledger to accumulate rewards
-    e.ledger().with_sequence(100);
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     // Now there should be pending rewards
     let pending = client.get_pending_rewards(&user);
@@ -1959,7 +1961,9 @@ fn test_claim_rewards_when_paused() {
     let shares = client.deposit(&user, &1000, &1000);
 
     client.stake(&user, &shares);
-    e.ledger().with_sequence(100);
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     // Pause the contract
     client.set_paused(&true);
@@ -2003,14 +2007,18 @@ fn test_stake_unstake_claim_full_cycle() {
     assert_eq!(client.get_staked_balance(&user), shares);
 
     // Advance ledger
-    e.ledger().with_sequence(50);
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 50;
+    e.ledger().set(ledger_info);
 
     // Claim some rewards
     let first_claim = client.claim_rewards(&user);
     assert!(first_claim > 0);
 
     // Advance more
-    e.ledger().with_sequence(100);
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     // Claim more rewards
     let second_claim = client.claim_rewards(&user);
@@ -2064,7 +2072,9 @@ fn test_multiple_users_staking() {
     assert_eq!(client.get_total_staked(), shares1 + shares2);
 
     // Advance and claim
-    e.ledger().with_sequence(100);
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     let rewards1 = client.claim_rewards(&user1);
     let rewards2 = client.claim_rewards(&user2);
