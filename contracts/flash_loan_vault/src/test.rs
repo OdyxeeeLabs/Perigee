@@ -432,6 +432,80 @@ fn test_flash_loan_with_fee() {
 }
 
 #[test]
+fn test_flash_loan_fee_accumulates_total_deposited_over_multiple_loans() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    s.vault_client.set_fee(&50);
+
+    let receiver_id = s.e.register(good::GoodReceiver, ());
+    let receiver_client = good::GoodReceiverClient::new(&s.e, &receiver_id);
+    receiver_client.set_vault(&s.vault_id);
+
+    s.token_admin.mint(&receiver_id, &45);
+    let initiator = Address::generate(&s.e);
+
+    let mut total_fees = 0;
+    for _ in 0..3 {
+        let fee = s.vault_client.flash_loan(&initiator, &receiver_id, &3_000);
+        assert_eq!(fee, 15);
+        total_fees += fee;
+    }
+
+    assert_eq!(total_fees, 45);
+    assert_eq!(s.vault_client.get_available(), 10_045);
+    assert_eq!(s.vault_client.get_total_deposited(), 10_045);
+}
+
+#[test]
+fn test_flash_loan_fee_accumulation_updates_balance_and_total_deposited() {
+    let s = setup();
+    fund_vault(&s, 20_000);
+
+    s.vault_client.set_fee(&100);
+
+    let receiver_id = s.e.register(good::GoodReceiver, ());
+    let receiver_client = good::GoodReceiverClient::new(&s.e, &receiver_id);
+    receiver_client.set_vault(&s.vault_id);
+
+    s.token_admin.mint(&receiver_id, &100);
+    let initiator = Address::generate(&s.e);
+
+    let fee = s.vault_client.flash_loan(&initiator, &receiver_id, &5_000);
+    assert_eq!(fee, 50);
+    assert_eq!(s.vault_client.get_available(), 20_050);
+    assert_eq!(s.vault_client.get_total_deposited(), 20_050);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_flash_loan_no_repay_panics() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    let receiver_id = s.e.register(BadReceiver, ());
+    let initiator = Address::generate(&s.e);
+
+    s.vault_client.flash_loan(&initiator, &receiver_id, &5_000);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_flash_loan_partial_repay_panics() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    s.vault_client.set_fee(&100);
+
+    let receiver_id = s.e.register(partial::PartialReceiver, ());
+    let receiver_client = partial::PartialReceiverClient::new(&s.e, &receiver_id);
+    receiver_client.set_vault(&s.vault_id);
+
+    let initiator = Address::generate(&s.e);
+    s.vault_client.flash_loan(&initiator, &receiver_id, &5_000);
+}
+
+#[test]
 fn test_flash_loan_borrow_entire_vault() {
     let s = setup();
     fund_vault(&s, 10_000);
@@ -513,6 +587,25 @@ fn test_flash_loan_partial_repay_returns_error() {
     let receiver_client = partial::PartialReceiverClient::new(&s.e, &receiver_id);
     receiver_client.set_vault(&s.vault_id);
 
+    let initiator = Address::generate(&s.e);
+
+    let result = s
+        .vault_client
+        .try_flash_loan(&initiator, &receiver_id, &5_000);
+
+    assert_eq!(result, Err(Ok(Error::LoanNotRepaid)));
+    assert_eq!(s.vault_client.get_available(), 10_000);
+    assert_eq!(s.vault_client.get_total_deposited(), 10_000);
+}
+
+#[test]
+fn test_flash_loan_failure_does_not_accumulate_fee() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    s.vault_client.set_fee(&100);
+
+    let receiver_id = s.e.register(BadReceiver, ());
     let initiator = Address::generate(&s.e);
 
     let result = s

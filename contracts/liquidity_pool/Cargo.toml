@@ -12,5 +12,5 @@ emergency_guard = { path = "../emergency_guard", default-features = false }
 
 [dev-dependencies]
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }
-emergency_guard = { path = "../emergency_guard" }
+emergency_guard = { path = "../emergency_guard", default-features = false }
 proptest = "1.0"
