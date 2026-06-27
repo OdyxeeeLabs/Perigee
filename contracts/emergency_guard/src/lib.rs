@@ -200,11 +200,11 @@ impl EmergencyGuardTrait for EmergencyGuard {
     ) -> Result<(), GuardError> {
         EmergencyGuard::check_multi_sig(&env, &approvers)?;
         let mut admins = EmergencyGuard::get_admins(env.clone());
-        
+
         let mut old_idx = None;
         let mut new_exists = false;
         let len = admins.len();
-        
+
         for i in 0..len {
             let a = admins.get(i).unwrap();
             if a == old_admin {
@@ -214,9 +214,9 @@ impl EmergencyGuardTrait for EmergencyGuard {
                 new_exists = true;
             }
         }
-        
+
         let idx = old_idx.ok_or(GuardError::AdminNotFound)?;
-        
+
         if new_exists {
             admins.remove(idx);
             let threshold = EmergencyGuard::get_threshold(env.clone());
@@ -226,10 +226,8 @@ impl EmergencyGuardTrait for EmergencyGuard {
         } else {
             admins.set(idx, new_admin);
         }
-        
-        env.storage()
-            .instance()
-            .set(&GuardDataKey::Admins, &admins);
+
+        env.storage().instance().set(&GuardDataKey::Admins, &admins);
         Ok(())
     }
 }
