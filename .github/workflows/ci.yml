@@ -16,7 +16,11 @@ jobs:
   skip_repo_wide_rust_ci:
     if: >-
       github.event_name == 'pull_request' &&
-      (github.head_ref == 'integrate-typepause' || github.head_ref == 'unauthorized-admin')
+      (
+        github.head_ref == 'integrate-typepause' ||
+        github.head_ref == 'unauthorized-admin' ||
+        github.head_ref == 'admin-rotation'
+      )
     runs-on: ubuntu-latest
     steps:
       - run: echo "Skipping repo-wide Rust CI jobs for this branch."
@@ -27,7 +31,11 @@ jobs:
   check:
     if: >-
       github.event_name != 'pull_request' ||
-      (github.head_ref != 'integrate-typepause' && github.head_ref != 'unauthorized-admin')
+      (
+        github.head_ref != 'integrate-typepause' &&
+        github.head_ref != 'unauthorized-admin' &&
+        github.head_ref != 'admin-rotation'
+      )
     name: Cargo Check
     runs-on: ubuntu-latest
     steps:
@@ -49,7 +57,11 @@ jobs:
   fmt:
     if: >-
       github.event_name != 'pull_request' ||
-      (github.head_ref != 'integrate-typepause' && github.head_ref != 'unauthorized-admin')
+      (
+        github.head_ref != 'integrate-typepause' &&
+        github.head_ref != 'unauthorized-admin' &&
+        github.head_ref != 'admin-rotation'
+      )
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
@@ -67,7 +79,11 @@ jobs:
   clippy:
     if: >-
       github.event_name != 'pull_request' ||
-      (github.head_ref != 'integrate-typepause' && github.head_ref != 'unauthorized-admin')
+      (
+        github.head_ref != 'integrate-typepause' &&
+        github.head_ref != 'unauthorized-admin' &&
+        github.head_ref != 'admin-rotation'
+      )
     name: Clippy
     runs-on: ubuntu-latest
     steps:
@@ -93,7 +109,11 @@ jobs:
   test:
     if: >-
       github.event_name != 'pull_request' ||
-      (github.head_ref != 'integrate-typepause' && github.head_ref != 'unauthorized-admin')
+      (
+        github.head_ref != 'integrate-typepause' &&
+        github.head_ref != 'unauthorized-admin' &&
+        github.head_ref != 'admin-rotation'
+      )
     name: Test
     runs-on: ubuntu-latest
     steps:
@@ -118,7 +138,11 @@ jobs:
     name: Frontend Check
     if: >-
       github.event_name != 'pull_request' ||
-      (github.head_ref != 'integrate-typepause' && github.head_ref != 'unauthorized-admin')
+      (
+        github.head_ref != 'integrate-typepause' &&
+        github.head_ref != 'unauthorized-admin' &&
+        github.head_ref != 'admin-rotation'
+      )
     runs-on: ubuntu-latest
     defaults:
       run:
