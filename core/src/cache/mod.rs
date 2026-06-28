@@ -1,14 +1,8 @@
-//! Two-tier simulation cache: in-memory L1 + disk-persistent L2.
-#![allow(unused_imports)]
-//!
-//! The in-memory side (Moka) lives on [`crate::simulation::SimulationCache`]
-//! for backward compatibility; this module only ships the L2 layer plus the
-//! shared error type that spans both tiers. `SimulationCache` exposes
-//! `with_disk_cache` to attach an L2 store — when it is set, reads walk
-//! L1 → L2 → miss (and promote L2 hits into L1), and writes populate both
-//! layers so state survives restarts.
+pub mod disk;
 
-use crate::simulation::{SimulationResult, SorobanResources};
+pub use disk::{DiskCache, DiskCacheConfig};
+
+use crate::simulation::SimulationResult;
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -180,10 +174,6 @@ impl ContractCache {
         }
     }
 }
-
-pub mod disk;
-
-pub use disk::{DiskCache, DiskCacheConfig};
 
 /// Errors surfaced by the cache subsystem.
 ///

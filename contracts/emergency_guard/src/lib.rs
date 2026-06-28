@@ -1,8 +1,10 @@
 #![no_std]
 
+use soroban_sdk::{
+    contracterror, contracttype, Address, Env, String, Vec,
+};
 #[cfg(feature = "contract")]
 use soroban_sdk::{contract, contractimpl};
-use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
 
 /// Granular pause types using bitmask for efficient storage
 #[contracttype]
@@ -17,8 +19,6 @@ impl PauseType {
     pub const MINT: u32 = 1 << 4;
     pub const BURN: u32 = 1 << 5;
     pub const CREATE_PAIR: u32 = 1 << 6;
-    /// Pause claim operations
-    pub const CLAIM_REWARDS: u32 = 1 << 7;
 
     pub fn new(value: u32) -> Self {
         PauseType(value)
@@ -383,7 +383,7 @@ impl EmergencyGuard {
 
     /// Verify that `approvers` contains at least `threshold` distinct valid admins,
     /// each having provided their authorization.
-    fn check_multi_sig(env: &Env, approvers: &Vec<Address>) -> Result<(), GuardError> {
+    pub(crate) fn check_multi_sig(env: &Env, approvers: &Vec<Address>) -> Result<(), GuardError> {
         let threshold: u32 = env
             .storage()
             .instance()
@@ -395,24 +395,16 @@ impl EmergencyGuard {
         }
 
         let mut valid = 0u32;
-        let len = approvers.len();
-        for i in 0..len {
-            let addr = approvers.get(i).unwrap();
-            if !Self::is_admin_internal(env, &addr) {
-                return Err(GuardError::Unauthorized);
-            }
-            let mut is_duplicate = false;
-            for j in 0..i {
-                if addr == approvers.get(j).unwrap() {
-                    is_duplicate = true;
-                    break;
-                }
-            }
-            if is_duplicate {
+        let mut seen = Vec::new(env);
+        for addr in approvers.iter() {
+            if seen.iter().any(|a| a == addr) {
                 continue;
             }
-            addr.require_auth();
-            valid += 1;
+            seen.push_back(addr.clone());
+            if Self::is_admin_internal(env, &addr) {
+                addr.require_auth();
+                valid += 1;
+            }
         }
 
         if valid < threshold {
