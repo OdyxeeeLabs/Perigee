@@ -21,6 +21,7 @@ pub enum Error {
 pub enum DataKey {
     Pair(Address, Address),
     Admin,
+    PauseState,
 }
 
 #[contract]
