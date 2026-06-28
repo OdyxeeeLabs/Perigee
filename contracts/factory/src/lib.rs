@@ -1,10 +1,11 @@
 #![no_std]
+use emergency_guard::{DefaultEmergencyGuard, EmergencyGuardTrait, GuardError};
 #[cfg(test)]
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, BytesN, Env, IntoVal, Vec,
+    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, BytesN, Env, IntoVal,
+    Vec,
 };
-use emergency_guard::{EmergencyGuardTrait, GuardError, DefaultEmergencyGuard};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -72,7 +73,12 @@ impl EmergencyGuardTrait for LiquidityPoolFactory {
         DefaultEmergencyGuard::remove_admin(env, approvers, admin)
     }
 
-    fn rotate_admin(env: &Env, approvers: Vec<Address>, old_admin: Address, new_admin: Address) -> Result<(), GuardError> {
+    fn rotate_admin(
+        env: &Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
         DefaultEmergencyGuard::rotate_admin(env, approvers, old_admin, new_admin)
     }
 
@@ -89,7 +95,6 @@ impl EmergencyGuardTrait for LiquidityPoolFactory {
     }
 }
 
-
 #[contractimpl]
 impl LiquidityPoolFactory {
     /// Initializes the factory contract with an admin and setup the emergency guard.
@@ -101,8 +106,7 @@ impl LiquidityPoolFactory {
 
         let mut admins = Vec::new(&env);
         admins.push_back(admin);
-        DefaultEmergencyGuard::init_guard(&env, admins, 1)
-            .map_err(|_| Error::Unauthorized)?;
+        DefaultEmergencyGuard::init_guard(&env, admins, 1).map_err(|_| Error::Unauthorized)?;
 
         Ok(())
     }
@@ -113,7 +117,8 @@ impl LiquidityPoolFactory {
         token_b: Address,
         wasm_hash: BytesN<32>,
     ) -> Result<Address, Error> {
-        DefaultEmergencyGuard::check_not_paused(&env, PAUSE_CREATE_PAIR_FLAG).map_err(|_| Error::Paused)?;
+        DefaultEmergencyGuard::check_not_paused(&env, PAUSE_CREATE_PAIR_FLAG)
+            .map_err(|_| Error::Paused)?;
 
         let (token_0, token_1) = if token_a < token_b {
             (token_a, token_b)
@@ -121,12 +126,21 @@ impl LiquidityPoolFactory {
             (token_b, token_a)
         };
 
-        if env.storage().instance().has(&DataKey::Pair(token_0.clone(), token_1.clone())) {
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::Pair(token_0.clone(), token_1.clone()))
+        {
             return Err(Error::PairAlreadyExists);
         }
 
-        let salt = env.crypto().sha256(&(token_0.clone(), token_1.clone()).to_xdr(&env));
-        let deployed_address = env.deployer().with_current_contract(salt).deploy_v2(wasm_hash, soroban_sdk::Vec::<soroban_sdk::Val>::new(&env));
+        let salt = env
+            .crypto()
+            .sha256(&(token_0.clone(), token_1.clone()).to_xdr(&env));
+        let deployed_address = env
+            .deployer()
+            .with_current_contract(salt)
+            .deploy_v2(wasm_hash, soroban_sdk::Vec::<soroban_sdk::Val>::new(&env));
         let init_args = soroban_sdk::vec![
             &env,
             env.current_contract_address().into_val(&env),
@@ -139,7 +153,9 @@ impl LiquidityPoolFactory {
             init_args,
         );
 
-        env.storage().instance().set(&DataKey::Pair(token_0, token_1), &deployed_address);
+        env.storage()
+            .instance()
+            .set(&DataKey::Pair(token_0, token_1), &deployed_address);
         Ok(deployed_address)
     }
 
@@ -149,10 +165,10 @@ impl LiquidityPoolFactory {
         } else {
             (token_b, token_a)
         };
-        env.storage().instance().get(&DataKey::Pair(token_0, token_1))
+        env.storage()
+            .instance()
+            .get(&DataKey::Pair(token_0, token_1))
     }
-
-
 }
 
 mod test;
