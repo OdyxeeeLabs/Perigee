@@ -9,7 +9,6 @@ use soroban_sdk::{testutils::Address as _, vec, Address, Env};
 // Import EmergencyGuard directly from its crate
 use emergency_guard::{EmergencyGuard, EmergencyGuardClient};
 
-fn setup_guard<'a>(env: &'a Env, admins: &[Address], threshold: u32) -> (EmergencyGuardClient<'a>, Address) {
 fn setup_guard<'a>(
     env: &'a Env,
     admins: &[Address],
