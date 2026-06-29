@@ -1,11 +1,11 @@
 import React from 'react';
-import { ContractFunction } from '../lib/sorobantypes';
+import { ContractFunction, SimulationInputs } from '../lib/sorobantypes';
 import { DynamicForm } from './DynamicForm';
 
 interface ContractInteractionProps {
     selectedFunction: ContractFunction;
     loading: boolean;
-    onSubmit: (inputs: Record<string, any>) => Promise<void>;
+    onSubmit: (inputs: SimulationInputs) => Promise<void>;
 }
 
 export const ContractInteraction: React.FC<ContractInteractionProps> = ({

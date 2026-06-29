@@ -16,7 +16,6 @@ use soroban_sdk::xdr::{
     WriteXdr,
 };
 use std::collections::HashMap;
-// use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use stellar_strkey::{Contract as StrkeyContract, Strkey};
 use thiserror::Error;

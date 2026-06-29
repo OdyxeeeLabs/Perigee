@@ -1888,6 +1888,9 @@ fn test_claim_rewards_basic() {
 
     // Advance ledger to accumulate rewards
     e.ledger().set_sequence_number(100);
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     // Now there should be pending rewards
     let pending = client.get_pending_rewards(&user);
@@ -1960,6 +1963,9 @@ fn test_claim_rewards_when_paused() {
 
     client.stake(&user, &shares);
     e.ledger().set_sequence_number(100);
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     // Pause the contract
     client.set_paused(&true);
@@ -2004,6 +2010,9 @@ fn test_stake_unstake_claim_full_cycle() {
 
     // Advance ledger
     e.ledger().set_sequence_number(50);
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 50;
+    e.ledger().set(ledger_info);
 
     // Claim some rewards
     let first_claim = client.claim_rewards(&user);
@@ -2011,6 +2020,9 @@ fn test_stake_unstake_claim_full_cycle() {
 
     // Advance more
     e.ledger().set_sequence_number(100);
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     // Claim more rewards
     let second_claim = client.claim_rewards(&user);
@@ -2065,6 +2077,9 @@ fn test_multiple_users_staking() {
 
     // Advance and claim
     e.ledger().set_sequence_number(100);
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     let rewards1 = client.claim_rewards(&user1);
     let rewards2 = client.claim_rewards(&user2);
