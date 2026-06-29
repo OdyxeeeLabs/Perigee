@@ -1,7 +1,4 @@
 use super::*;
-use soroban_sdk::{
-    contract, contractimpl, contracttype, testutils::Address as _, Address, Env,
-};
 use soroban_sdk::{contract, contractimpl, contracttype, testutils::Address as _, Address, Env};
 
 // ── Mock receivers ───────────────────────────────────────────────────────────
@@ -350,17 +347,19 @@ fn test_borrow_pause_blocks_flash_loan_and_resume_allows() {
     let receiver = good::GoodReceiverClient::new(&s.e, &receiver_id);
     receiver.set_vault(&s.vault_id);
 
-    assert_eq!(s.vault_client.get_borrow_paused(), false);
+    assert!(!s.vault_client.get_borrow_paused());
     s.vault_client.pause_borrow();
-    assert_eq!(s.vault_client.get_borrow_paused(), true);
+    assert!(s.vault_client.get_borrow_paused());
 
     // While paused, borrowing must fail with BorrowPaused.
-    let res = s.vault_client.try_flash_loan(&initiator, &receiver_id, &5_000);
+    let res = s
+        .vault_client
+        .try_flash_loan(&initiator, &receiver_id, &5_000);
     assert_eq!(res, Err(Ok(Error::BorrowPaused)));
 
     // Resume and borrowing works again.
     s.vault_client.resume_borrow();
-    assert_eq!(s.vault_client.get_borrow_paused(), false);
+    assert!(!s.vault_client.get_borrow_paused());
     let fee = s.vault_client.flash_loan(&initiator, &receiver_id, &5_000);
     assert_eq!(fee, 0);
 }
@@ -642,7 +641,6 @@ fn test_flash_loan_overpay() {
 
 #[test]
 #[should_panic(expected = "Contract re-entry is not allowed")]
-#[should_panic(expected = "InvalidAction")]
 fn test_reentrancy_guard() {
     let s = setup();
     fund_vault(&s, 10_000);
