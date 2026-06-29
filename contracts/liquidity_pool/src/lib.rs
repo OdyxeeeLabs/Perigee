@@ -2,7 +2,7 @@
 
 use emergency_guard::{
     emit_admin_added, emit_admin_removed, emit_emergency_paused_all, emit_guard_initialized,
-    emit_pause_state_changed, emit_resumed_all, EmergencyGuard, GuardError, PauseType,
+    emit_pause_state_changed, emit_resumed_all, EmergencyGuard, GuardError, PauseType, DefaultEmergencyGuard, EmergencyGuardTrait
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, vec, Address, Env, String, Vec,
@@ -323,9 +323,6 @@ impl LiquidityPool {
         load_admin(&e).expect("not initialized")
     }
 
-    pub fn get_admins(e: Env) -> Vec<Address> {
-        EmergencyGuard::get_admins(e)
-    }
 
     pub fn get_admin_threshold(e: Env) -> u32 {
         EmergencyGuard::get_threshold(e)
@@ -400,20 +397,8 @@ impl LiquidityPool {
         EmergencyGuard::emergency_pause(e, approvers).map_err(map_guard_err)
     }
 
-    pub fn emergency_pause_all(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
-        EmergencyGuard::emergency_pause(e, approvers).map_err(map_guard_err)
-    }
-
     pub fn resume(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
         EmergencyGuard::resume(e, approvers).map_err(map_guard_err)
-    }
-
-    pub fn resume_all(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
-        EmergencyGuard::resume(e, approvers).map_err(map_guard_err)
-    }
-
-    pub fn get_pause_state(e: Env) -> u32 {
-        EmergencyGuard::get_pause_state(e)
     }
 
     pub fn get_pause_mask(e: Env) -> u32 {
@@ -428,11 +413,6 @@ impl LiquidityPool {
         EmergencyGuard::is_paused(e, operation)
     }
 
-    /// Add a new guard admin — requires multi-sig.
-    pub fn add_admin(e: Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), Error> {
-        EmergencyGuard::add_admin(e, approvers, new_admin).map_err(map_guard_err)
-    }
-
     pub fn add_guard_admin(
         e: Env,
         approvers: Vec<Address>,
@@ -441,44 +421,12 @@ impl LiquidityPool {
         EmergencyGuard::add_admin(e, approvers, new_admin).map_err(map_guard_err)
     }
 
-    /// Remove a guard admin — requires multi-sig.
-    pub fn remove_admin(e: Env, approvers: Vec<Address>, admin: Address) -> Result<(), Error> {
-        let pool_admin = load_admin(&e)?;
-        EmergencyGuard::remove_admin(e.clone(), approvers, admin.clone()).map_err(map_guard_err)?;
-        // If the removed address was the primary pool admin, promote the first remaining guard admin.
-        if pool_admin == admin {
-            let admins = EmergencyGuard::get_admins(e.clone());
-            if let Some(remaining) = admins.get(0) {
-                e.storage().instance().set(&DataKey::Admin, &remaining);
-            }
-        }
-        Ok(())
-    }
-
     pub fn remove_guard_admin(
         e: Env,
         approvers: Vec<Address>,
         admin: Address,
     ) -> Result<(), Error> {
         Self::remove_admin(e, approvers, admin)
-    }
-
-    /// Rotate primary pool admin via EmergencyGuard multi-sig.
-    pub fn rotate_admin(
-        e: Env,
-        approvers: Vec<Address>,
-        old_admin: Address,
-        new_admin: Address,
-    ) -> Result<(), Error> {
-        let pool_admin = load_admin(&e)?;
-        if pool_admin != old_admin {
-            return Err(Error::Unauthorized);
-        }
-        EmergencyGuard::add_admin(e.clone(), approvers.clone(), new_admin.clone())
-            .map_err(map_guard_err)?;
-        EmergencyGuard::remove_admin(e.clone(), approvers, old_admin).map_err(map_guard_err)?;
-        e.storage().instance().set(&DataKey::Admin, &new_admin);
-        Ok(())
     }
 
     pub fn get_guard_admins(e: Env) -> Vec<Address> {
@@ -1144,5 +1092,69 @@ impl LiquidityPool {
             e.storage().persistent().remove(&key);
         }
         Self::transfer(e, from, to, amount)
+    }
+}
+
+#[contractimpl]
+impl EmergencyGuardTrait for LiquidityPool {
+    fn check_not_paused(env: &Env, operation: u32) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::check_not_paused(env, operation)
+    }
+
+    fn get_pause_state(env: &Env) -> u32 {
+        DefaultEmergencyGuard::get_pause_state(env)
+    }
+
+    fn set_pause_state(env: &Env, operation: u32, paused: bool) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::set_pause_state(env, operation, paused)
+    }
+
+    fn unpause(env: &Env, operation: u32) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::unpause(env, operation)
+    }
+
+    fn unpause_all(env: &Env) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::unpause_all(env)
+    }
+
+    fn emergency_pause_all(env: &Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::emergency_pause_all(env, approvers)
+    }
+
+    fn resume_all(env: &Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::resume_all(env, approvers)
+    }
+
+    fn init_guard(env: &Env, admins: Vec<Address>, threshold: u32) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::init_guard(env, admins, threshold)
+    }
+
+    fn add_admin(env: &Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::add_admin(env, approvers, new_admin)
+    }
+
+    fn remove_admin(env: &Env, approvers: Vec<Address>, admin: Address) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::remove_admin(env, approvers, admin)
+    }
+
+    fn rotate_admin(
+        env: &Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::rotate_admin(env, approvers, old_admin, new_admin)
+    }
+
+    fn get_admins(env: &Env) -> Vec<Address> {
+        DefaultEmergencyGuard::get_admins(env)
+    }
+
+    fn get_threshold(env: &Env) -> u32 {
+        DefaultEmergencyGuard::get_threshold(env)
+    }
+
+    fn is_admin(env: &Env, addr: Address) -> bool {
+        DefaultEmergencyGuard::is_admin(env, addr)
     }
 }
