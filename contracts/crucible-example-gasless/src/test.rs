@@ -246,6 +246,8 @@ fn test_execute_emits_event() {
                 .unwrap_or(false),
             None => false,
         }
+        topics.len() == 1
+            && topics.get(0) == Some(Symbol::new(&ctx.env, "executed").into_val(&ctx.env))
     });
     assert!(has_executed, "expected 'executed' event");
 }
