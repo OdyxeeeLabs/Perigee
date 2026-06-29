@@ -3,6 +3,10 @@
 import React, { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { parseWasmError } from '../lib/errorHandling';
+import { parseWasmError, WasmBackendError } from '../lib/errorHandling';
+import { arrayBufferToBase64 } from '../lib/utils';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type UploadState = 'idle' | 'hover' | 'scanning' | 'success' | 'error' | 'submitting';
 
@@ -85,6 +89,7 @@ function ErrorIcon() {
   );
 }
 
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export interface UploadZoneProps {
@@ -96,6 +101,7 @@ export interface UploadZoneProps {
 
 export function UploadZone({
   onFileReady,
+  onReset,
   backendUrl = 'http://localhost:8080/analyze/wasm',
   enableBackendValidation = true,
   onReset,
@@ -127,6 +133,10 @@ export function UploadZone({
               binary += String.fromCharCode(bytes[i]);
             }
             const base64Data = btoa(binary);
+
+            // Convert to base64 for backend submission using chunked encoding.
+            const base64Data = arrayBufferToBase64(arrayBuffer);
+
             const response = await fetch(backendUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -215,6 +225,7 @@ export function UploadZone({
             }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : 'Failed to parse WASM metadata';
+            alert(errorMsg);
             setErrorMessage(errorMsg);
             setErrorDetails({
               title: 'Invalid WASM File',
@@ -251,6 +262,15 @@ export function UploadZone({
     const errorMsg = `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
     setErrorMessage(errorMsg);
     setErrorDetails({ title: 'Invalid File Type', message: errorMsg, suggestedAction: 'Please upload a compiled .wasm file.' });
+    const customMessage = first?.errors?.[0]?.message;
+    const errorMsg = `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
+    alert(customMessage || errorMsg);
+    setErrorMessage(customMessage || errorMsg);
+    setErrorDetails({
+      title: 'Invalid File Type',
+      message: errorMsg,
+      suggestedAction: 'Please upload a compiled .wasm file.',
+    });
     setUploadState('error');
     setDroppedFile(null);
   }, []);
@@ -269,6 +289,13 @@ export function UploadZone({
     onDropAccepted,
     onDropRejected,
     accept: { 'application/wasm': ['.wasm'], 'application/octet-stream': ['.wasm'] },
+    validator: wasmValidator,
+    accept: {
+      'application/wasm': ['.wasm'],
+      'application/octet-stream': ['.wasm'],
+    },
+    onDragEnter,
+    onDragLeave,
     maxFiles: 1,
     noClick: uploadState === 'scanning',
     noDrag: uploadState === 'scanning',
@@ -396,6 +423,18 @@ export function UploadZone({
       </div>
       <p className="text-xs text-slate-600 text-center mt-3 font-mono">WASM Resource Analyzer · Soroscope · compiled Soroban contracts only</p>
       <style>{`@keyframes pulse-ring { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }`}</style>
+
+      {/* Caption hint */}
+      <p className="text-xs text-slate-600 text-center mt-3 font-mono">
+        WASM Resource Analyzer · Soroscope · compiled Soroban contracts only
+      </p>
+
+      <style>{`
+        @keyframes pulse-ring {
+          0%, 100% { opacity: 0.4; }
+          50%       { opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }

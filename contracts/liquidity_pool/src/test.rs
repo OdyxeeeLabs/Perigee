@@ -1698,6 +1698,7 @@ fn test_stake_insufficient_balance() {
         client.try_stake(&user, &(shares + 1)),
         Err(Ok(Error::InsufficientBalance))
     );
+    assert!(client.try_stake(&user, &(shares + 1)).is_err());
 }
 
 #[test]
@@ -1816,6 +1817,7 @@ fn test_unstake_insufficient_staked() {
         client.try_unstake(&user, &shares),
         Err(Ok(Error::InsufficientShares))
     );
+    assert!(client.try_unstake(&user, &shares).is_err());
 }
 
 #[test]
@@ -1898,6 +1900,9 @@ fn test_claim_rewards_basic() {
         info.sequence_number = 100;
         e.ledger().set(info);
     }
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     // Now there should be pending rewards
     let pending = client.get_pending_rewards(&user);
@@ -1974,6 +1979,9 @@ fn test_claim_rewards_when_paused() {
         info.sequence_number = 100;
         e.ledger().set(info);
     }
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     // Pause the contract
     client.set_paused(&true);
@@ -2022,6 +2030,9 @@ fn test_stake_unstake_claim_full_cycle() {
         info.sequence_number = 50;
         e.ledger().set(info);
     }
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 50;
+    e.ledger().set(ledger_info);
 
     // Claim some rewards
     let first_claim = client.claim_rewards(&user);
@@ -2033,6 +2044,9 @@ fn test_stake_unstake_claim_full_cycle() {
         info.sequence_number = 100;
         e.ledger().set(info);
     }
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     // Claim more rewards
     let second_claim = client.claim_rewards(&user);
@@ -2086,11 +2100,9 @@ fn test_multiple_users_staking() {
     assert_eq!(client.get_total_staked(), shares1 + shares2);
 
     // Advance and claim
-    {
-        let mut info = e.ledger().get();
-        info.sequence_number = 100;
-        e.ledger().set(info);
-    }
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = 100;
+    e.ledger().set(ledger_info);
 
     let rewards1 = client.claim_rewards(&user1);
     let rewards2 = client.claim_rewards(&user2);

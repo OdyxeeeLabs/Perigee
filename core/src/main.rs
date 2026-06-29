@@ -24,16 +24,7 @@ mod ws;
 use crate::cache::{ContractCache, SimulationCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
 use crate::errors::AppError;
-use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
-use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
-use crate::fee_store::FeeStore;
-use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
-use crate::insights::InsightsEngine;
-use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
 use crate::merkle_tree::MerkleTree;
-use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
-use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
-use crate::ws::SimulationBus;
 use axum::{
     extract::{Json, Multipart, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
@@ -50,6 +41,17 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
+// CLI Argument Handling
+use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
+use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
+use crate::fee_store::FeeStore;
+use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
+use crate::insights::InsightsEngine;
+use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
+use crate::merkle_tree::MerkleTree;
+use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
+use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
+use crate::ws::SimulationBus;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -181,7 +183,6 @@ fn default_fee_analysis_enabled() -> bool {
 fn default_emergency_verification_paused() -> bool {
     false
 }
-
 fn default_disk_cache_path() -> String {
     // Empty == L2 disabled. Operators who want persistence set this in
     // env / config.toml explicitly; we don't create a hidden directory
@@ -396,7 +397,6 @@ pub struct AnalyzeRequest {
     pub enable_experimental: Option<bool>,
     /// Whether to generate and include Merkle tree root of the state snapshot
     #[serde(default)]
-    /// Generate Merkle tree root from state snapshot
     #[schema(example = false)]
     pub include_merkle_tree: Option<bool>,
 }
@@ -881,11 +881,13 @@ async fn analyze(
                 None
             } else {
                 let mut tree = MerkleTree::new(256);
+                let mut tree = MerkleTree::new(32);
                 if let Err(e) = tree.build(leaves) {
                     tracing::error!("Failed to generate Merkle tree: {}", e);
                     None
                 } else {
                     tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count);
+                    tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count());
                     Some(tree.get_root_hex())
                 }
             }
@@ -1754,6 +1756,9 @@ async fn main() {
 
         return;
     }
+
+    // Default Web Server
+    println!("SoroScope CLI Initialized. Run with 'benchmark' argument to profile token contract.");
 
     // ── CLI: compare subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "compare" {

@@ -1,5 +1,8 @@
 export type SorobanType = 'address' | 'u32' | 'i128' | 'u128' | 'string' | 'symbol' | 'bool' | 'struct' | 'enum';
 
+/** Typed map of contract function input values from the simulation form. */
+export type SimulationInputs = Record<string, string | number | boolean>;
+
 export interface SorobanResources {
   cpu_instructions: number;
   ram_bytes: number;
@@ -21,14 +24,9 @@ export interface ContractInput {
   optional?: boolean;
 }
 
-export interface ResourceCost {
+export interface ResourceCost extends SorobanResources {
   fee?: string;
   cost_stroops?: number;
-  cpu_instructions: number;
-  ram_bytes: number;
-  ledger_read_bytes: number;
-  ledger_write_bytes: number;
-  transaction_size_bytes: number;
   testnet_averages?: TestnetAverages;
 }
 
@@ -43,22 +41,15 @@ export interface TestnetAverages {
 export interface InvocationResult {
   id: string;
   functionName: string;
-  inputs: Record<string, any>;
-  result?: any;
+  inputs: SimulationInputs;
+  result?: unknown;
   error?: string;
-  errorType?: string; // Error type from backend (e.g., BAD_REQUEST, INTERNAL_SERVER_ERROR)
-  resourceCost?: {
-    fee?: string;
-    cpu_instructions: number;
-    ram_bytes: number;
-    ledger_read_bytes: number;
-    ledger_write_bytes: number;
-    transaction_size_bytes: number;
-  };
+  errorType?: string;
+  resourceCost?: ResourceCost;
   /** Primary `/analyze` response payload for the latest invocation. */
   analysisReport?: ResourceReport;
-  /** Backward-compatible alias for older stored history entries. */
-  resourceCost?: ResourceReport;
+  errorType?: string; // Error type from backend (e.g., BAD_REQUEST, INTERNAL_SERVER_ERROR)
+  analysisReport?: ResourceReport;
   resourceCost?: ResourceCost;
   callGraph?: CallGraph;
   callGraphMermaid?: string;
@@ -170,18 +161,18 @@ export const MOCK_CONTRACT_FUNCTIONS: ContractFunction[] = [
   },
 ];
 
-export function generateMockResult(functionName: string, inputs: Record<string, any>) {
-  const results: Record<string, any> = {
+export function generateMockResult(functionName: string, inputs: SimulationInputs): unknown {
+  const results: Record<string, unknown> = {
     transfer: { success: true, transaction_hash: '0x' + Math.random().toString(16).slice(2) },
     balance: Math.floor(Math.random() * 1000000),
     mint: { success: true, amount_minted: inputs.amount },
     symbol: 'USDC',
     decimals: 6,
   };
-  return results[functionName] || { success: true, message: 'Function executed' };
+  return results[functionName] ?? { success: true, message: 'Function executed' };
 }
 
-export function generateMockResourceCost() {
+export function generateMockResourceCost(): ResourceCost {
   return {
     fee: (Math.random() * 0.05).toFixed(5),
     cpu_instructions: Math.floor(Math.random() * 50_000_000) + 1_000_000,

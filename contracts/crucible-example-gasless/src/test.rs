@@ -246,6 +246,8 @@ fn test_execute_emits_event() {
         }
         let topic: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&ctx.env);
         topic.is_ok() && topic.unwrap() == Symbol::new(&ctx.env, "executed")
+        topics.len() == 1
+            && topics.get(0) == Some(Symbol::new(&ctx.env, "executed").into_val(&ctx.env))
     });
     assert!(has_executed, "expected 'executed' event");
 }
