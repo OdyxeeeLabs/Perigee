@@ -12,9 +12,9 @@ export interface ApiRequestOptions extends RequestInit {
 export class ApiError extends Error {
   status: number;
   statusText: string;
-  body: any;
+  body: unknown;
 
-  constructor(status: number, statusText: string, body: any) {
+  constructor(status: number, statusText: string, body: unknown) {
     super(`API Error ${status}: ${body?.message || statusText}`);
     this.name = 'ApiError';
     this.status = status;
@@ -91,19 +91,19 @@ export const apiClient = {
     return request<T>(endpoint, { ...options, method: 'GET' });
   },
 
-  post<T>(endpoint: string, body?: any, options?: ApiRequestOptions): Promise<T> {
+  post<T>(endpoint: string, body?: unknown, options?: ApiRequestOptions): Promise<T> {
     return request<T>(endpoint, {
       ...options,
       method: 'POST',
-      body: body ? JSON.stringify(body) : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   },
 
-  put<T>(endpoint: string, body?: any, options?: ApiRequestOptions): Promise<T> {
+  put<T>(endpoint: string, body?: unknown, options?: ApiRequestOptions): Promise<T> {
     return request<T>(endpoint, {
       ...options,
       method: 'PUT',
-      body: body ? JSON.stringify(body) : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   },
 
@@ -136,8 +136,8 @@ export const analyzeService = {
    * @param req The contract analysis request payload
    * @param token JWT authorization token (optional)
    */
-  async analyze(req: AnalyzeRequest, token?: string): Promise<any> {
-    return apiClient.post<any>('/analyze', req, { token });
+  async analyze(req: AnalyzeRequest, token?: string): Promise<unknown> {
+    return apiClient.post<unknown>('/analyze', req, { token });
   },
 
   /**
@@ -145,8 +145,8 @@ export const analyzeService = {
    * @param req The WASM bytes analysis request payload
    * @param token JWT authorization token (optional)
    */
-  async analyzeWasm(req: AnalyzeWasmRequest, token?: string): Promise<any> {
-    return apiClient.post<any>('/analyze/wasm', req, { token });
+  async analyzeWasm(req: AnalyzeWasmRequest, token?: string): Promise<unknown> {
+    return apiClient.post<unknown>('/analyze/wasm', req, { token });
   },
 };
 
