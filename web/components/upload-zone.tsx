@@ -1,10 +1,8 @@
 'use client';
 
 import React, { useCallback, useState } from 'react';
-import { useDropzone, FileRejection } from 'react-dropzone';
-import { parseWasmError, WasmBackendError } from '../lib/errorHandling';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { useDropzone } from 'react-dropzone';
+import type { FileRejection } from 'react-dropzone';
 
 type UploadState = 'idle' | 'hover' | 'scanning' | 'success' | 'error' | 'submitting';
 
@@ -16,11 +14,18 @@ interface DroppedFile {
 interface ErrorDetails {
   title: string;
   message: string;
-  details?: string;
   suggestedAction?: string;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+export interface UploadZoneProps {
+  onFileReady?: (file: File) => void;
+  backendUrl?: string;
+  enableBackendValidation?: boolean;
+  onReset?: () => void;
+}
+
+const MAX_WASM_SIZE = 5 * 1024 * 1024;
+const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d];
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -28,11 +33,25 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+function hasWasmMagic(buffer: ArrayBuffer): boolean {
+  if (buffer.byteLength < WASM_MAGIC.length) return false;
+  const bytes = new Uint8Array(buffer, 0, WASM_MAGIC.length);
+  return WASM_MAGIC.every((byte, index) => bytes[index] === byte);
+}
 
-/** Animated WASM hex-grid icon */
 function WasmIcon({ state }: { state: UploadState }) {
-  const isActive = state === 'hover' || state === 'scanning' || state === 'success';
+  const isActive = state === 'hover' || state === 'scanning' || state === 'success' || state === 'submitting';
+  const accent =
+    state === 'error'
+      ? '#f87171'
+      : state === 'success'
+      ? '#34d399'
+      : state === 'hover'
+      ? '#38bdf8'
+      : state === 'scanning' || state === 'submitting'
+      ? '#a78bfa'
+      : '#64748b';
+
   return (
     <svg
       width="64"
@@ -42,35 +61,13 @@ function WasmIcon({ state }: { state: UploadState }) {
       xmlns="http://www.w3.org/2000/svg"
       className={`transition-all duration-500 ${isActive ? 'scale-110' : 'scale-100'}`}
     >
-      {/* Outer hexagon */}
       <path
         d="M32 4 L56 18 L56 46 L32 60 L8 46 L8 18 Z"
-        stroke={
-          state === 'error'
-            ? '#f87171'
-            : state === 'success'
-            ? '#34d399'
-            : state === 'scanning'
-            ? '#a78bfa'
-            : state === 'hover'
-            ? '#38bdf8'
-            : '#334155'
-        }
+        stroke={accent}
         strokeWidth="2"
-        fill={
-          state === 'error'
-            ? 'rgba(248,113,113,0.08)'
-            : state === 'success'
-            ? 'rgba(52,211,153,0.08)'
-            : state === 'scanning'
-            ? 'rgba(167,139,250,0.08)'
-            : state === 'hover'
-            ? 'rgba(56,189,248,0.08)'
-            : 'rgba(30,41,59,0.5)'
-        }
+        fill="rgba(30,41,59,0.5)"
         className="transition-all duration-500"
       />
-      {/* Inner WASM label */}
       <text
         x="32"
         y="35"
@@ -78,17 +75,7 @@ function WasmIcon({ state }: { state: UploadState }) {
         fontSize="11"
         fontWeight="700"
         fontFamily="monospace"
-        fill={
-          state === 'error'
-            ? '#f87171'
-            : state === 'success'
-            ? '#34d399'
-            : state === 'scanning'
-            ? '#a78bfa'
-            : state === 'hover'
-            ? '#38bdf8'
-            : '#64748b'
-        }
+        fill={accent}
         className="transition-all duration-500"
       >
         .wasm
@@ -97,10 +84,9 @@ function WasmIcon({ state }: { state: UploadState }) {
   );
 }
 
-/** Pulsing scanning bar animation */
 function ScanningAnimation() {
   return (
-    <div className="w-full mt-3 overflow-hidden rounded-full h-1 bg-slate-800">
+    <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-slate-800">
       <div
         className="h-full rounded-full bg-gradient-to-r from-violet-500 via-fuchsia-400 to-violet-500"
         style={{
@@ -110,7 +96,7 @@ function ScanningAnimation() {
       />
       <style>{`
         @keyframes scan-sweep {
-          0%   { transform: translateX(-100%); }
+          0% { transform: translateX(-100%); }
           100% { transform: translateX(200%); }
         }
       `}</style>
@@ -118,367 +104,205 @@ function ScanningAnimation() {
   );
 }
 
-/** Spinning dots loader */
 function SpinnerDots() {
   return (
-    <div className="flex gap-1.5 items-center justify-center mt-2">
-      {[0, 1, 2].map((i) => (
+    <div className="mt-2 flex items-center justify-center gap-1.5">
+      {[0, 1, 2].map((index) => (
         <span
-          key={i}
-          className="w-1.5 h-1.5 rounded-full bg-violet-400"
+          key={index}
+          className="h-1.5 w-1.5 rounded-full bg-violet-400"
           style={{
-            animation: `dot-pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
+            animation: `dot-pulse 1.2s ease-in-out ${index * 0.2}s infinite`,
           }}
         />
       ))}
       <style>{`
         @keyframes dot-pulse {
           0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
-          40%            { opacity: 1;   transform: scale(1.2); }
+          40% { opacity: 1; transform: scale(1.2); }
         }
       `}</style>
     </div>
   );
 }
 
-/** Checkmark success indicator */
 function SuccessIcon() {
   return (
-    <svg
-      className="w-5 h-5 text-emerald-400 inline-block mr-1.5"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2.5}
-    >
+    <svg className="mr-1.5 inline-block h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
     </svg>
   );
 }
 
-/** Error X indicator */
 function ErrorIcon() {
   return (
-    <svg
-      className="w-5 h-5 text-red-400 inline-block mr-1.5"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2.5}
-    >
+    <svg className="mr-1.5 inline-block h-5 w-5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
     </svg>
   );
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
-
-export interface UploadZoneProps {
-  /** Called with the validated File once scanning completes */
-  onFileReady?: (file: File) => void;
-  /** Backend endpoint for WASM analysis (default: http://localhost:8080/analyze/wasm) */
-  backendUrl?: string;
-  /** Whether to validate with backend after client-side checks */
-  enableBackendValidation?: boolean;
-}
-
-export function UploadZone({ onFileReady }: UploadZoneProps) {
-  onReset?: () => void;
-}
-
-export function UploadZone({ onFileReady, onReset }: UploadZoneProps) {
-}
-
-export function UploadZone({ onFileReady }: UploadZoneProps) {
-export function UploadZone({ 
-  onFileReady, 
+export function UploadZone({
+  onFileReady,
   backendUrl = 'http://localhost:8080/analyze/wasm',
-  enableBackendValidation = true 
+  enableBackendValidation = false,
+  onReset,
 }: UploadZoneProps) {
   const [uploadState, setUploadState] = useState<UploadState>('idle');
   const [droppedFile, setDroppedFile] = useState<DroppedFile | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string>('');
   const [errorDetails, setErrorDetails] = useState<ErrorDetails | null>(null);
-  const [unexpectedError, setUnexpectedError] = useState<Error | null>(null);
 
-  if (unexpectedError) {
-    throw unexpectedError;
-  }
-
-  // ── Backend submission ───────────────────────────────────────────────────────
-
-  const submitToBackend = async (file: File): Promise<boolean> => {
-    try {
-      setUploadState('submitting');
-      const reader = new FileReader();
-      
-      return new Promise((resolve) => {
-        reader.onload = async (event) => {
-          try {
-            const arrayBuffer = event.target?.result as ArrayBuffer;
-            if (!arrayBuffer) throw new Error('Failed to read file');
-
-            // Convert to base64 for backend submission
-            const bytes = new Uint8Array(arrayBuffer);
-            let binary = '';
-            for (let i = 0; i < bytes.byteLength; i++) {
-              binary += String.fromCharCode(bytes[i]);
-            }
-            const base64Data = btoa(binary);
-
-            const response = await fetch(backendUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                wasm_bytes: base64Data,
-                function_name: 'main', // Default function for validation
-                args: [],
-              }),
-            });
-
-            if (!response.ok) {
-              const errorText = await response.text();
-              let errorMessage = errorText;
-              
-              // Try to parse as JSON for better error details
-              try {
-                const errorJson = JSON.parse(errorText);
-                errorMessage = errorJson.message || errorJson.error || errorText;
-              } catch (e) {
-                // Use raw error text
-              }
-
-              const wasmError = parseWasmError(response, errorMessage);
-              setErrorMessage(wasmError.message);
-              setErrorDetails(wasmError);
-              setUploadState('error');
-              setDroppedFile(null);
-              resolve(false);
-              return;
-            }
-
-            // Backend accepted the WASM file
-            setUploadState('success');
-            onFileReady?.(file);
-            resolve(true);
-          } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : 'Failed to validate with backend';
-            setErrorMessage(errorMsg);
-            setErrorDetails({
-              title: 'Validation Error',
-              message: errorMsg,
-              suggestedAction: 'Please try uploading again.',
-            });
-            setUploadState('error');
-            setDroppedFile(null);
-            resolve(false);
-          }
-        };
-
-        reader.onerror = () => {
-          const errorMsg = reader.error?.message ?? 'Unable to read the selected file';
-          setErrorMessage(errorMsg);
-          setErrorDetails({
-            title: 'File Read Error',
-            message: errorMsg,
-            suggestedAction: 'Please try selecting the file again.',
-          });
-          setUploadState('error');
-          setDroppedFile(null);
-          resolve(false);
-        };
-
-        try {
-          reader.readAsArrayBuffer(file);
-        } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : 'Unable to start reading file';
-          setErrorMessage(errorMsg);
-          setErrorDetails({
-            title: 'File Read Error',
-            message: errorMsg,
-            suggestedAction: 'Please try selecting a different file.',
-          });
-          setUploadState('error');
-          setDroppedFile(null);
-          resolve(false);
-        }
-      });
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'An unexpected error occurred';
-      setErrorMessage(errorMsg);
-      setErrorDetails({
-        title: 'Submission Error',
-        message: errorMsg,
-        suggestedAction: 'Please try again.',
-      });
-      setUploadState('error');
-      setDroppedFile(null);
-      return false;
-    }
-  };
-
-  // ── Drop handling ────────────────────────────────────────────────────────────
-
-  const onDropAccepted = useCallback(
-    (files: File[]) => {
-      const file = files[0];
-      setDroppedFile({ name: file.name, sizeBytes: file.size });
-      setUploadState('scanning');
-      setErrorMessage('');
-      setErrorDetails(null);
-
-      // Simulate async scan (replace with real WASM parsing logic)
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setTimeout(async () => {
-          try {
-            const arrayBuffer = event.target?.result as ArrayBuffer;
-            if (!arrayBuffer) throw new Error('Failed to read file content');
-
-            if (arrayBuffer.byteLength < 8) {
-              throw new Error('File is too small to be a valid WebAssembly module');
-            }
-
-            const view = new DataView(arrayBuffer);
-            
-            const magicNumber = view.getUint32(0, false);
-            if (magicNumber !== 0x0061736d) {
-              throw new Error('Invalid WASM magic number. File is not a valid WebAssembly module');
-            }
-
-            const version = view.getUint32(4, true);
-            if (version !== 1) {
-              throw new Error(`Unsupported WASM version: ${version}. Expected version 1`);
-            }
-
-            // Client-side validation passed, now validate with backend if enabled
-            if (enableBackendValidation) {
-              await submitToBackend(file);
-            } else {
-              // Skip backend validation
-              setUploadState('success');
-              onFileReady?.(file);
-            }
-          } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : 'Failed to parse WASM metadata';
-            setErrorMessage(errorMsg);
-            setErrorDetails({
-              title: 'Invalid WASM File',
-              message: errorMsg,
-              suggestedAction: 'Please ensure you\'re uploading a valid compiled Soroban contract.',
-            });
-            setUploadState('error');
-            setDroppedFile(null);
-          }
-        }, 800);
-      };
-      
-      reader.onerror = () => {
-        const errorMsg = reader.error?.message ?? 'Unable to read the selected file';
-        setErrorMessage(errorMsg);
-        setErrorDetails({
-          title: 'File Read Error',
-          message: errorMsg,
-          suggestedAction: 'Please try selecting the file again.',
-        });
-        setUploadState('error');
-        setDroppedFile(null);
-      };
-
-      try {
-        reader.readAsArrayBuffer(file);
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Unable to start reading the selected file';
-        setErrorMessage(errorMsg);
-        setErrorDetails({
-          title: 'File Read Error',
-          message: errorMsg,
-          suggestedAction: 'Please try selecting a different file.',
-        });
-        setUploadState('error');
-        setDroppedFile(null);
-      }
-    },
-    [onFileReady, enableBackendValidation, submitToBackend]
-  );
-
-  const onDropRejected = useCallback((rejections: FileRejection[]) => {
-    const first = rejections[0];
-    const fileName = first?.file?.name ?? 'file';
-    const ext = fileName.includes('.') ? `.${fileName.split('.').pop()}` : 'unknown type';
-    const customMessage = first?.errors?.[0]?.message;
-    setErrorMessage(
-      customMessage || `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`
-    setErrorMessage(
-      `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`
-    );
-    const errorMsg = `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
-    setErrorMessage(errorMsg);
-    setErrorDetails({
-      title: 'Invalid File Type',
-      message: errorMsg,
-      suggestedAction: 'Please upload a compiled .wasm file.',
-    });
+  const setError = useCallback((title: string, message: string, suggestedAction?: string) => {
+    setErrorDetails({ title, message, suggestedAction });
     setUploadState('error');
     setDroppedFile(null);
   }, []);
 
+  const submitToBackend = useCallback(
+    async (file: File): Promise<void> => {
+      setUploadState('submitting');
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+
+      for (let index = 0; index < bytes.byteLength; index += 1) {
+        binary += String.fromCharCode(bytes[index]);
+      }
+
+      const response = await fetch(backendUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wasm_bytes: btoa(binary),
+          function_name: 'main',
+          args: [],
+        }),
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Backend validation failed with ${response.status}`);
+      }
+    },
+    [backendUrl]
+  );
+
+  const handleAcceptedFile = useCallback(
+    async (file: File) => {
+      setDroppedFile({ name: file.name, sizeBytes: file.size });
+      setUploadState('scanning');
+      setErrorDetails(null);
+
+      try {
+        const buffer = await file.arrayBuffer();
+
+        if (!hasWasmMagic(buffer)) {
+          throw new Error(`"${file.name}" is not a valid WASM binary`);
+        }
+
+        if (enableBackendValidation) {
+          await submitToBackend(file);
+        }
+
+        setUploadState('success');
+        onFileReady?.(file);
+      } catch (error) {
+        setError(
+          'File rejected',
+          error instanceof Error ? error.message : 'Unable to read the selected WASM file',
+          'Please upload a compiled Soroban .wasm file.'
+        );
+      }
+    },
+    [enableBackendValidation, onFileReady, setError, submitToBackend]
+  );
+
+  const onDropAccepted = useCallback(
+    (files: File[]) => {
+      const file = files[0];
+      if (file) {
+        void handleAcceptedFile(file);
+      }
+    },
+    [handleAcceptedFile]
+  );
+
+  const onDropRejected = useCallback(
+    (rejections: FileRejection[]) => {
+      const first = rejections[0];
+      const fileName = first?.file?.name ?? 'file';
+      const isTooLarge = first?.errors.some((error) => error.code === 'file-too-large');
+      const extension = fileName.includes('.') ? `.${fileName.split('.').pop()}` : 'unknown type';
+      const message = isTooLarge
+        ? `"${fileName}" exceeds the ${MAX_WASM_SIZE / (1024 * 1024)} MB size limit`
+        : `"${fileName}" was rejected: only .wasm files are accepted (got ${extension})`;
+
+      setError('Invalid file type', message, 'Drop a compiled Soroban .wasm file.');
+    },
+    [setError]
+  );
+
+  const handleDragEnter = useCallback(() => {
+    if (uploadState !== 'scanning' && uploadState !== 'submitting') {
+      setUploadState('hover');
+    }
+  }, [uploadState]);
+
+  const handleDragLeave = useCallback(() => {
+    if (uploadState === 'hover') {
+      setUploadState('idle');
+    }
+  }, [uploadState]);
+
+  const handleDrop = useCallback(() => {
+    if (uploadState === 'hover') {
+      setUploadState('scanning');
+    }
+  }, [uploadState]);
+
   const wasmValidator = useCallback((file: File) => {
-    const extension = file.name.split('.').pop()?.toLowerCase();
-    if (extension !== 'wasm') {
+    if (!file.name.toLowerCase().endsWith('.wasm')) {
       return {
         code: 'file-invalid-type',
-        message: `"${file.name}" was rejected — only .wasm files are accepted (got .${extension || 'unknown'})`,
+        message: `"${file.name}" is not a .wasm file`,
       };
     }
+
     return null;
   }, []);
-  const onDragEnter = useCallback(() => {
-    if (uploadState !== 'scanning') setUploadState('hover');
-  }, [uploadState]);
-
-  const onDragLeave = useCallback(() => {
-    if (uploadState === 'hover') setUploadState('idle');
-  }, [uploadState]);
-
-  // ── Dropzone config ──────────────────────────────────────────────────────────
 
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
     onDropAccepted,
     onDropRejected,
+    onDragEnter: handleDragEnter,
+    onDragLeave: handleDragLeave,
+    onDrop: handleDrop,
     validator: wasmValidator,
     accept: {
       'application/wasm': ['.wasm'],
       'application/octet-stream': ['.wasm'],
     },
-    onDragEnter,
-    onDragLeave,
-    accept: { 'application/wasm': ['.wasm'] },
     maxFiles: 1,
-    noClick: uploadState === 'scanning',
-    noDrag: uploadState === 'scanning',
+    maxSize: MAX_WASM_SIZE,
+    noClick: uploadState === 'scanning' || uploadState === 'submitting',
+    noDrag: uploadState === 'scanning' || uploadState === 'submitting',
   });
 
-  // ── Reset ────────────────────────────────────────────────────────────────────
-
-  const handleReset = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleReset = (event: React.MouseEvent) => {
+    event.stopPropagation();
     setUploadState('idle');
     setDroppedFile(null);
-    setErrorMessage('');
-    setUnexpectedError(null);
+    setErrorDetails(null);
     onReset?.();
   };
 
-  // ── Dynamic border & bg classes ──────────────────────────────────────────────
-
-  const isHovered = isDragActive && uploadState !== 'scanning';
-  const displayState = isHovered ? 'hover' : uploadState;
+  const displayState = isDragActive && uploadState !== 'scanning' && uploadState !== 'submitting' ? 'hover' : uploadState;
 
   const borderColor = {
     idle: 'border-slate-600 hover:border-slate-400',
     hover: 'border-sky-400 shadow-[0_0_24px_rgba(56,189,248,0.2)]',
     scanning: 'border-violet-500 shadow-[0_0_24px_rgba(167,139,250,0.25)]',
+    submitting: 'border-violet-500 shadow-[0_0_24px_rgba(167,139,250,0.25)]',
     success: 'border-emerald-500 shadow-[0_0_24px_rgba(52,211,153,0.2)]',
     error: 'border-red-500 shadow-[0_0_24px_rgba(248,113,113,0.2)]',
   }[displayState];
@@ -487,23 +311,20 @@ export function UploadZone({
     idle: 'bg-slate-900/60 hover:bg-slate-800/60',
     hover: 'bg-sky-950/50',
     scanning: 'bg-violet-950/40',
+    submitting: 'bg-violet-950/40',
     success: 'bg-emerald-950/40',
     error: 'bg-red-950/30',
   }[displayState];
 
-  // ── Render ───────────────────────────────────────────────────────────────────
-
   return (
     <div className="w-full font-sans">
-      {/* Drop Zone */}
       <div
         id="wasm-upload-zone"
         {...getRootProps()}
         className={[
-          'relative flex flex-col items-center justify-center',
-          'border-2 border-dashed rounded-2xl p-10',
-          'cursor-pointer transition-all duration-300 ease-in-out select-none',
-          'min-h-[260px]',
+          'relative flex min-h-[260px] flex-col items-center justify-center',
+          'rounded-2xl border-2 border-dashed p-10',
+          'cursor-pointer select-none transition-all duration-300 ease-in-out',
           borderColor,
           bgColor,
         ].join(' ')}
@@ -512,10 +333,9 @@ export function UploadZone({
       >
         <input {...getInputProps()} id="wasm-file-input" aria-label="Upload .wasm file" />
 
-        {/* Animated glow ring on hover */}
-        {(displayState === 'hover' || displayState === 'scanning') && (
+        {(displayState === 'hover' || displayState === 'scanning' || displayState === 'submitting') && (
           <span
-            className="absolute inset-0 rounded-2xl pointer-events-none"
+            className="pointer-events-none absolute inset-0 rounded-2xl"
             style={{
               boxShadow:
                 displayState === 'hover'
@@ -526,610 +346,107 @@ export function UploadZone({
           />
         )}
 
-        {/* ── IDLE / HOVER STATE ── */}
         {(displayState === 'idle' || displayState === 'hover') && (
-          <div className="flex flex-col items-center text-center gap-4 transition-all duration-300">
+          <div className="flex flex-col items-center gap-4 text-center transition-all duration-300">
             <WasmIcon state={displayState} />
             <div>
-              <p
-                className={`text-base font-semibold transition-colors duration-300 ${
-                  displayState === 'hover' ? 'text-sky-300' : 'text-slate-300'
-                }`}
-              >
-                {displayState === 'hover'
-                  ? 'Release to upload your .wasm file'
-                  : 'Drag & drop your compiled .wasm file'}
+              <p className={`text-base font-semibold transition-colors duration-300 ${displayState === 'hover' ? 'text-sky-300' : 'text-slate-300'}`}>
+                {displayState === 'hover' ? 'Release to upload your .wasm file' : 'Drag & drop your compiled .wasm file'}
               </p>
-              <p className="text-sm text-slate-500 mt-1">
+              <p className="mt-1 text-sm text-slate-500">
                 or{' '}
                 <button
                   type="button"
-                  className="text-sky-400 underline underline-offset-2 hover:text-sky-300 transition-colors"
-                  onClick={(e) => { e.stopPropagation(); open(); }}
+                  className="text-sky-400 underline underline-offset-2 transition-colors hover:text-sky-300"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    open();
+                  }}
                 >
                   click to browse
                 </button>
               </p>
             </div>
-            <div className="flex items-center gap-2 mt-1 px-4 py-1.5 rounded-full bg-slate-800/70 border border-slate-700">
-              <span className="w-2 h-2 rounded-full bg-sky-400" />
-              <span className="text-xs text-slate-400 font-mono">Only .wasm files accepted</span>
+            <div className="mt-1 flex items-center gap-2 rounded-full border border-slate-700 bg-slate-800/70 px-4 py-1.5">
+              <span className="h-2 w-2 rounded-full bg-sky-400" />
+              <span className="font-mono text-xs text-slate-400">Only .wasm files accepted</span>
             </div>
           </div>
         )}
 
-        {/* ── SCANNING STATE ── */}
-        {uploadState === 'scanning' && (
-          <div className="flex flex-col items-center text-center gap-3 w-full px-4">
-            <WasmIcon state="scanning" />
-            <p className="text-violet-300 font-semibold text-base tracking-wide">
-              Scanning contract…
-            </p>
-            {droppedFile && (
-              <div className="flex items-center gap-2 text-xs text-slate-400 font-mono bg-slate-800/70 px-3 py-1.5 rounded-full border border-slate-700">
-                <span className="text-violet-400">📄</span>
-                <span className="truncate max-w-[240px]">{droppedFile.name}</span>
-                <span className="text-slate-500">·</span>
-                <span>{formatBytes(droppedFile.sizeBytes)}</span>
-              </div>
-            )}
-            <ScanningAnimation />
-            <SpinnerDots />
-            <p className="text-xs text-slate-500">Parsing WASM binary · analysing resource usage…</p>
-          </div>
-        )}
-
-        {/* ── SUCCESS STATE ── */}
-        {uploadState === 'success' && droppedFile && (
-          <div className="flex flex-col items-center text-center gap-4">
-            <WasmIcon state="success" />
-            <div>
-              <p className="text-emerald-400 font-semibold text-base">
-                <SuccessIcon />
-                Contract uploaded successfully
-              </p>
-              <p className="text-xs text-slate-500 mt-1">
-                Ready for resource analysis
-              </p>
-            </div>
-
-            {/* File info card */}
-            <div className="flex items-center gap-3 bg-slate-800/80 border border-emerald-700/40 rounded-xl px-5 py-3">
-              <div className="w-9 h-9 rounded-lg bg-emerald-900/50 border border-emerald-700 flex items-center justify-center flex-shrink-0">
-                <span className="text-emerald-400 text-xs font-bold font-mono">WA</span>
-              </div>
-              <div className="text-left">
-                <p className="text-sm font-medium text-slate-200 truncate max-w-[220px]">
-                  {droppedFile.name}
-                </p>
-                <p className="text-xs text-slate-500 font-mono">{formatBytes(droppedFile.sizeBytes)}</p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              id="wasm-upload-reset-btn"
-              onClick={handleReset}
-              className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2 transition-colors mt-1"
-            >
-              Upload a different file
-            </button>
-          </div>
-        )}
-
-        {/* ── ERROR STATE ── */}
-        {uploadState === 'error' && (
-          <div className="flex flex-col items-center text-center gap-4">
-            <WasmIcon state="error" />
-            <div>
-              <p className="text-red-400 font-semibold text-base">
-                <ErrorIcon />
-                File rejected
-              </p>
-              <p className="text-xs text-red-300/70 mt-1 max-w-[280px] leading-relaxed">
-                {errorMessage}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-950/40 border border-red-800/50">
-              <span className="w-2 h-2 rounded-full bg-red-400" />
-              <span className="text-xs text-red-400 font-mono">Only .wasm files are accepted</span>
-            </div>
-
-            <button
-              type="button"
-              id="wasm-upload-try-again-btn"
-              onClick={handleReset}
-              className="mt-1 px-5 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-all"
-            >
-              Try again
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Caption hint */}
-      <p className="text-xs text-slate-600 text-center mt-3 font-mono">
-        WASM Resource Analyzer · Soroscope · compiled Soroban contracts only
-      </p>
-
-      <style>{`
-        @keyframes pulse-ring {
-          0%, 100% { opacity: 0.4; }
-          50%       { opacity: 1; }
-        }
-      `}</style>
-    </div>
-  );
-}
-'use client';
-
-import React, { useCallback, useState } from 'react';
-import { useDropzone, FileRejection } from 'react-dropzone';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type UploadState = 'idle' | 'hover' | 'scanning' | 'success' | 'error';
-
-interface DroppedFile {
-  name: string;
-  sizeBytes: number;
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-}
-
-const MAX_WASM_SIZE = 5 * 1024 * 1024; // 5 MB — Soroban contract size ceiling
-const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d]; // \0asm
-
-function hasWasmMagic(buffer: ArrayBuffer): boolean {
-  const bytes = new Uint8Array(buffer, 0, 4);
-  return WASM_MAGIC.every((b, i) => bytes[i] === b);
-}
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-/** Animated WASM hex-grid icon */
-function WasmIcon({ state }: { state: UploadState }) {
-  const isActive = state === 'hover' || state === 'scanning' || state === 'success';
-  return (
-    <svg
-      width="64"
-      height="64"
-      viewBox="0 0 64 64"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={`transition-all duration-500 ${isActive ? 'scale-110' : 'scale-100'}`}
-    >
-      {/* Outer hexagon */}
-      <path
-        d="M32 4 L56 18 L56 46 L32 60 L8 46 L8 18 Z"
-        stroke={
-          state === 'error'
-            ? '#f87171'
-            : state === 'success'
-            ? '#34d399'
-            : state === 'scanning'
-            ? '#a78bfa'
-            : state === 'hover'
-            ? '#38bdf8'
-            : '#334155'
-        }
-        strokeWidth="2"
-        fill={
-          state === 'error'
-            ? 'rgba(248,113,113,0.08)'
-            : state === 'success'
-            ? 'rgba(52,211,153,0.08)'
-            : state === 'scanning'
-            ? 'rgba(167,139,250,0.08)'
-            : state === 'hover'
-            ? 'rgba(56,189,248,0.08)'
-            : 'rgba(30,41,59,0.5)'
-        }
-        className="transition-all duration-500"
-      />
-      {/* Inner WASM label */}
-      <text
-        x="32"
-        y="35"
-        textAnchor="middle"
-        fontSize="11"
-        fontWeight="700"
-        fontFamily="monospace"
-        fill={
-          state === 'error'
-            ? '#f87171'
-            : state === 'success'
-            ? '#34d399'
-            : state === 'scanning'
-            ? '#a78bfa'
-            : state === 'hover'
-            ? '#38bdf8'
-            : '#64748b'
-        }
-        className="transition-all duration-500"
-      >
-        .wasm
-      </text>
-    </svg>
-  );
-}
-
-/** Pulsing scanning bar animation */
-function ScanningAnimation() {
-  return (
-    <div className="w-full mt-3 overflow-hidden rounded-full h-1 bg-slate-800">
-      <div
-        className="h-full rounded-full bg-gradient-to-r from-violet-500 via-fuchsia-400 to-violet-500"
-        style={{
-          animation: 'scan-sweep 1.6s ease-in-out infinite',
-          backgroundSize: '200% 100%',
-        }}
-      />
-      <style>{`
-        @keyframes scan-sweep {
-          0%   { transform: translateX(-100%); }
-          100% { transform: translateX(200%); }
-        }
-      `}</style>
-    </div>
-  );
-}
-
-/** Spinning dots loader */
-function SpinnerDots() {
-  return (
-    <div className="flex gap-1.5 items-center justify-center mt-2">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="w-1.5 h-1.5 rounded-full bg-violet-400"
-          style={{
-            animation: `dot-pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
-          }}
-        />
-      ))}
-      <style>{`
-        @keyframes dot-pulse {
-          0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
-          40%            { opacity: 1;   transform: scale(1.2); }
-        }
-      `}</style>
-    </div>
-  );
-}
-
-/** Checkmark success indicator */
-function SuccessIcon() {
-  return (
-    <svg
-      className="w-5 h-5 text-emerald-400 inline-block mr-1.5"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2.5}
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-    </svg>
-  );
-}
-
-/** Error X indicator */
-function ErrorIcon() {
-  return (
-    <svg
-      className="w-5 h-5 text-red-400 inline-block mr-1.5"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2.5}
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-    </svg>
-  );
-}
-
-// ─── Main Component ───────────────────────────────────────────────────────────
-
-export interface UploadZoneProps {
-  /** Called with the validated File once scanning completes */
-  onFileReady?: (file: File) => void;
-}
-
-export function UploadZone({ onFileReady }: UploadZoneProps) {
-  const [uploadState, setUploadState] = useState<UploadState>('idle');
-  const [droppedFile, setDroppedFile] = useState<DroppedFile | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string>('');
-
-  // ── Drop handling ────────────────────────────────────────────────────────────
-
-  const onDropAccepted = useCallback(
-    (files: File[]) => {
-      const file = files[0];
-      setDroppedFile({ name: file.name, sizeBytes: file.size });
-      setUploadState('scanning');
-      setErrorMessage('');
-
-      const reader = new FileReader();
-      reader.onload = () => {
-        const buffer = reader.result as ArrayBuffer;
-        if (!hasWasmMagic(buffer)) {
-          setErrorMessage(`"${file.name}" is not a valid WASM binary (magic bytes mismatch)`);
-          setUploadState('error');
-          setDroppedFile(null);
-          return;
-        }
-        setTimeout(() => {
-          setUploadState('success');
-          onFileReady?.(file);
-        }, 2000);
-      };
-      reader.readAsArrayBuffer(file);
-    },
-    [onFileReady]
-  );
-
-  const onDropRejected = useCallback((rejections: FileRejection[]) => {
-    const first = rejections[0];
-    const fileName = first?.file?.name ?? 'file';
-    const isTooLarge = first?.errors?.some((e) => e.code === 'file-too-large');
-    const ext = fileName.includes('.') ? `.${fileName.split('.').pop()}` : 'unknown type';
-    setErrorMessage(
-      isTooLarge
-        ? `"${fileName}" exceeds the ${MAX_WASM_SIZE / (1024 * 1024)} MB size limit`
-        : `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`
-    );
-    setUploadState('error');
-    setDroppedFile(null);
-  }, []);
-
-  const onDragEnter = useCallback(() => {
-    if (uploadState !== 'scanning' && uploadState !== 'submitting') setUploadState('hover');
-  }, [uploadState]);
-
-  const onDragLeave = useCallback(() => {
-    if (uploadState === 'hover') setUploadState('idle');
-  }, [uploadState]);
-
-  // ── Dropzone config ──────────────────────────────────────────────────────────
-
-  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
-    onDropAccepted,
-    onDropRejected,
-    onDragEnter,
-    onDragLeave,
-    accept: { 'application/wasm': ['.wasm'] },
-    maxFiles: 1,
-    maxSize: MAX_WASM_SIZE,
-    noClick: uploadState === 'scanning',
-    noDrag: uploadState === 'scanning',
-    noClick: uploadState === 'scanning' || uploadState === 'submitting',
-    noDrag: uploadState === 'scanning' || uploadState === 'submitting',
-  });
-
-  // ── Reset ────────────────────────────────────────────────────────────────────
-
-  const handleReset = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setUploadState('idle');
-    setDroppedFile(null);
-    setErrorMessage('');
-    setErrorDetails(null);
-    setUnexpectedError(null);
-  };
-
-  // ── Dynamic border & bg classes ──────────────────────────────────────────────
-
-  const borderColor = {
-    idle: 'border-slate-600 hover:border-slate-400',
-    hover: 'border-sky-400 shadow-[0_0_24px_rgba(56,189,248,0.2)]',
-    scanning: 'border-violet-500 shadow-[0_0_24px_rgba(167,139,250,0.25)]',
-    submitting: 'border-violet-500 shadow-[0_0_24px_rgba(167,139,250,0.25)]',
-    success: 'border-emerald-500 shadow-[0_0_24px_rgba(52,211,153,0.2)]',
-    error: 'border-red-500 shadow-[0_0_24px_rgba(248,113,113,0.2)]',
-  }[uploadState];
-
-  const bgColor = {
-    idle: 'bg-slate-900/60 hover:bg-slate-800/60',
-    hover: 'bg-sky-950/50',
-    scanning: 'bg-violet-950/40',
-    submitting: 'bg-violet-950/40',
-    success: 'bg-emerald-950/40',
-    error: 'bg-red-950/30',
-  }[uploadState];
-
-  // ── Render ───────────────────────────────────────────────────────────────────
-
-  return (
-    <div className="w-full font-sans">
-      {/* Drop Zone */}
-      <div
-        id="wasm-upload-zone"
-        {...getRootProps()}
-        className={[
-          'relative flex flex-col items-center justify-center',
-          'border-2 border-dashed rounded-2xl p-10',
-          'cursor-pointer transition-all duration-300 ease-in-out select-none',
-          'min-h-[260px]',
-          borderColor,
-          bgColor,
-        ].join(' ')}
-        role="button"
-        aria-label="WASM file upload zone"
-      >
-        <input {...getInputProps()} id="wasm-file-input" aria-label="Upload .wasm file" />
-
-        {/* Animated glow ring on hover */}
-        {(uploadState === 'hover' || uploadState === 'scanning') && (
-          <span
-            className="absolute inset-0 rounded-2xl pointer-events-none"
-            style={{
-              boxShadow:
-                uploadState === 'hover'
-                  ? '0 0 0 1px rgba(56,189,248,0.3)'
-                  : '0 0 0 1px rgba(167,139,250,0.35)',
-              animation: 'pulse-ring 2s ease-in-out infinite',
-            }}
-          />
-        )}
-
-        {/* ── IDLE / HOVER STATE ── */}
-        {(uploadState === 'idle' || uploadState === 'hover') && (
-          <div className="flex flex-col items-center text-center gap-4 transition-all duration-300">
+        {(uploadState === 'scanning' || uploadState === 'submitting') && (
+          <div className="flex w-full flex-col items-center gap-3 px-4 text-center">
             <WasmIcon state={uploadState} />
-            <div>
-              <p
-                className={`text-base font-semibold transition-colors duration-300 ${
-                  uploadState === 'hover' ? 'text-sky-300' : 'text-slate-300'
-                }`}
-              >
-                {uploadState === 'hover'
-                  ? 'Release to upload your .wasm file'
-                  : 'Drag & drop your compiled .wasm file'}
-              </p>
-              <p className="text-sm text-slate-500 mt-1">
-                or{' '}
-                <button
-                  type="button"
-                  className="text-sky-400 underline underline-offset-2 hover:text-sky-300 transition-colors"
-                  onClick={(e) => { e.stopPropagation(); open(); }}
-                >
-                  click to browse
-                </button>
-              </p>
-            </div>
-            <div className="flex items-center gap-2 mt-1 px-4 py-1.5 rounded-full bg-slate-800/70 border border-slate-700">
-              <span className="w-2 h-2 rounded-full bg-sky-400" />
-              <span className="text-xs text-slate-400 font-mono">Only .wasm files accepted</span>
-            </div>
-          </div>
-        )}
-
-        {/* ── SCANNING STATE ── */}
-        {uploadState === 'scanning' && (
-          <div className="flex flex-col items-center text-center gap-3 w-full px-4">
-            <WasmIcon state="scanning" />
-            <p className="text-violet-300 font-semibold text-base tracking-wide">
-              Scanning contract…
+            <p className="text-base font-semibold tracking-wide text-violet-300">
+              {uploadState === 'submitting' ? 'Validating with server...' : 'Scanning contract...'}
             </p>
             {droppedFile && (
-              <div className="flex items-center gap-2 text-xs text-slate-400 font-mono bg-slate-800/70 px-3 py-1.5 rounded-full border border-slate-700">
-                <span className="text-violet-400">📄</span>
+              <div className="flex items-center gap-2 rounded-full border border-slate-700 bg-slate-800/70 px-3 py-1.5 font-mono text-xs text-slate-400">
                 <span className="truncate max-w-[240px]">{droppedFile.name}</span>
-                <span className="text-slate-500">·</span>
+                <span className="text-slate-500">.</span>
                 <span>{formatBytes(droppedFile.sizeBytes)}</span>
               </div>
             )}
             <ScanningAnimation />
             <SpinnerDots />
-            <p className="text-xs text-slate-500">Parsing WASM binary · analysing resource usage…</p>
-          </div>
-        )}
-
-        {/* ── SUBMITTING STATE ── */}
-        {uploadState === 'submitting' && (
-          <div className="flex flex-col items-center text-center gap-3 w-full px-4">
-            <WasmIcon state="scanning" />
-            <p className="text-violet-300 font-semibold text-base tracking-wide">
-              Validating with server…
+            <p className="text-xs text-slate-500">
+              {uploadState === 'submitting' ? 'Sending to backend for validation...' : 'Parsing WASM binary...'}
             </p>
-            {droppedFile && (
-              <div className="flex items-center gap-2 text-xs text-slate-400 font-mono bg-slate-800/70 px-3 py-1.5 rounded-full border border-slate-700">
-                <span className="text-violet-400">📄</span>
-                <span className="truncate max-w-[240px]">{droppedFile.name}</span>
-                <span className="text-slate-500">·</span>
-                <span>{formatBytes(droppedFile.sizeBytes)}</span>
-              </div>
-            )}
-            <ScanningAnimation />
-            <SpinnerDots />
-            <p className="text-xs text-slate-500">Sending to backend for validation…</p>
           </div>
         )}
 
-        {/* ── SUCCESS STATE ── */}
         {uploadState === 'success' && droppedFile && (
-          <div className="flex flex-col items-center text-center gap-4">
+          <div className="flex flex-col items-center gap-4 text-center">
             <WasmIcon state="success" />
             <div>
-              <p className="text-emerald-400 font-semibold text-base">
+              <p className="text-base font-semibold text-emerald-400">
                 <SuccessIcon />
                 Contract uploaded successfully
               </p>
-              <p className="text-xs text-slate-500 mt-1">
-                Ready for resource analysis
-              </p>
+              <p className="mt-1 text-xs text-slate-500">Ready for resource analysis</p>
             </div>
-
-            {/* File info card */}
-            <div className="flex items-center gap-3 bg-slate-800/80 border border-emerald-700/40 rounded-xl px-5 py-3">
-              <div className="w-9 h-9 rounded-lg bg-emerald-900/50 border border-emerald-700 flex items-center justify-center flex-shrink-0">
-                <span className="text-emerald-400 text-xs font-bold font-mono">WA</span>
+            <div className="flex items-center gap-3 rounded-xl border border-emerald-700/40 bg-slate-800/80 px-5 py-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-emerald-700 bg-emerald-900/50">
+                <span className="font-mono text-xs font-bold text-emerald-400">WA</span>
               </div>
               <div className="text-left">
-                <p className="text-sm font-medium text-slate-200 truncate max-w-[220px]">
-                  {droppedFile.name}
-                </p>
-                <p className="text-xs text-slate-500 font-mono">{formatBytes(droppedFile.sizeBytes)}</p>
+                <p className="max-w-[220px] truncate text-sm font-medium text-slate-200">{droppedFile.name}</p>
+                <p className="font-mono text-xs text-slate-500">{formatBytes(droppedFile.sizeBytes)}</p>
               </div>
             </div>
-
             <button
               type="button"
               id="wasm-upload-reset-btn"
               onClick={handleReset}
-              className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2 transition-colors mt-1"
+              className="mt-1 text-xs text-slate-500 underline underline-offset-2 transition-colors hover:text-slate-300"
             >
               Upload a different file
             </button>
           </div>
         )}
 
-        {/* ── ERROR STATE ── */}
         {uploadState === 'error' && (
-          <div className="flex flex-col items-center text-center gap-4">
+          <div className="flex flex-col items-center gap-4 text-center">
             <WasmIcon state="error" />
             <div>
-              <p className="text-red-400 font-semibold text-base">
+              <p className="text-base font-semibold text-red-400">
                 <ErrorIcon />
-                {errorDetails?.title || 'File rejected'}
+                {errorDetails?.title ?? 'File rejected'}
               </p>
-              <p className="text-xs text-red-300/70 mt-2 max-w-[320px] leading-relaxed">
-                {errorDetails?.message || errorMessage}
+              <p className="mt-2 max-w-[320px] text-xs leading-relaxed text-red-300/70">
+                {errorDetails?.message}
               </p>
-              {errorDetails?.details && (
-                <div className="mt-3 max-w-[320px] text-left p-3 rounded-lg bg-red-950/40 border border-red-800/30">
-                  <p className="text-xs text-red-200/80 leading-relaxed font-mono">
-                    {errorDetails.details}
-                  </p>
-                </div>
-              )}
             </div>
-
             {errorDetails?.suggestedAction && (
-              <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-950/40 border border-amber-800/30 max-w-[320px]">
-                <span className="text-xs text-amber-200/80 leading-relaxed">
-                  💡 {errorDetails.suggestedAction}
-                </span>
+              <div className="max-w-[320px] rounded-lg border border-amber-800/30 bg-amber-950/40 px-3 py-2">
+                <span className="text-xs leading-relaxed text-amber-200/80">{errorDetails.suggestedAction}</span>
               </div>
             )}
-
-            <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-950/40 border border-red-800/50">
-              <span className="w-2 h-2 rounded-full bg-red-400" />
-              <span className="text-xs text-red-400 font-mono">Only .wasm files are accepted</span>
-            </div>
-
             <button
               type="button"
               id="wasm-upload-try-again-btn"
               onClick={handleReset}
-              className="mt-1 px-5 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-all"
+              className="mt-1 rounded-lg border border-slate-700 bg-slate-800 px-5 py-2 text-sm text-slate-300 transition-all hover:bg-slate-700 hover:text-white"
             >
               Try again
             </button>
@@ -1137,15 +454,14 @@ export function UploadZone({ onFileReady }: UploadZoneProps) {
         )}
       </div>
 
-      {/* Caption hint */}
-      <p className="text-xs text-slate-600 text-center mt-3 font-mono">
-        WASM Resource Analyzer · Soroscope · compiled Soroban contracts only
+      <p className="mt-3 text-center font-mono text-xs text-slate-600">
+        WASM Resource Analyzer . Soroscope . compiled Soroban contracts only
       </p>
 
       <style>{`
         @keyframes pulse-ring {
           0%, 100% { opacity: 0.4; }
-          50%       { opacity: 1; }
+          50% { opacity: 1; }
         }
       `}</style>
     </div>
