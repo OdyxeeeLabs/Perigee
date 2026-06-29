@@ -119,6 +119,7 @@ export interface ResourceReport extends SorobanResources {
   call_graph_mermaid: string | null;
   state_snapshot: SimulationStateSnapshot | null;
   protocol_version: number;
+  testnet_averages?: TestnetAverages;
 }
 
 export type AnalyzeResponse = ResourceReport;

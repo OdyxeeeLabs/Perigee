@@ -4,6 +4,8 @@
  * Integrates Next.js frontend to the Rust Axum backend.
  */
 
+import type { AnalyzeResponse } from './sorobantypes';
+
 export interface ApiRequestOptions extends RequestInit {
   params?: Record<string, string>;
   token?: string;
@@ -15,7 +17,15 @@ export class ApiError extends Error {
   body: unknown;
 
   constructor(status: number, statusText: string, body: unknown) {
-    super(`API Error ${status}: ${body?.message || statusText}`);
+    const message =
+      typeof body === 'object' &&
+      body !== null &&
+      'message' in body &&
+      typeof body.message === 'string'
+        ? body.message
+        : statusText;
+
+    super(`API Error ${status}: ${message}`);
     this.name = 'ApiError';
     this.status = status;
     this.statusText = statusText;
@@ -136,8 +146,8 @@ export const analyzeService = {
    * @param req The contract analysis request payload
    * @param token JWT authorization token (optional)
    */
-  async analyze(req: AnalyzeRequest, token?: string): Promise<unknown> {
-    return apiClient.post<unknown>('/analyze', req, { token });
+  async analyze(req: AnalyzeRequest, token?: string): Promise<AnalyzeResponse> {
+    return apiClient.post<AnalyzeResponse>('/analyze', req, { token });
   },
 
   /**
@@ -145,8 +155,8 @@ export const analyzeService = {
    * @param req The WASM bytes analysis request payload
    * @param token JWT authorization token (optional)
    */
-  async analyzeWasm(req: AnalyzeWasmRequest, token?: string): Promise<unknown> {
-    return apiClient.post<unknown>('/analyze/wasm', req, { token });
+  async analyzeWasm(req: AnalyzeWasmRequest, token?: string): Promise<AnalyzeResponse> {
+    return apiClient.post<AnalyzeResponse>('/analyze/wasm', req, { token });
   },
 };
 

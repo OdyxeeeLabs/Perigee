@@ -246,8 +246,6 @@ impl SimpleToken {
     }
 
     /// Remove admin
-    pub fn remove_admin(env: Env, approvers: Vec<Address>, admin: Address) {
-        EmergencyGuard::remove_admin(env, approvers, admin)
     pub fn remove_admin(env: Env, admin: Address) {
         let approver: Address = env
             .storage()
@@ -259,8 +257,6 @@ impl SimpleToken {
     }
 
     /// Rotate admin (current admin transfers authority to new admin)
-    pub fn rotate_admin(env: Env, approvers: Vec<Address>, old_admin: Address, new_admin: Address) {
-        EmergencyGuard::rotate_admin(env, approvers, old_admin, new_admin).expect("Unauthorized");
     pub fn rotate_admin(env: Env, new_admin: Address) {
         let admin: Address = env
             .storage()

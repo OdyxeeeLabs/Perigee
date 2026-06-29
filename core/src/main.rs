@@ -34,6 +34,22 @@ use crate::merkle_tree::MerkleTree;
 use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
 use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
 use crate::ws::SimulationBus;
+use axum::{
+    extract::{Json, Multipart, State},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
+    middleware,
+    response::IntoResponse,
+    routing::{get, post},
+    Extension, Router,
+};
+use config::{Config, ConfigError};
+use prometheus::{Encoder, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder};
+use serde::{Deserialize, Serialize};
+use simulation_service::{AnalysisResult, SimulationMetric, SimulationService};
+use std::collections::HashMap;
+use std::env;
+use std::path::PathBuf;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};

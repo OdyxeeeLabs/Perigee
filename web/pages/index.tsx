@@ -103,7 +103,12 @@ export default function Home() {
       });
     } catch (error) {
       const formatted = formatError(error);
-      const apiErrorType = error instanceof ApiError ? error.body?.error : undefined;
+      const apiErrorBody =
+        error instanceof ApiError && typeof error.body === 'object' && error.body !== null
+          ? (error.body as { error?: unknown })
+          : undefined;
+      const apiErrorType =
+        typeof apiErrorBody?.error === 'string' ? apiErrorBody.error : undefined;
 
       storeResult({
         id: Math.random().toString(36).slice(2),
