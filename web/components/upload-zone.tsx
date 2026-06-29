@@ -3,6 +3,7 @@
 import React, { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { parseWasmError, WasmBackendError } from '../lib/errorHandling';
+import { arrayBufferToBase64 } from '../lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -213,13 +214,8 @@ export function UploadZone({
             const arrayBuffer = event.target?.result as ArrayBuffer;
             if (!arrayBuffer) throw new Error('Failed to read file');
 
-            // Convert to base64 for backend submission
-            const bytes = new Uint8Array(arrayBuffer);
-            let binary = '';
-            for (let i = 0; i < bytes.byteLength; i++) {
-              binary += String.fromCharCode(bytes[i]);
-            }
-            const base64Data = btoa(binary);
+            // Convert to base64 for backend submission using chunked encoding.
+            const base64Data = arrayBufferToBase64(arrayBuffer);
 
             const response = await fetch(backendUrl, {
               method: 'POST',

@@ -1,6 +1,19 @@
 'use client';
 
 export function ResultViewerSkeleton() {
+  const heatmapCells = Array.from({ length: 36 }, (_, index) => {
+    const phase = index % 4;
+    const toneClass =
+      phase === 0
+        ? 'bg-cyan-600/30 border-cyan-500/20'
+        : phase === 1
+        ? 'bg-slate-700/70 border-slate-600/60'
+        : phase === 2
+        ? 'bg-amber-500/20 border-amber-500/30'
+        : 'bg-slate-800/80 border-slate-700/80';
+    return { id: index, toneClass };
+  });
+
   return (
     <div
       style={{
@@ -83,6 +96,48 @@ export function ResultViewerSkeleton() {
           <div className="h-10 w-24 bg-[#0d1117] rounded-lg border border-[#30363d] flex items-center justify-center">
             <div className="h-2 w-12 bg-[#30363d] rounded" />
           </div>
+        </div>
+      </div>
+
+      {/* Heatmap Matrix Skeleton */}
+      <div
+        style={{
+          backgroundColor: '#161b22',
+          padding: '20px',
+          borderRadius: '8px',
+          border: '1px solid #30363d',
+          marginTop: '16px',
+        }}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <div className="h-4 w-44 bg-[#30363d] rounded" />
+          <div className="h-7 w-32 bg-[#0d1117] rounded-md border border-[#30363d]" />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr] gap-6">
+          <div className="grid grid-cols-6 gap-2 bg-[#0d1117] p-3 rounded-lg border border-[#30363d] w-fit">
+            {heatmapCells.map((cell) => (
+              <div
+                key={cell.id}
+                className={`w-8 h-8 rounded border ${cell.toneClass}`}
+              />
+            ))}
+          </div>
+
+          <div className="bg-[#0d1117] rounded-lg border border-[#30363d] p-4 min-h-[170px]">
+            <div className="h-3 w-48 bg-[#30363d] rounded mb-4" />
+            <div className="h-5 w-36 bg-[#1f2937] rounded mb-3" />
+            <div className="h-3 w-full bg-[#1f2937] rounded mb-2" />
+            <div className="h-3 w-11/12 bg-[#1f2937] rounded mb-2" />
+            <div className="h-3 w-9/12 bg-[#1f2937] rounded" />
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="h-14 rounded-lg bg-[#0d1117] border border-[#30363d]" />
+          <div className="h-14 rounded-lg bg-[#0d1117] border border-[#30363d]" />
+          <div className="h-14 rounded-lg bg-[#0d1117] border border-[#30363d]" />
+          <div className="h-14 rounded-lg bg-[#0d1117] border border-[#30363d]" />
         </div>
       </div>
     </div>

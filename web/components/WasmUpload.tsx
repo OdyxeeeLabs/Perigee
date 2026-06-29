@@ -15,6 +15,9 @@ import {
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { ApiError, analyzeService } from "../lib/api";
+import { createUserFriendlyMessage, formatError } from "../lib/errorHandling";
+import { arrayBufferToBase64 } from "../lib/utils";
 
 // Utility for cleaner tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -30,6 +33,7 @@ interface WasmFile {
   progress: number;
   error?: string;
   hash?: string;
+  simulationResult?: unknown;
 }
 
 interface WasmUploadProps {
@@ -51,6 +55,23 @@ export default function WasmUpload({
 }: WasmUploadProps) {
   const [files, setFiles] = useState<WasmFile[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
+
+  const statusToErrorType = (status: number): string => {
+    switch (status) {
+      case 400:
+        return "BAD_REQUEST";
+      case 401:
+        return "UNAUTHORIZED";
+      case 404:
+        return "NOT_FOUND";
+      case 500:
+        return "INTERNAL_SERVER_ERROR";
+      case 503:
+        return "SERVICE_UNAVAILABLE";
+      default:
+        return "UNKNOWN_ERROR";
+    }
+  };
 
   //validate WASM file
   const validateWasm = (file: File): string | null => {
@@ -74,7 +95,13 @@ export default function WasmUpload({
     return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
   };
 
-  //simulate upload (replace with actual API call)
+  const setUploadProgress = (id: string, progress: number) => {
+    setFiles((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, progress } : f))
+    );
+  };
+
+  // Submit WASM to backend simulation engine.
   const uploadFile = async (wasmFile: WasmFile) => {
     setFiles((prev) =>
       prev.map((f) =>
@@ -83,34 +110,55 @@ export default function WasmUpload({
     );
 
     try {
-      //simulate progress
-      for (let i = 0; i <= 100; i += 10) {
-        await new Promise((resolve) => setTimeout(resolve, 150));
-        setFiles((prev) =>
-          prev.map((f) =>
-            f.id === wasmFile.id ? { ...f, progress: i } : f
-          )
-        );
-      }
+      setUploadProgress(wasmFile.id, 20);
+      const buffer = await wasmFile.file.arrayBuffer();
+      setUploadProgress(wasmFile.id, 50);
 
-      //generate hash for Soroban WASM identification
+      const wasmBytesBase64 = arrayBufferToBase64(buffer);
+      setUploadProgress(wasmFile.id, 80);
+
+      const simulationResult = await analyzeService.analyzeWasm({
+        wasm_bytes: wasmBytesBase64,
+        function_name: "main",
+        args: [],
+      });
+
       const hash = await generateHash(wasmFile.file);
+      setUploadProgress(wasmFile.id, 100);
 
       setFiles((prev) =>
         prev.map((f) =>
           f.id === wasmFile.id
-            ? { ...f, status: "success", progress: 100, hash }
+            ? { ...f, status: "success", progress: 100, hash, simulationResult }
             : f
         )
       );
     } catch (err) {
+      let errorMessage = "Upload failed. Please try again.";
+
+      if (err instanceof ApiError) {
+        const backendError = {
+          error:
+            typeof err.body?.error === "string"
+              ? err.body.error
+              : statusToErrorType(err.status),
+          message:
+            typeof err.body?.message === "string" ? err.body.message : err.message,
+          statusCode: err.status,
+        };
+        errorMessage = createUserFriendlyMessage(backendError);
+      } else {
+        const formatted = formatError(err);
+        errorMessage = formatted.message;
+      }
+
       setFiles((prev) =>
         prev.map((f) =>
           f.id === wasmFile.id
             ? {
                 ...f,
                 status: "error",
-                error: "Upload failed. Please try again.",
+                error: errorMessage,
               }
             : f
         )
