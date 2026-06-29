@@ -904,7 +904,7 @@ export function ResourceHeatmap({ resourceCost, callGraph }: ResourceHeatmapProp
                         SEVERITY: {hotspotColors(hoveredCell.cpuShare).label}
                       </div>
                     </div>
-                  ) : (
+                  ) : isLiveData ? (
                     <div className="mt-4">
                       <p className="text-xs text-slate-400 font-bold">Hover a cell for details</p>
                       <p className="text-[11px] text-slate-600 mt-2 leading-relaxed">
@@ -928,8 +928,8 @@ export function ResourceHeatmap({ resourceCost, callGraph }: ResourceHeatmapProp
                           );
                         })}
                       </div>
-                  );
-                })() : (
+                    </div>
+                  ) : (
                   <div className="mt-4">
                     <h4 className="text-sm font-bold text-slate-400">Hover over matrix core blocks</h4>
                     <p className="text-xs text-slate-500 mt-2 leading-relaxed">
@@ -941,6 +941,7 @@ export function ResourceHeatmap({ resourceCost, callGraph }: ResourceHeatmapProp
                       <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded bg-amber-500/30 border border-amber-400/40"></div> Warning (50%-80%)</div>
                       <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded bg-rose-500/80 border-rose-400/80 shadow-[0_0_6px_rgba(244,63,94,0.4)]"></div> Critical (&gt;80%)</div>
                     </div>
+                  </div>
                   )}
                 </div>
 

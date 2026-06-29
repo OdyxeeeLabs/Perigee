@@ -6,6 +6,8 @@
  * simulation engine backend; local development defaults to localhost.
  */
 
+import type { AnalyzeResponse } from './sorobantypes';
+
 const DEFAULT_DEV_API_URL = 'http://localhost:8080';
 
 export const API_URL =
@@ -19,7 +21,7 @@ export const apiConfig = {
 export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
   params?: Record<string, string | number | boolean | null | undefined>;
   token?: string;
-  body?: BodyInit | Record<string, unknown> | unknown[] | null;
+  body?: BodyInit | object | null;
 }
 
 export class ApiError extends Error {
@@ -27,7 +29,7 @@ export class ApiError extends Error {
   statusText: string;
   body: unknown;
 
-  constructor(status: number, statusText: string, body: any) {
+  constructor(status: number, statusText: string, body: unknown) {
     const message =
       typeof body === 'object' &&
       body !== null &&
@@ -37,8 +39,6 @@ export class ApiError extends Error {
         : statusText;
 
     super(`API Error ${status}: ${message}`);
-  constructor(status: number, statusText: string, body: unknown) {
-    super(`API Error ${status}: ${body?.message || statusText}`);
     this.name = 'ApiError';
     this.status = status;
     this.statusText = statusText;
@@ -61,7 +61,7 @@ export function apiUrl(path: string, params?: ApiRequestOptions['params']): stri
   return url.toString();
 }
 
-function isJsonBody(body: ApiRequestOptions['body']): body is Record<string, unknown> | unknown[] {
+function isJsonBody(body: ApiRequestOptions['body']): body is object {
   return (
     body !== null &&
     body !== undefined &&
@@ -88,9 +88,7 @@ async function parseResponse(response: Response): Promise<unknown> {
   }
 
   const contentType = response.headers.get('content-type') ?? '';
-  return contentType.includes('application/json')
-    ? response.json()
-    : response.text();
+  return contentType.includes('application/json') ? response.json() : response.text();
 }
 
 async function request<T>(endpoint: string, options: ApiRequestOptions = {}): Promise<T> {
@@ -141,20 +139,6 @@ export const apiClient = {
 
   patch<T>(endpoint: string, body?: ApiRequestOptions['body'], options?: ApiRequestOptions): Promise<T> {
     return request<T>(endpoint, { ...options, method: 'PATCH', body });
-  post<T>(endpoint: string, body?: unknown, options?: ApiRequestOptions): Promise<T> {
-    return request<T>(endpoint, {
-      ...options,
-      method: 'POST',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-  },
-
-  put<T>(endpoint: string, body?: unknown, options?: ApiRequestOptions): Promise<T> {
-    return request<T>(endpoint, {
-      ...options,
-      method: 'PUT',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
   },
 
   delete<T>(endpoint: string, options?: ApiRequestOptions): Promise<T> {
@@ -180,44 +164,11 @@ export interface AnalyzeWasmRequest {
 }
 
 export const analyzeService = {
-  analyze<T = any>(req: AnalyzeRequest, token?: string): Promise<T> {
-    return apiClient.post<T>('/analyze', req, { token });
+  analyze(req: AnalyzeRequest, token?: string): Promise<AnalyzeResponse> {
+    return apiClient.post<AnalyzeResponse>('/analyze', req, { token });
   },
 
-  analyzeWasm<T = any>(req: AnalyzeWasmRequest, token?: string): Promise<T> {
-    return apiClient.post<T>('/analyze/wasm', req, { token });
-  },
-};
-  /**
-   * Profiling a contract invocation by ID
-   * @param req The contract analysis request payload
-   * @param token JWT authorization token (optional)
-   */
-  async analyze(req: AnalyzeRequest, token?: string): Promise<unknown> {
-    return apiClient.post<unknown>('/analyze', req, { token });
-  },
-
-  /**
-   * Analyze custom WASM file binary bytes
-   * @param req The WASM bytes analysis request payload
-   * @param token JWT authorization token (optional)
-   */
-  async analyzeWasm(req: AnalyzeWasmRequest, token?: string): Promise<unknown> {
-    return apiClient.post<unknown>('/analyze/wasm', req, { token });
+  analyzeWasm(req: AnalyzeWasmRequest, token?: string): Promise<AnalyzeResponse> {
+    return apiClient.post<AnalyzeResponse>('/analyze/wasm', req, { token });
   },
 };
-
-/**
- * Base URL of the SoroScope analyzer backend.
- *
- * Reads from NEXT_PUBLIC_API_URL (baked in at build time) and falls back to
- * localhost for local development, so no env file is needed to run locally.
- * In production, set NEXT_PUBLIC_API_URL to the deployed backend's URL.
- */
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080';
-
-/** Build a full backend URL from a path, e.g. apiUrl('/analyze'). */
-export function apiUrl(path: string): string {
-  return `${API_URL}${path.startsWith('/') ? path : `/${path}`}`;
-}

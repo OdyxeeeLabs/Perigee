@@ -191,10 +191,10 @@ fn test_payload_route_creation() {
 
 #[test]
 fn test_encoded_payload_creation() {
-    let e = Env::default();
-    let encoded_data = Bytes::new(&e);
-    let encoding_scheme = String::from_str(&e, "borsh");
-    let compression_type = String::from_str(&e, "gzip");
+    let env = Env::default();
+    let encoded_data = Bytes::new(&env);
+    let encoding_scheme = String::from_str(&env, "borsh");
+    let compression_type = String::from_str(&env, "gzip");
 
     let encoded = EncodedPayload {
         encoded_data,
@@ -212,8 +212,6 @@ fn test_encoded_payload_creation() {
 fn test_recovery_key_creation() {
     let env = Env::default();
     let compressed_key = BytesN::from_array(&env, &[6u8; 33]);
-    let e = Env::default();
-    let compressed_key = BytesN::from_array(&e, &[6u8; 33]);
 
     let key = RecoveryKey {
         compressed_key,

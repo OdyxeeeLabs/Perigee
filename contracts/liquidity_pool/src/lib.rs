@@ -355,14 +355,6 @@ impl LiquidityPool {
             EmergencyGuard::emergency_pause(e, approvers).map_err(map_guard_err)?;
         } else {
             EmergencyGuard::resume(e, approvers).map_err(map_guard_err)?;
-        for op in [
-            PauseType::SWAP,
-            PauseType::DEPOSIT,
-            PauseType::WITHDRAW,
-            PauseType::BURN,
-        ] {
-            EmergencyGuard::set_pause(e.clone(), admin.clone(), op, paused)
-                .map_err(map_guard_err)?;
         }
         Ok(())
     }

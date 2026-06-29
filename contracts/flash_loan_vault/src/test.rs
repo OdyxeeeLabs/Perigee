@@ -1,6 +1,5 @@
 use super::*;
 use soroban_sdk::{contract, contractimpl, contracttype, testutils::Address as _, Address, Env};
-use soroban_sdk::{contract, contractimpl, contracttype, testutils::Address as _, Address, Env};
 
 // ── Mock receivers ───────────────────────────────────────────────────────────
 

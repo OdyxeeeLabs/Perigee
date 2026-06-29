@@ -17,6 +17,7 @@ impl PauseType {
     pub const MINT: u32 = 1 << 4;
     pub const BURN: u32 = 1 << 5;
     pub const CREATE_PAIR: u32 = 1 << 6;
+    pub const CLAIM_REWARDS: u32 = 1 << 7;
 
     pub fn new(value: u32) -> Self {
         PauseType(value)
