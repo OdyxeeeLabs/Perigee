@@ -24,7 +24,16 @@ mod ws;
 use crate::cache::{ContractCache, SimulationCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
 use crate::errors::AppError;
+use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
+use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
+use crate::fee_store::FeeStore;
+use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
+use crate::insights::InsightsEngine;
+use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
 use crate::merkle_tree::MerkleTree;
+use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
+use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
+use crate::ws::SimulationBus;
 use axum::{
     extract::{Json, Multipart, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
@@ -41,17 +50,6 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
-// CLI Argument Handling
-use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
-use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
-use crate::fee_store::FeeStore;
-use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
-use crate::insights::InsightsEngine;
-use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
-use crate::merkle_tree::MerkleTree;
-use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
-use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
-use crate::ws::SimulationBus;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -891,12 +889,6 @@ async fn analyze(
                         tracing::error!("Failed to generate Merkle tree: {}", err);
                         None
                     }
-                if let Err(e) = tree.build(leaves) {
-                    tracing::error!("Failed to generate Merkle tree: {}", e);
-                    None
-                } else {
-                    tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count());
-                    Some(tree.get_root_hex())
                 }
             }
         })
@@ -1646,13 +1638,6 @@ async fn main() {
             if let Err(e) = benchmarks::run_token_benchmark(path, simulation_service.as_ref()).await
             {
                 eprintln!("Benchmark failed: {}", e);
-            let db_path = env::var("SOROSCOPE_DB_PATH")
-                .unwrap_or_else(|_| "soroscope_metrics.db".to_string());
-            let webhook_url = env::var("SOROSCOPE_ALERT_WEBHOOK_URL").ok();
-            let simulation_service = SimulationService::new(db_path, webhook_url)
-                .expect("initialize simulation service");
-            if let Err(e) = benchmarks::run_token_benchmark(path, &simulation_service).await {
-                tracing::error!("Benchmark failed: {}", e);
             }
         } else {
             tracing::error!(
