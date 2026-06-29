@@ -20,7 +20,6 @@ mod simulation;
 mod simulation_service;
 mod wasm_branch_analysis;
 mod ws;
-mod merkle_tree;
 
 use crate::cache::{ContractCache, SimulationCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
@@ -192,6 +191,8 @@ fn default_fee_analysis_enabled() -> bool {
 
 fn default_emergency_verification_paused() -> bool {
     false
+}
+
 fn default_disk_cache_path() -> String {
     // Empty == L2 disabled. Operators who want persistence set this in
     // env / config.toml explicitly; we don't create a hidden directory
@@ -407,7 +408,10 @@ pub struct AnalyzeRequest {
     pub enable_experimental: Option<bool>,
     /// Whether to generate and include Merkle tree root of the state snapshot
     #[serde(default)]
-    #[schema(example = false, description = "Generate Merkle tree root from state snapshot")]
+    #[schema(
+        example = false,
+        description = "Generate Merkle tree root from state snapshot"
+    )]
     pub include_merkle_tree: Option<bool>,
 }
 
@@ -683,7 +687,11 @@ pub struct WasmBranchAnalysisResponse {
 }
 
 /// Convert a `SimulationResult` (library type) into the API `ResourceReport`.
-fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine, merkle_tree_root: Option<String>) -> ResourceReport {
+fn to_report(
+    result: &SimulationResult,
+    insights_engine: &InsightsEngine,
+    merkle_tree_root: Option<String>,
+) -> ResourceReport {
     let insights_report = insights_engine.analyze(&result.resources);
 
     ResourceReport {
@@ -875,33 +883,30 @@ async fn analyze(
 
     // Generate Merkle tree root if requested
     let merkle_tree_root = if payload.include_merkle_tree.unwrap_or(false) {
-        result
-            .state_snapshot
-            .as_ref()
-            .and_then(|snapshot| {
-                // Extract ledger entries as leaves for the Merkle tree
-                let leaves: Vec<Vec<u8>> = snapshot
-                    .ledger_entries
-                    .values()
-                    .filter_map(|entry_b64| hex::decode(entry_b64).ok())
-                    .collect();
+        result.state_snapshot.as_ref().and_then(|snapshot| {
+            // Extract ledger entries as leaves for the Merkle tree
+            let leaves: Vec<Vec<u8>> = snapshot
+                .ledger_entries
+                .values()
+                .filter_map(|entry_b64| hex::decode(entry_b64).ok())
+                .collect();
 
-                if leaves.is_empty() {
-                    tracing::warn!("No ledger entries available for Merkle tree generation");
-                    None
-                } else {
-                    match MerkleTree::new(leaves) {
-                        Ok(tree) => {
-                            tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count);
-                            Some(tree.get_root_hex())
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to generate Merkle tree: {}", e);
-                            None
-                        }
+            if leaves.is_empty() {
+                tracing::warn!("No ledger entries available for Merkle tree generation");
+                None
+            } else {
+                match MerkleTree::new(leaves) {
+                    Ok(tree) => {
+                        tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count);
+                        Some(tree.get_root_hex())
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to generate Merkle tree: {}", e);
+                        None
                     }
                 }
-            })
+            }
+        })
     } else {
         None
     };
@@ -917,7 +922,10 @@ async fn analyze(
             .unwrap_or_else(|_| HeaderValue::from_static("0")),
     );
 
-    Ok((headers, Json(to_report(&result, &state.insights_engine, merkle_tree_root))))
+    Ok((
+        headers,
+        Json(to_report(&result, &state.insights_engine, merkle_tree_root)),
+    ))
 }
 
 #[utoipa::path(
@@ -1636,8 +1644,6 @@ async fn main() {
         }
 
         if let Some(path) = wasm_path {
-            if let Err(e) = benchmarks::run_token_benchmark(path, simulation_service.as_ref()).await {
-                eprintln!("Benchmark failed: {}", e);
             let db_path = env::var("SOROSCOPE_DB_PATH")
                 .unwrap_or_else(|_| "soroscope_metrics.db".to_string());
             let webhook_url = env::var("SOROSCOPE_ALERT_WEBHOOK_URL").ok();
@@ -1673,7 +1679,10 @@ async fn main() {
                     eprintln!("Usage: soroscope-core merkle build <leaf1> <leaf2> ...");
                     std::process::exit(1);
                 }
-                let leaves: Vec<Vec<u8>> = args[3..].iter().map(|arg| arg.as_bytes().to_vec()).collect();
+                let leaves: Vec<Vec<u8>> = args[3..]
+                    .iter()
+                    .map(|arg| arg.as_bytes().to_vec())
+                    .collect();
                 let mut tree = merkle_tree::MerkleTree::new(32);
                 match tree.build(leaves) {
                     Ok(()) => println!("{}", tree.get_root_hex()),
@@ -1685,7 +1694,9 @@ async fn main() {
             }
             "proof" => {
                 if args.len() < 5 {
-                    eprintln!("Usage: soroscope-core merkle proof <leaf_index> <leaf1> <leaf2> ...");
+                    eprintln!(
+                        "Usage: soroscope-core merkle proof <leaf_index> <leaf1> <leaf2> ..."
+                    );
                     std::process::exit(1);
                 }
                 let leaf_index = match args[3].parse::<usize>() {
@@ -1695,7 +1706,10 @@ async fn main() {
                         std::process::exit(1);
                     }
                 };
-                let leaves: Vec<Vec<u8>> = args[4..].iter().map(|arg| arg.as_bytes().to_vec()).collect();
+                let leaves: Vec<Vec<u8>> = args[4..]
+                    .iter()
+                    .map(|arg| arg.as_bytes().to_vec())
+                    .collect();
                 let mut tree = merkle_tree::MerkleTree::new(32);
                 if let Err(err) = tree.build(leaves) {
                     eprintln!("Error building Merkle tree: {}", err);
