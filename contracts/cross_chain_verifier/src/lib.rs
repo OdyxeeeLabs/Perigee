@@ -227,7 +227,8 @@ impl CrossChainVerifier {
     }
 
     fn verify_signature(env: &Env, signed_message: &SignedMessage) -> bool {
-        let signer_key_bytes = Bytes::from_array(env, &signed_message.signer_public_key.to_array());
+        let signer_key_bytes =
+            Bytes::from_array(&env, &signed_message.signer_public_key.to_array());
         let signer_algorithm: Option<SignatureAlgorithm> = env
             .storage()
             .persistent()
@@ -243,7 +244,7 @@ impl CrossChainVerifier {
         match signer_algorithm {
             SignatureAlgorithm::Ed25519 => {
                 let message_bytes = Bytes::from_array(env, &message_hash.to_array());
-                env.crypto().ed25519_verify(
+                let _ = env.crypto().ed25519_verify(
                     &signed_message.signer_public_key,
                     &message_bytes,
                     &signed_message.signature,

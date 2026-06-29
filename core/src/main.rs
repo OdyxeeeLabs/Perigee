@@ -24,16 +24,7 @@ mod ws;
 use crate::cache::{ContractCache, SimulationCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
 use crate::errors::AppError;
-use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
-use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
-use crate::fee_store::FeeStore;
-use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
-use crate::insights::InsightsEngine;
-use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
 use crate::merkle_tree::MerkleTree;
-use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
-use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
-use crate::ws::SimulationBus;
 use axum::{
     extract::{Json, Multipart, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
@@ -50,6 +41,17 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
+// CLI Argument Handling
+use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
+use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
+use crate::fee_store::FeeStore;
+use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
+use crate::insights::InsightsEngine;
+use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
+use crate::merkle_tree::MerkleTree;
+use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
+use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
+use crate::ws::SimulationBus;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -181,7 +183,6 @@ fn default_fee_analysis_enabled() -> bool {
 fn default_emergency_verification_paused() -> bool {
     false
 }
-
 fn default_disk_cache_path() -> String {
     // Empty == L2 disabled. Operators who want persistence set this in
     // env / config.toml explicitly; we don't create a hidden directory
@@ -880,15 +881,12 @@ async fn analyze(
                 None
             } else {
                 let mut tree = MerkleTree::new(32);
-                match tree.build(leaves) {
-                    Ok(()) => {
-                        tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count());
-                        Some(tree.get_root_hex())
-                    }
-                    Err(err) => {
-                        tracing::error!("Failed to generate Merkle tree: {}", err);
-                        None
-                    }
+                if let Err(e) = tree.build(leaves) {
+                    tracing::error!("Failed to generate Merkle tree: {}", e);
+                    None
+                } else {
+                    tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count());
+                    Some(tree.get_root_hex())
                 }
             }
         })
@@ -1635,9 +1633,13 @@ async fn main() {
         }
 
         if let Some(path) = wasm_path {
-            if let Err(e) = benchmarks::run_token_benchmark(path, simulation_service.as_ref()).await
-            {
-                eprintln!("Benchmark failed: {}", e);
+            let db_path = env::var("SOROSCOPE_DB_PATH")
+                .unwrap_or_else(|_| "soroscope_metrics.db".to_string());
+            let webhook_url = env::var("SOROSCOPE_ALERT_WEBHOOK_URL").ok();
+            let simulation_service = SimulationService::new(db_path, webhook_url)
+                .expect("initialize simulation service");
+            if let Err(e) = benchmarks::run_token_benchmark(path, &simulation_service).await {
+                tracing::error!("Benchmark failed: {}", e);
             }
         } else {
             tracing::error!(
@@ -1762,21 +1764,6 @@ async fn main() {
     // Default Web Server
     println!("SoroScope CLI Initialized. Run with 'benchmark' argument to profile token contract.");
 
-    // build our application with a single route
-    let _default_app: Router<Arc<SimulationService>> = Router::new()
-        .route(
-            "/",
-            get(|| async {
-                "Hello from SoroScope! Use POST /simulations/analyze to persist + compare simulation metrics."
-            }),
-        )
-        .route("/health", get(|| async { "ok" }))
-        .route(
-            "/error",
-            get(|| async { Err::<&str, AppError>(AppError::BadRequest("Test error".to_string())) }),
-        )
-        .route("/simulations/analyze", post(analyze_simulation))
-        .with_state(simulation_service.clone());
     // ── CLI: compare subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "compare" {
         if args.len() < 4 {

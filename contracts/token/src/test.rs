@@ -30,7 +30,6 @@ fn test_mint_and_transfer() {
     assert_eq!(client.balance(&user1), 800);
     assert_eq!(client.balance(&user2), 200);
 }
-
 #[test]
 fn test_allowance() {
     let env = Env::default();
