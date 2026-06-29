@@ -1128,5 +1128,3 @@ fn test_complex_multisig_scenario() {
     assert!(!factory_client.is_admin(&admin3));
     assert_eq!(final_config.threshold, 3);
 }
-
-}

@@ -49,7 +49,7 @@ export default function WasmUpload({
   maxFiles = 5,
   className,
 }: WasmUploadProps) {
-  const [files, setFiles] = useState<<WasmFile[]>([]);
+  const [files, setFiles] = useState<WasmFile[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
 
   //validate WASM file
@@ -195,7 +195,7 @@ export default function WasmUpload({
   return (
     <div className={cn("w-full max-w-2xl mx-auto", className)}>
       {/*drop Zone*/}
-      <motion.div
+      <div
         {...getRootProps()}
         className={cn(
           "relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-colors duration-200",
@@ -205,8 +205,6 @@ export default function WasmUpload({
             ? "border-red-400 bg-red-50/50"
             : "border-slate-300 hover:border-slate-400 bg-slate-50/50 hover:bg-slate-50"
         )}
-        whileHover={{ scale: 1.01 }}
-        whileTap={{ scale: 0.99 }}
       >
         <input {...getInputProps()} />
 
@@ -244,7 +242,7 @@ export default function WasmUpload({
           <span className="text-slate-300">•</span>
           <span>Up to {maxFiles} files</span>
         </div>
-      </motion.div>
+      </div>
 
       {/* file List  */}
       <AnimatePresence>

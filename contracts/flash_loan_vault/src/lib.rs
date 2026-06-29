@@ -231,7 +231,10 @@ fn set_total_deposited(e: &Env, amount: i128) {
 }
 
 fn is_borrow_paused(e: &Env) -> bool {
-    e.storage().instance().get(&DataKey::BorrowPaused).unwrap_or(false)
+    e.storage()
+        .instance()
+        .get(&DataKey::BorrowPaused)
+        .unwrap_or(false)
 }
 
 fn set_borrow_paused(e: &Env, paused: bool) {
@@ -263,9 +266,7 @@ impl FlashLoanVault {
         e.storage()
             .instance()
             .set(&DataKey::FlashLoanActive, &false);
-        e.storage()
-            .instance()
-            .set(&DataKey::BorrowPaused, &false);
+        e.storage().instance().set(&DataKey::BorrowPaused, &false);
         e.storage().instance().set(&DataKey::TotalDeposited, &0i128);
 
         Ok(())
@@ -564,7 +565,10 @@ impl FlashLoanVault {
         // Overwrite the temporary record with zeros to avoid stale data.
         e.storage().instance().set(
             &DataKey::BorrowRecord(borrower.clone()),
-            &BorrowRecord { fee: 0, total_repayment: 0 },
+            &BorrowRecord {
+                fee: 0,
+                total_repayment: 0,
+            },
         );
 
         // 11. If fee collected, update total deposited.
