@@ -251,8 +251,8 @@ export default function WasmUpload({
   return (
     <div className={cn("w-full max-w-2xl mx-auto", className)}>
       {/*drop Zone*/}
-      <motion.div
-        {...(getRootProps() as any)}
+      <div
+        {...getRootProps()}
         className={cn(
           "relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-colors duration-200",
           isDragActive

@@ -2,7 +2,7 @@ use crate::{Gasless, GaslessClient, MetaTx};
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env, Symbol, TryFromVal,
+    Address, Env, Symbol, TryIntoVal,
 };
 
 const AMOUNT: i128 = 1_000_000;
@@ -237,8 +237,10 @@ fn test_execute_emits_event() {
     let events = ctx.env.events().all();
     let expected = Symbol::new(&ctx.env, "executed");
     let has_executed = events.iter().any(|(_, topics, _)| {
-        topics.len() == 1
-            && topics.get(0) == Some(Symbol::new(&ctx.env, "executed").into_val(&ctx.env))
+        topics.len() == 1 && {
+            let topic: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&ctx.env);
+            topic.map(|symbol| symbol == expected).unwrap_or(false)
+        }
     });
     assert!(has_executed, "expected 'executed' event");
 }

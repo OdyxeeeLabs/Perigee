@@ -70,7 +70,6 @@ impl SimpleToken {
         if EmergencyGuard::is_paused(env.clone(), PauseType::MINT) {
             panic!("Minting is paused");
         }
-        EmergencyGuard::check_not_paused(&env, PauseType::MINT).expect("Minting is paused");
 
         let admin: Address = env
             .storage()
@@ -107,7 +106,6 @@ impl SimpleToken {
         if EmergencyGuard::is_paused(env.clone(), PauseType::BURN) {
             panic!("Burning is paused");
         }
-        EmergencyGuard::check_not_paused(&env, PauseType::BURN).expect("Burning is paused");
 
         from.require_auth();
 
@@ -144,8 +142,6 @@ impl SimpleToken {
             .get(&DataKey::Admin)
             .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::TRANSFER, true).expect("Unauthorized");
-        EmergencyGuard::set_pause_state(&env, PauseType::TRANSFER, true)
-            .expect("Unauthorized");
     }
 
     /// Resume transfers
@@ -156,8 +152,6 @@ impl SimpleToken {
             .get(&DataKey::Admin)
             .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::TRANSFER, false).expect("Unauthorized");
-        EmergencyGuard::unpause(&env, PauseType::TRANSFER)
-            .expect("Unauthorized");
     }
 
     /// Pause only minting
@@ -168,7 +162,6 @@ impl SimpleToken {
             .get(&DataKey::Admin)
             .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::MINT, true).expect("Unauthorized");
-        EmergencyGuard::set_pause_state(&env, PauseType::MINT, true).expect("Unauthorized");
     }
 
     /// Resume minting
@@ -179,7 +172,6 @@ impl SimpleToken {
             .get(&DataKey::Admin)
             .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::MINT, false).expect("Unauthorized");
-        EmergencyGuard::unpause(&env, PauseType::MINT).expect("Unauthorized");
     }
 
     /// Pause only burning
@@ -190,7 +182,6 @@ impl SimpleToken {
             .get(&DataKey::Admin)
             .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::BURN, true).expect("Unauthorized");
-        EmergencyGuard::set_pause_state(&env, PauseType::BURN, true).expect("Unauthorized");
     }
 
     /// Resume burning
@@ -201,17 +192,6 @@ impl SimpleToken {
             .get(&DataKey::Admin)
             .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::BURN, false).expect("Unauthorized");
-    }
-
-    /// Emergency: pause all operations
-    pub fn emergency_pause_all(env: Env, approvers: Vec<Address>) {
-        EmergencyGuard::emergency_pause(env, approvers).expect("Unauthorized");
-    }
-
-    /// Resume all operations
-    pub fn resume_all(env: Env, approvers: Vec<Address>) {
-        EmergencyGuard::resume(env, approvers).expect("Unauthorized");
-        EmergencyGuard::unpause(&env, PauseType::BURN).expect("Unauthorized");
     }
 
     /// Emergency: pause all operations
@@ -237,32 +217,21 @@ impl SimpleToken {
     /// Get current pause state (bitmask)
     pub fn get_pause_state(env: Env) -> u32 {
         EmergencyGuard::get_pause_state(env)
-        EmergencyGuard::get_pause_state(&env)
     }
 
     /// Check if specific operation is paused
     pub fn is_paused(env: Env, operation: u32) -> bool {
         EmergencyGuard::is_paused(env, operation)
-        let state = EmergencyGuard::get_pause_state(&env);
-        let pause_type = PauseType::new(state);
-        pause_type.is_paused(operation)
     }
 
     /// Get list of admins
     pub fn get_admins(env: Env) -> Vec<Address> {
         EmergencyGuard::get_admins(env)
-        EmergencyGuard::get_admins(&env)
     }
 
     /// Get multi-sig threshold
     pub fn get_threshold(env: Env) -> u32 {
         EmergencyGuard::get_threshold(env)
-    }
-
-    /// Add new admin (requires existing admin authorization)
-    pub fn add_admin(env: Env, approvers: Vec<Address>, new_admin: Address) {
-        EmergencyGuard::add_admin(env, approvers, new_admin)
-        EmergencyGuard::get_threshold(&env)
     }
 
     /// Add new admin (requires existing admin authorization)
