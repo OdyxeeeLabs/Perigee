@@ -137,13 +137,17 @@ export default function WasmUpload({
       let errorMessage = "Upload failed. Please try again.";
 
       if (err instanceof ApiError) {
+        const body =
+          typeof err.body === "object" && err.body !== null
+            ? (err.body as { error?: unknown; message?: unknown })
+            : undefined;
         const backendError = {
           error:
-            typeof err.body?.error === "string"
-              ? err.body.error
+            typeof body?.error === "string"
+              ? body.error
               : statusToErrorType(err.status),
           message:
-            typeof err.body?.message === "string" ? err.body.message : err.message,
+            typeof body?.message === "string" ? body.message : err.message,
           statusCode: err.status,
         };
         errorMessage = createUserFriendlyMessage(backendError);
