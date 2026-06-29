@@ -356,6 +356,7 @@ export function UploadZone({
             }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : 'Failed to parse WASM metadata';
+            alert(errorMsg);
             setErrorMessage(errorMsg);
             setErrorDetails({
               title: 'Invalid WASM File',
@@ -403,6 +404,7 @@ export function UploadZone({
     const ext = fileName.includes('.') ? `.${fileName.split('.').pop()}` : 'unknown type';
     const customMessage = first?.errors?.[0]?.message;
     const errorMsg = `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
+    alert(customMessage || errorMsg);
     setErrorMessage(customMessage || errorMsg);
     setErrorDetails({
       title: 'Invalid File Type',

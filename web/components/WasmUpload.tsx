@@ -54,8 +54,8 @@ export default function WasmUpload({
 
   //validate WASM file
   const validateWasm = (file: File): string | null => {
-    if (!file.name.endsWith(".wasm")) {
-      return "File must be a .wasm file";
+    if (!file.name.toLowerCase().endsWith(".wasm")) {
+      return "Validation Error: File must be a .wasm file";
     }
     if (file.size > maxFileSize) {
       return `File too large (max ${(maxFileSize / 1024 / 1024).toFixed(1)}MB)`;
@@ -139,6 +139,10 @@ export default function WasmUpload({
           validFiles.push(wasmFile);
         }
       });
+
+      if (invalidFiles.length > 0) {
+        alert(invalidFiles[0].error || "Validation Error: Invalid non-WASM file uploaded.");
+      }
 
       const totalFiles = [...files, ...validFiles, ...invalidFiles];
       if (totalFiles.length > maxFiles) {
