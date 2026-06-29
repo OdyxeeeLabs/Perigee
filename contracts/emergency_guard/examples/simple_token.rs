@@ -1,6 +1,6 @@
 #![no_std]
 use emergency_guard::{EmergencyGuard, PauseType};
-use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, Vec};
 
 #[contracttype]
 pub enum DataKey {
@@ -66,8 +66,9 @@ impl SimpleToken {
 
     /// Mint tokens (blocked if MINT pause is active)
     pub fn mint(env: Env, to: Address, amount: i128) {
-        // Check if minting is paused
-        EmergencyGuard::check_not_paused(&env, PauseType::MINT).expect("Minting is paused");
+        if EmergencyGuard::is_paused(env.clone(), PauseType::MINT) {
+            panic!("Minting is paused");
+        }
 
         let admin: Address = env
             .storage()
@@ -100,8 +101,9 @@ impl SimpleToken {
 
     /// Burn tokens (blocked if BURN pause is active)
     pub fn burn(env: Env, from: Address, amount: i128) {
-        // Check if burning is paused
-        EmergencyGuard::check_not_paused(&env, PauseType::BURN).expect("Burning is paused");
+        if EmergencyGuard::is_paused(env.clone(), PauseType::BURN) {
+            panic!("Burning is paused");
+        }
 
         from.require_auth();
 
@@ -132,83 +134,93 @@ impl SimpleToken {
 
     /// Pause only transfers (minting and burning still work)
     pub fn pause_transfers(env: Env) {
-        EmergencyGuard::set_pause_state(&env, PauseType::TRANSFER, true)
-            .expect("Unauthorized");
+        let admin = Self::admin(env.clone());
+        EmergencyGuard::set_pause(env, admin, PauseType::TRANSFER, true).expect("Unauthorized");
     }
 
     /// Resume transfers
     pub fn resume_transfers(env: Env) {
-        EmergencyGuard::unpause(&env, PauseType::TRANSFER)
-            .expect("Unauthorized");
+        let admin = Self::admin(env.clone());
+        EmergencyGuard::set_pause(env, admin, PauseType::TRANSFER, false).expect("Unauthorized");
     }
 
     /// Pause only minting
     pub fn pause_minting(env: Env) {
-        EmergencyGuard::set_pause_state(&env, PauseType::MINT, true).expect("Unauthorized");
+        let admin = Self::admin(env.clone());
+        EmergencyGuard::set_pause(env, admin, PauseType::MINT, true).expect("Unauthorized");
     }
 
     /// Resume minting
     pub fn resume_minting(env: Env) {
-        EmergencyGuard::unpause(&env, PauseType::MINT).expect("Unauthorized");
+        let admin = Self::admin(env.clone());
+        EmergencyGuard::set_pause(env, admin, PauseType::MINT, false).expect("Unauthorized");
     }
 
     /// Pause only burning
     pub fn pause_burning(env: Env) {
-        EmergencyGuard::set_pause_state(&env, PauseType::BURN, true).expect("Unauthorized");
+        let admin = Self::admin(env.clone());
+        EmergencyGuard::set_pause(env, admin, PauseType::BURN, true).expect("Unauthorized");
     }
 
     /// Resume burning
     pub fn resume_burning(env: Env) {
-        EmergencyGuard::unpause(&env, PauseType::BURN).expect("Unauthorized");
+        let admin = Self::admin(env.clone());
+        EmergencyGuard::set_pause(env, admin, PauseType::BURN, false).expect("Unauthorized");
     }
 
     /// Emergency: pause all operations
     pub fn emergency_pause_all(env: Env) {
-        EmergencyGuard::emergency_pause_all(&env).expect("Unauthorized");
+        let approvers = Self::admin_approvers(env.clone());
+        EmergencyGuard::emergency_pause(env, approvers).expect("Unauthorized");
     }
 
     /// Resume all operations
     pub fn resume_all(env: Env) {
-        EmergencyGuard::unpause_all(&env).expect("Unauthorized");
+        let approvers = Self::admin_approvers(env.clone());
+        EmergencyGuard::resume(env, approvers).expect("Unauthorized");
     }
 
     /// Get current pause state (bitmask)
     pub fn get_pause_state(env: Env) -> u32 {
-        EmergencyGuard::get_pause_state(&env)
+        EmergencyGuard::get_pause_state(env)
     }
 
     /// Check if specific operation is paused
     pub fn is_paused(env: Env, operation: u32) -> bool {
-        let state = EmergencyGuard::get_pause_state(&env);
+        let state = EmergencyGuard::get_pause_state(env);
         let pause_type = PauseType::new(state);
         pause_type.is_paused(operation)
     }
 
     /// Get list of admins
     pub fn get_admins(env: Env) -> Vec<Address> {
-        EmergencyGuard::get_admins(&env)
+        EmergencyGuard::get_admins(env)
     }
 
     /// Get multi-sig threshold
     pub fn get_threshold(env: Env) -> u32 {
-        EmergencyGuard::get_threshold(&env)
+        EmergencyGuard::get_threshold(env)
     }
 
     /// Add new admin (requires existing admin authorization)
     pub fn add_admin(env: Env, new_admin: Address) {
-        EmergencyGuard::add_admin(&env, new_admin)
+        let approvers = Self::admin_approvers(env.clone());
+        EmergencyGuard::add_admin(env, approvers, new_admin)
             .expect("Unauthorized or threshold would be violated");
     }
 
     /// Remove admin
     pub fn remove_admin(env: Env, admin: Address) {
-        EmergencyGuard::remove_admin(&env, admin)
+        let approvers = Self::admin_approvers(env.clone());
+        EmergencyGuard::remove_admin(env, approvers, admin)
             .expect("Unauthorized or threshold would be violated");
     }
 
     /// Rotate admin (current admin transfers authority to new admin)
     pub fn rotate_admin(env: Env, new_admin: Address) {
-        EmergencyGuard::rotate_admin(&env, new_admin).expect("Unauthorized");
+        let old_admin = Self::admin(env.clone());
+        let approvers = Self::admin_approvers(env.clone());
+        EmergencyGuard::rotate_admin(env, approvers, old_admin, new_admin).expect("Unauthorized");
     }
 
     // ==== READ-ONLY FUNCTIONS ====
@@ -227,6 +239,18 @@ impl SimpleToken {
             .instance()
             .get(&DataKey::TotalSupply)
             .unwrap_or(0)
+    }
+
+    fn admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found")
+    }
+
+    fn admin_approvers(env: Env) -> Vec<Address> {
+        let admin = Self::admin(env.clone());
+        vec![&env, admin]
     }
 }
 
