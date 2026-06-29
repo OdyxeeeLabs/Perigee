@@ -66,6 +66,7 @@ impl SimpleToken {
 
     /// Mint tokens (blocked if MINT pause is active)
     pub fn mint(env: Env, to: Address, amount: i128) {
+        // Check if minting is paused
         if EmergencyGuard::is_paused(env.clone(), PauseType::MINT) {
             panic!("Minting is paused");
         }
@@ -101,6 +102,7 @@ impl SimpleToken {
 
     /// Burn tokens (blocked if BURN pause is active)
     pub fn burn(env: Env, from: Address, amount: i128) {
+        // Check if burning is paused
         if EmergencyGuard::is_paused(env.clone(), PauseType::BURN) {
             panic!("Burning is paused");
         }
@@ -134,50 +136,82 @@ impl SimpleToken {
 
     /// Pause only transfers (minting and burning still work)
     pub fn pause_transfers(env: Env) {
-        let admin = Self::admin(env.clone());
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::TRANSFER, true).expect("Unauthorized");
     }
 
     /// Resume transfers
     pub fn resume_transfers(env: Env) {
-        let admin = Self::admin(env.clone());
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::TRANSFER, false).expect("Unauthorized");
     }
 
     /// Pause only minting
     pub fn pause_minting(env: Env) {
-        let admin = Self::admin(env.clone());
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::MINT, true).expect("Unauthorized");
     }
 
     /// Resume minting
     pub fn resume_minting(env: Env) {
-        let admin = Self::admin(env.clone());
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::MINT, false).expect("Unauthorized");
     }
 
     /// Pause only burning
     pub fn pause_burning(env: Env) {
-        let admin = Self::admin(env.clone());
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::BURN, true).expect("Unauthorized");
     }
 
     /// Resume burning
     pub fn resume_burning(env: Env) {
-        let admin = Self::admin(env.clone());
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
         EmergencyGuard::set_pause(env, admin, PauseType::BURN, false).expect("Unauthorized");
     }
 
     /// Emergency: pause all operations
     pub fn emergency_pause_all(env: Env) {
-        let approvers = Self::admin_approvers(env.clone());
-        EmergencyGuard::emergency_pause(env, approvers).expect("Unauthorized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
+        EmergencyGuard::emergency_pause(env.clone(), vec![&env, admin]).expect("Unauthorized");
     }
 
     /// Resume all operations
     pub fn resume_all(env: Env) {
-        let approvers = Self::admin_approvers(env.clone());
-        EmergencyGuard::resume(env, approvers).expect("Unauthorized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
+        EmergencyGuard::resume(env.clone(), vec![&env, admin]).expect("Unauthorized");
     }
 
     /// Get current pause state (bitmask)
@@ -187,9 +221,7 @@ impl SimpleToken {
 
     /// Check if specific operation is paused
     pub fn is_paused(env: Env, operation: u32) -> bool {
-        let state = EmergencyGuard::get_pause_state(env);
-        let pause_type = PauseType::new(state);
-        pause_type.is_paused(operation)
+        EmergencyGuard::is_paused(env, operation)
     }
 
     /// Get list of admins
@@ -204,23 +236,35 @@ impl SimpleToken {
 
     /// Add new admin (requires existing admin authorization)
     pub fn add_admin(env: Env, new_admin: Address) {
-        let approvers = Self::admin_approvers(env.clone());
-        EmergencyGuard::add_admin(env, approvers, new_admin)
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
+        EmergencyGuard::add_admin(env.clone(), vec![&env, admin], new_admin)
             .expect("Unauthorized or threshold would be violated");
     }
 
     /// Remove admin
     pub fn remove_admin(env: Env, admin: Address) {
-        let approvers = Self::admin_approvers(env.clone());
-        EmergencyGuard::remove_admin(env, approvers, admin)
+        let approver: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
+        EmergencyGuard::remove_admin(env.clone(), vec![&env, approver], admin)
             .expect("Unauthorized or threshold would be violated");
     }
 
     /// Rotate admin (current admin transfers authority to new admin)
     pub fn rotate_admin(env: Env, new_admin: Address) {
-        let old_admin = Self::admin(env.clone());
-        let approvers = Self::admin_approvers(env.clone());
-        EmergencyGuard::rotate_admin(env, approvers, old_admin, new_admin).expect("Unauthorized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not found");
+        EmergencyGuard::rotate_admin(env.clone(), vec![&env, admin.clone()], admin, new_admin)
+            .expect("Unauthorized");
     }
 
     // ==== READ-ONLY FUNCTIONS ====
@@ -239,18 +283,6 @@ impl SimpleToken {
             .instance()
             .get(&DataKey::TotalSupply)
             .unwrap_or(0)
-    }
-
-    fn admin(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .expect("Admin not found")
-    }
-
-    fn admin_approvers(env: Env) -> Vec<Address> {
-        let admin = Self::admin(env.clone());
-        vec![&env, admin]
     }
 }
 

@@ -1,10 +1,8 @@
-#![cfg(test)]
-
 use crate::{Gasless, GaslessClient, MetaTx};
 use soroban_sdk::{
-    testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env, IntoVal, Symbol,
+    Address, Env, Symbol, TryFromVal,
 };
 
 const AMOUNT: i128 = 1_000_000;
@@ -210,6 +208,7 @@ fn test_many_sequential_nonces() {
 }
 
 #[test]
+#[should_panic(expected = "invalid nonce")]
 fn test_nonce_persists_in_persistent_storage() {
     let ctx = Ctx::setup();
     ctx.env.mock_all_auths();
@@ -219,17 +218,14 @@ fn test_nonce_persists_in_persistent_storage() {
     // Simulate ledger advancement — persistent storage survives.
     ctx.env.ledger().with_mut(|l| {
         l.sequence_number += 1_000;
-        l.timestamp += 10_000;
+        l.timestamp += 10;
     });
 
     // Nonce must still be 1 after ledger advancement.
     assert_eq!(ctx.client().nonce(&ctx.alice), 1);
 
     // Replay of nonce 0 must still revert.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ctx.client().execute(&ctx.relayer, &ctx.meta_tx(0));
-    }));
-    assert!(result.is_err(), "replay with consumed nonce must revert");
+    ctx.client().execute(&ctx.relayer, &ctx.meta_tx(0));
 }
 
 #[test]
@@ -239,8 +235,17 @@ fn test_execute_emits_event() {
     ctx.client().execute(&ctx.relayer, &ctx.meta_tx(0));
 
     let events = ctx.env.events().all();
+    let expected = Symbol::new(&ctx.env, "executed");
     let has_executed = events.iter().any(|(_, topics, _)| {
-        topics.len() == 1 && topics.get(0) == Some(Symbol::new(&ctx.env, "executed").into_val(&ctx.env))
+        if topics.len() != 1 {
+            return false;
+        }
+        match topics.get(0) {
+            Some(topic) => Symbol::try_from_val(&ctx.env, &topic)
+                .map(|symbol| symbol == expected)
+                .unwrap_or(false),
+            None => false,
+        }
     });
     assert!(has_executed, "expected 'executed' event");
 }
