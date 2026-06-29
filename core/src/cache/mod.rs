@@ -1,5 +1,6 @@
 pub mod disk;
 
+#[allow(unused_imports)]
 pub use disk::{DiskCache, DiskCacheConfig};
 
 use crate::simulation::SimulationResult;
