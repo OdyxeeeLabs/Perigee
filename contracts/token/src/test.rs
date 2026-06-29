@@ -1,7 +1,5 @@
 use crate::contract::{Token, TokenClient};
-use emergency_guard::{
-    EmergencyPausedEvent, PauseStateChangedEvent, PauseType, ResumedEvent,
-};
+use emergency_guard::{EmergencyPausedEvent, PauseStateChangedEvent, PauseType, ResumedEvent};
 use soroban_sdk::{
     testutils::{Address as _, Events},
     vec, Address, Env, String, TryIntoVal,
@@ -101,7 +99,10 @@ fn test_pause_minting_blocks_mint_only() {
 
     // Mint should now fail because PauseType::MINT is set in the bitmask.
     let result = client.try_mint(&user, &100);
-    assert!(result.is_err(), "mint should fail when PauseType::MINT is set");
+    assert!(
+        result.is_err(),
+        "mint should fail when PauseType::MINT is set"
+    );
 
     // Transfers are NOT paused — they should still work.
     client.transfer(&user, &user2, &100);
@@ -161,7 +162,10 @@ fn test_pause_transfers_blocks_transfer_only() {
 
     // Transfer should fail.
     let result = client.try_transfer(&user, &user2, &100);
-    assert!(result.is_err(), "transfer should fail when transfers are paused");
+    assert!(
+        result.is_err(),
+        "transfer should fail when transfers are paused"
+    );
 
     // Minting is NOT paused — it should work.
     client.mint(&user2, &50);
@@ -233,7 +237,10 @@ fn test_guard_pause_blocks_transfer_until_resume() {
 
     // Transfer should fail.
     let result = client.try_transfer(&user, &user2, &100);
-    assert!(result.is_err(), "transfer should fail when transfers are paused");
+    assert!(
+        result.is_err(),
+        "transfer should fail when transfers are paused"
+    );
 
     // Minting is NOT paused — still works.
     client.mint(&user2, &50);
@@ -348,9 +355,18 @@ fn test_guard_admin_management() {
     client.emergency_pause_all(&approvers);
 
     // Confirm all operations are blocked.
-    assert!(client.try_mint(&user2, &100).is_err(), "mint should be paused");
-    assert!(client.try_transfer(&user, &user2, &50).is_err(), "transfer should be paused");
-    assert!(client.try_burn(&user, &50).is_err(), "burn should be paused");
+    assert!(
+        client.try_mint(&user2, &100).is_err(),
+        "mint should be paused"
+    );
+    assert!(
+        client.try_transfer(&user, &user2, &50).is_err(),
+        "transfer should be paused"
+    );
+    assert!(
+        client.try_burn(&user, &50).is_err(),
+        "burn should be paused"
+    );
 
     // Resume all via multi-sig.
     client.resume_all(&approvers);
@@ -513,10 +529,17 @@ fn test_resume_minting_emits_correct_event() {
         .collect();
 
     // Only verify the resume_minting event (second in order)
-    assert!(matched.len() >= 1, "should have at least one pause_state_changed event, got {}", matched.len());
+    assert!(
+        matched.len() >= 1,
+        "should have at least one pause_state_changed event, got {}",
+        matched.len()
+    );
     let (_, _, data_last) = &matched[matched.len() - 1];
     let last: PauseStateChangedEvent = data_last.try_into_val(&env).unwrap();
-    assert!(!last.paused, "last pause_state_changed event should be resume (paused=false)");
+    assert!(
+        !last.paused,
+        "last pause_state_changed event should be resume (paused=false)"
+    );
 }
 
 #[test]
@@ -639,17 +662,35 @@ fn test_guard_events_topic_count_and_format() {
         })
         .collect();
 
-    assert_eq!(pause_matched.len(), 1, "pause_transfers should emit exactly one event");
+    assert_eq!(
+        pause_matched.len(),
+        1,
+        "pause_transfers should emit exactly one event"
+    );
     let (_, pause_topics, _) = &pause_matched[0];
-    assert_eq!(pause_topics.len(), 2, "pause event must have exactly 2 topics");
+    assert_eq!(
+        pause_topics.len(),
+        2,
+        "pause event must have exactly 2 topics"
+    );
 
     // First topic should be a String (event name), second should be an Address
     let first_topic_str: Result<String, _> = pause_topics.get(0).unwrap().try_into_val(&env);
-    assert!(first_topic_str.is_ok(), "first topic must be convertible to String");
+    assert!(
+        first_topic_str.is_ok(),
+        "first topic must be convertible to String"
+    );
 
     let second_topic_addr: Result<Address, _> = pause_topics.get(1).unwrap().try_into_val(&env);
-    assert!(second_topic_addr.is_ok(), "second topic must be convertible to Address");
-    assert_eq!(second_topic_addr.unwrap(), admin, "second topic must be the admin address");
+    assert!(
+        second_topic_addr.is_ok(),
+        "second topic must be convertible to Address"
+    );
+    assert_eq!(
+        second_topic_addr.unwrap(),
+        admin,
+        "second topic must be the admin address"
+    );
 
     // Now test emergency_pause_all — emits with 1 topic: (name_string,)
     let approvers = vec![&env, admin.clone()];
@@ -669,12 +710,26 @@ fn test_guard_events_topic_count_and_format() {
         })
         .collect();
 
-    assert_eq!(ep_matched.len(), 1, "emergency_pause_all should emit exactly one event");
+    assert_eq!(
+        ep_matched.len(),
+        1,
+        "emergency_pause_all should emit exactly one event"
+    );
     let (_, ep_topics, _) = &ep_matched[0];
-    assert_eq!(ep_topics.len(), 1, "emergency_pause event must have exactly 1 topic");
+    assert_eq!(
+        ep_topics.len(),
+        1,
+        "emergency_pause event must have exactly 1 topic"
+    );
 
     let ep_topic_str: Result<String, _> = ep_topics.get(0).unwrap().try_into_val(&env);
-    assert!(ep_topic_str.is_ok(), "emergency_pause topic must be convertible to String");
-    assert_eq!(ep_topic_str.unwrap(), ep_name, "emergency_pause topic must match event name");
+    assert!(
+        ep_topic_str.is_ok(),
+        "emergency_pause topic must be convertible to String"
+    );
+    assert_eq!(
+        ep_topic_str.unwrap(),
+        ep_name,
+        "emergency_pause topic must match event name"
+    );
 }
-

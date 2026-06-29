@@ -60,13 +60,8 @@ impl TokenTrait for Token {
         let admin = read_administrator(&e);
         e.storage().instance().extend_ttl(100, 100);
         // EmergencyGuard::rotate_admin handles authentication via check_multi_sig.
-        EmergencyGuard::rotate_admin(
-            e.clone(),
-            vec![&e, admin.clone()],
-            admin,
-            new_admin.clone(),
-        )
-        .expect("failed to rotate admin via EmergencyGuard");
+        EmergencyGuard::rotate_admin(e.clone(), vec![&e, admin.clone()], admin, new_admin.clone())
+            .expect("failed to rotate admin via EmergencyGuard");
         write_administrator(&e, &new_admin);
     }
 
