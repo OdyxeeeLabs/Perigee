@@ -102,7 +102,8 @@ impl AuthState {
     }
 
     pub fn set_verification_paused(&self, paused: bool) {
-        self.emergency_verification_paused.store(paused, Ordering::SeqCst);
+        self.emergency_verification_paused
+            .store(paused, Ordering::SeqCst);
     }
 }
 

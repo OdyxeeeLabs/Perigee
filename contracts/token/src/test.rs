@@ -530,7 +530,7 @@ fn test_resume_minting_emits_correct_event() {
 
     // Only verify the resume_minting event (second in order)
     assert!(
-        matched.len() >= 1,
+        !matched.is_empty(),
         "should have at least one pause_state_changed event, got {}",
         matched.len()
     );

@@ -1,10 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{
-    contracterror, contracttype, Address, Env, String, Vec,
-};
 #[cfg(feature = "contract")]
 use soroban_sdk::{contract, contractimpl};
+use soroban_sdk::{contracterror, contracttype, Address, Env, String, Vec};
 
 /// Granular pause types using bitmask for efficient storage
 #[contracttype]
@@ -417,4 +415,3 @@ impl EmergencyGuard {
 
 #[cfg(test)]
 mod test;
-

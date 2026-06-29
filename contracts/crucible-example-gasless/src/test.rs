@@ -1,10 +1,11 @@
 #![cfg(test)]
+extern crate std;
 
 use crate::{Gasless, GaslessClient, MetaTx};
 use soroban_sdk::{
-    testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env, IntoVal, Symbol,
+    Address, Env, Symbol, TryIntoVal,
 };
 
 const AMOUNT: i128 = 1_000_000;
@@ -240,7 +241,11 @@ fn test_execute_emits_event() {
 
     let events = ctx.env.events().all();
     let has_executed = events.iter().any(|(_, topics, _)| {
-        topics.len() == 1 && topics.get(0) == Some(Symbol::new(&ctx.env, "executed").into_val(&ctx.env))
+        if topics.len() != 1 {
+            return false;
+        }
+        let topic: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&ctx.env);
+        topic.is_ok() && topic.unwrap() == Symbol::new(&ctx.env, "executed")
     });
     assert!(has_executed, "expected 'executed' event");
 }

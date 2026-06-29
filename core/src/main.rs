@@ -24,24 +24,13 @@ mod ws;
 use crate::cache::{ContractCache, SimulationCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
 use crate::errors::AppError;
-use crate::merkle_tree::MerkleTree;
-use axum::{
-    extract::State,
-    routing::{get, post},
-    Json, Router,
-};
-use simulation_service::{AnalysisResult, SimulationMetric, SimulationService};
-use std::env;
-use std::path::PathBuf;
-use std::sync::Arc;
-
-// CLI Argument Handling
 use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
 use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
 use crate::fee_store::FeeStore;
 use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
 use crate::insights::InsightsEngine;
 use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
+use crate::merkle_tree::MerkleTree;
 use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
 use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
 use crate::ws::SimulationBus;
@@ -229,7 +218,6 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("fee_retention_days", 30)?
         .set_default("fee_analysis_enabled", true)?
         .set_default("emergency_verification_paused", false)?
-        .build()?
         .set_default("disk_cache_path", "")?
         .set_default("max_ledger_age", 100)?
         .build()?;
@@ -408,10 +396,8 @@ pub struct AnalyzeRequest {
     pub enable_experimental: Option<bool>,
     /// Whether to generate and include Merkle tree root of the state snapshot
     #[serde(default)]
-    #[schema(
-        example = false,
-        description = "Generate Merkle tree root from state snapshot"
-    )]
+    /// Generate Merkle tree root from state snapshot
+    #[schema(example = false)]
     pub include_merkle_tree: Option<bool>,
 }
 
@@ -467,7 +453,6 @@ pub struct TestnetAverages {
     /// Average transaction size bytes for typical Soroban transactions
     pub transaction_size_bytes: u64,
     /// Merkle tree root hash (hex-encoded) of the state snapshot, if requested
-    #[schema(description = "Merkle tree root hash of the state snapshot (hex-encoded)")]
     pub merkle_tree_root: Option<String>,
 }
 
@@ -759,8 +744,8 @@ fn to_report(
             ledger_read_bytes: 2_048,
             ledger_write_bytes: 1_024,
             transaction_size_bytes: 600,
+            merkle_tree_root,
         },
-        merkle_tree_root,
     }
 }
 
@@ -895,15 +880,13 @@ async fn analyze(
                 tracing::warn!("No ledger entries available for Merkle tree generation");
                 None
             } else {
-                match MerkleTree::new(leaves) {
-                    Ok(tree) => {
-                        tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count);
-                        Some(tree.get_root_hex())
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to generate Merkle tree: {}", e);
-                        None
-                    }
+                let mut tree = MerkleTree::new(256);
+                if let Err(e) = tree.build(leaves) {
+                    tracing::error!("Failed to generate Merkle tree: {}", e);
+                    None
+                } else {
+                    tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count);
+                    Some(tree.get_root_hex())
                 }
             }
         })
@@ -1012,7 +995,7 @@ async fn analyze_wasm(
         protocol_version: payload.protocol_version.unwrap_or(20),
     };
 
-    let report = to_report(&sim_result, &state.insights_engine);
+    let report = to_report(&sim_result, &state.insights_engine, None);
     state
         .metrics
         .resource_utilization_percent
@@ -1772,24 +1755,6 @@ async fn main() {
         return;
     }
 
-    // Default Web Server
-    println!("SoroScope CLI Initialized. Run with 'benchmark' argument to profile token contract.");
-
-    // build our application with a single route
-    let app = Router::new()
-        .route(
-            "/",
-            get(|| async {
-                "Hello from SoroScope! Use POST /simulations/analyze to persist + compare simulation metrics."
-            }),
-        )
-        .route("/health", get(|| async { "ok" }))
-        .route(
-            "/error",
-            get(|| async { Err::<&str, AppError>(AppError::BadRequest("Test error".to_string())) }),
-        )
-        .route("/simulations/analyze", post(analyze_simulation))
-        .with_state(simulation_service);
     // ── CLI: compare subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "compare" {
         if args.len() < 4 {
@@ -2275,7 +2240,7 @@ mod tests {
         };
 
         let insights_engine = InsightsEngine::new();
-        let report = to_report(&sim_result, &insights_engine);
+        let report = to_report(&sim_result, &insights_engine, None);
 
         assert_eq!(report.cost_stroops, 5000);
         assert_eq!(report.cpu_instructions, 1000000);
