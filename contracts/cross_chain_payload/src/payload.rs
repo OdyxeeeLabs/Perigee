@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Bytes, BytesN, String, Symbol};
+use soroban_sdk::{contracttype, Bytes, BytesN, String, Symbol, Vec};
 
 /// Metadata about a cross-chain payload
 #[contracttype]

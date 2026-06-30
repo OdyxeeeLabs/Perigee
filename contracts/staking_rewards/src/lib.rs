@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Vec, vec};
 
+use emergency_guard::{EmergencyGuard, PauseType};
 pub use soroscope_error_codes::ContractError;
 use soroscope_math::Fixed;
 use emergency_guard::{DefaultEmergencyGuard, PauseType, EmergencyGuardTrait};
@@ -253,6 +254,11 @@ impl StakingRewards {
         let admins = vec![&e, owner.clone()];
         DefaultEmergencyGuard::init_guard(&e, admins, 1)
             .map_err(|_| ContractError::AlreadyInitialized)?;
+        // Initialize the embedded EmergencyGuard so granular pause checks
+        // (e.g. PauseType::CLAIM_REWARDS) can be toggled by the owner.
+        // Threshold of 1 means the single owner can trigger any pause.
+        let admins = soroban_sdk::vec![&e, config.owner.clone()];
+        EmergencyGuard::initialize(e, admins, 1).map_err(|_| ContractError::AlreadyInitialized)?;
 
         Ok(())
     }
@@ -385,6 +391,10 @@ impl StakingRewards {
         DefaultEmergencyGuard::check_not_paused(&e, PauseType::STAKE)
             .map_err(|_| ContractError::Paused)?;
 
+        if EmergencyGuard::is_paused(e.clone(), PauseType::CLAIM_REWARDS) {
+            return Err(ContractError::Paused);
+        }
+
         user.require_auth();
 
         let config = Self::get_config(e.clone())?;
@@ -486,6 +496,9 @@ impl StakingRewards {
     /// Pause staking operations (admin only).
     pub fn pause_staking(e: Env) -> Result<(), ContractError> {
         let config = Self::get_config(e.clone())?;
+    /// Sets the global paused state (owner only).
+    pub fn set_paused(e: Env, paused: bool) -> Result<(), ContractError> {
+        let mut config = Self::get_config(e.clone())?;
         config.owner.require_auth();
 
         DefaultEmergencyGuard::set_pause_state(&e, PauseType::STAKE, true)
@@ -578,6 +591,15 @@ impl StakingRewards {
     /// Rotate admin (multi-sig required).
     pub fn rotate_admin(e: Env, approvers: Vec<Address>, old_admin: Address, new_admin: Address) -> Result<(), ContractError> {
         DefaultEmergencyGuard::rotate_admin(&e, approvers, old_admin, new_admin)
+    /// Granularly pause or unpause the claim_rewards operation (owner only).
+    /// This is independent of the global `is_paused` flag and uses the
+    /// embedded EmergencyGuard bitmask (PauseType::CLAIM_REWARDS).
+    pub fn set_claim_rewards_paused(e: Env, paused: bool) -> Result<(), ContractError> {
+        let config = Self::get_config(e.clone())?;
+        // `EmergencyGuard::set_pause` performs the ownership auth check itself,
+        // so we pass the owner through directly to avoid double-auth failures
+        // when the same signer is reused within the same transaction.
+        EmergencyGuard::set_pause(e, config.owner, PauseType::CLAIM_REWARDS, paused)
             .map_err(|_| ContractError::Paused)
     }
 
