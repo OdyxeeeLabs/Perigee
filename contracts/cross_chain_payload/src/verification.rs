@@ -1,5 +1,5 @@
-use soroban_sdk::{contracttype, BytesN, String};
 use crate::chain_info::ValidatorSet;
+use soroban_sdk::{contracttype, BytesN, String};
 
 /// Status of a cross-chain payload verification
 #[contracttype]

@@ -124,7 +124,8 @@ impl MerkleTree {
 
         for level in 0..self.nodes.len() - 1 {
             let level_nodes = &self.nodes[level];
-            let sibling_index = if path_index % 2 == 0 {
+            let is_left = path_index.is_multiple_of(2);
+            let sibling_index = if is_left {
                 path_index + 1
             } else {
                 path_index - 1
@@ -138,7 +139,7 @@ impl MerkleTree {
 
             proof.push(ProofNode {
                 hash: sibling_hash,
-                is_left: path_index % 2 == 0,
+                is_left,
             });
 
             path_index /= 2;
@@ -229,7 +230,11 @@ impl MerkleTree {
             let mut i = 0;
             while i < current_level.len() {
                 let left = &current_level[i];
-                let right = if i + 1 < current_level.len() { &current_level[i + 1] } else { left };
+                let right = if i + 1 < current_level.len() {
+                    &current_level[i + 1]
+                } else {
+                    left
+                };
                 next_level.push(Self::hash_pair(left, right));
                 i += 2;
             }
@@ -596,9 +601,8 @@ mod fuzz_tests {
             let tree_via_hex = MerkleTree::from_hex_strings(hex_leaves);
             let mut tree_direct = MerkleTree::new(32);
             tree_direct.build(leaves).unwrap();
-            match tree_via_hex {
-                Ok(t) => prop_assert_eq!(t.root, tree_direct.root),
-                Err(_) => {}
+            if let Ok(t) = tree_via_hex {
+                prop_assert_eq!(t.root, tree_direct.root);
             }
         }
     }

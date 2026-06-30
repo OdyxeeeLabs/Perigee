@@ -1,7 +1,5 @@
 use super::*;
-use soroban_sdk::{
-    contract, contractimpl, contracttype, testutils::Address as _, Address, Env,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, testutils::Address as _, Address, Env};
 use soroban_sdk::{contract, contractimpl, contracttype, testutils::Address as _, Address, Env};
 
 // ── Mock receivers ───────────────────────────────────────────────────────────
@@ -355,7 +353,9 @@ fn test_borrow_pause_blocks_flash_loan_and_resume_allows() {
     assert_eq!(s.vault_client.get_borrow_paused(), true);
 
     // While paused, borrowing must fail with BorrowPaused.
-    let res = s.vault_client.try_flash_loan(&initiator, &receiver_id, &5_000);
+    let res = s
+        .vault_client
+        .try_flash_loan(&initiator, &receiver_id, &5_000);
     assert_eq!(res, Err(Ok(Error::BorrowPaused)));
 
     // Resume and borrowing works again.

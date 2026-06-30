@@ -31,7 +31,6 @@ fn test_mint_and_transfer() {
     assert_eq!(client.balance(&user1), 800);
     assert_eq!(client.balance(&user2), 200);
 }
-
 #[test]
 fn test_allowance() {
     let env = Env::default();
@@ -96,7 +95,10 @@ fn test_pause_minting_blocks_mint_only() {
 
     // Mint should now fail because PauseType::MINT is set in the bitmask.
     let result = client.try_mint(&user, &100);
-    assert!(result.is_err(), "mint should fail when PauseType::MINT is set");
+    assert!(
+        result.is_err(),
+        "mint should fail when PauseType::MINT is set"
+    );
 
     // Transfers are NOT paused — they should still work.
     client.transfer(&user, &user2, &100);
@@ -156,7 +158,10 @@ fn test_pause_transfers_blocks_transfer_only() {
 
     // Transfer should fail.
     let result = client.try_transfer(&user, &user2, &100);
-    assert!(result.is_err(), "transfer should fail when transfers are paused");
+    assert!(
+        result.is_err(),
+        "transfer should fail when transfers are paused"
+    );
 
     // Minting is NOT paused — it should work.
     client.mint(&user2, &50);
@@ -228,7 +233,10 @@ fn test_guard_pause_blocks_transfer_until_resume() {
 
     // Transfer should fail.
     let result = client.try_transfer(&user, &user2, &100);
-    assert!(result.is_err(), "transfer should fail when transfers are paused");
+    assert!(
+        result.is_err(),
+        "transfer should fail when transfers are paused"
+    );
 
     // Minting is NOT paused — still works.
     client.mint(&user2, &50);
@@ -343,9 +351,18 @@ fn test_guard_admin_management() {
     client.emergency_pause_all(&approvers);
 
     // Confirm all operations are blocked.
-    assert!(client.try_mint(&user2, &100).is_err(), "mint should be paused");
-    assert!(client.try_transfer(&user, &user2, &50).is_err(), "transfer should be paused");
-    assert!(client.try_burn(&user, &50).is_err(), "burn should be paused");
+    assert!(
+        client.try_mint(&user2, &100).is_err(),
+        "mint should be paused"
+    );
+    assert!(
+        client.try_transfer(&user, &user2, &50).is_err(),
+        "transfer should be paused"
+    );
+    assert!(
+        client.try_burn(&user, &50).is_err(),
+        "burn should be paused"
+    );
 
     // Resume all via multi-sig.
     client.resume_all(&approvers);
@@ -425,4 +442,3 @@ fn test_initialize_storage_efficiency() {
     client.guard_pause(&admin, &PauseType::MINT, &true);
     assert!(client.is_operation_paused(&PauseType::MINT));
 }
-

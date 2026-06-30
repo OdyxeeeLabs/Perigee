@@ -16,8 +16,7 @@ mod liquidity_pool {
 }
 
 fn pool_wasm_hash(env: &Env) -> BytesN<32> {
-    env.deployer()
-        .upload_contract_wasm(liquidity_pool::WASM)
+    env.deployer().upload_contract_wasm(liquidity_pool::WASM)
 }
 
 #[test]
