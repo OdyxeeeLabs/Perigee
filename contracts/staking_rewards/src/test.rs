@@ -289,3 +289,24 @@ fn test_pause_safeguards_claim() {
     client.set_paused(&true);
     client.claim(&user);
 }
+
+/// Verifies that the CLAIM_REWARDS granular pause blocks claims independently
+/// of the global `is_paused` flag, satisfying issue #463 acceptance criteria.
+#[test]
+#[should_panic(expected = "Contract, #14")]
+fn test_granular_claim_rewards_pause() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+    client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 5);
+
+    // Activate CLAIM_REWARDS granular pause via the contract's delegation function.
+    // Global is_paused remains false — only the granular bitmask bit is set.
+    client.set_claim_rewards_paused(&true);
+
+    // Claim MUST fail with ContractError::Paused (error code 14).
+    client.claim(&user);
+}

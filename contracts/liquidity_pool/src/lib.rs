@@ -2,7 +2,7 @@
 
 use emergency_guard::{
     emit_admin_added, emit_admin_removed, emit_emergency_paused_all, emit_guard_initialized,
-    emit_pause_state_changed, emit_resumed_all, EmergencyGuard, GuardError, PauseType,
+    emit_pause_state_changed, emit_resumed_all, EmergencyGuard, GuardError, PauseType, DefaultEmergencyGuard, EmergencyGuardTrait
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, vec, Address, Env, String, Vec,
@@ -267,7 +267,6 @@ fn target_fee_from_volatility(base_fee_bps: i128, volatility_bps: i128) -> i128 
     }
 }
 
-
 // ── pause_op aliases (kept for backwards compat with tests) ──────────────────
 
 pub mod pause_op {
@@ -324,9 +323,6 @@ impl LiquidityPool {
         load_admin(&e).expect("not initialized")
     }
 
-    pub fn get_admins(e: Env) -> Vec<Address> {
-        EmergencyGuard::get_admins(e)
-    }
 
     pub fn get_admin_threshold(e: Env) -> u32 {
         EmergencyGuard::get_threshold(e)
@@ -335,12 +331,7 @@ impl LiquidityPool {
     // ── EmergencyGuard pause interface ────────────────────────────────────────
 
     /// Pause or resume one operation bit. Any current guard admin may call this.
-    pub fn guard_pause(
-        e: Env,
-        admin: Address,
-        operation: u32,
-        paused: bool,
-    ) -> Result<(), Error> {
+    pub fn guard_pause(e: Env, admin: Address, operation: u32, paused: bool) -> Result<(), Error> {
         EmergencyGuard::set_pause(e, admin, operation, paused).map_err(map_guard_err)
     }
 
@@ -359,8 +350,14 @@ impl LiquidityPool {
 
     pub fn set_paused(e: Env, paused: bool) -> Result<(), Error> {
         let admin = load_admin(&e)?;
-        for op in [PauseType::SWAP, PauseType::DEPOSIT, PauseType::WITHDRAW, PauseType::BURN] {
-            EmergencyGuard::set_pause(e.clone(), admin.clone(), op, paused).map_err(map_guard_err)?;
+        for op in [
+            PauseType::SWAP,
+            PauseType::DEPOSIT,
+            PauseType::WITHDRAW,
+            PauseType::BURN,
+        ] {
+            EmergencyGuard::set_pause(e.clone(), admin.clone(), op, paused)
+                .map_err(map_guard_err)?;
         }
         Ok(())
     }
@@ -400,24 +397,18 @@ impl LiquidityPool {
         EmergencyGuard::emergency_pause(e, approvers).map_err(map_guard_err)
     }
 
-    pub fn emergency_pause_all(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
-        EmergencyGuard::emergency_pause(e, approvers).map_err(map_guard_err)
-    }
-
     pub fn resume(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
         EmergencyGuard::resume(e, approvers).map_err(map_guard_err)
     }
 
-    pub fn resume_all(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
-        EmergencyGuard::resume(e, approvers).map_err(map_guard_err)
-    }
-
-    pub fn get_pause_state(e: Env) -> u32 {
+    pub fn get_pause_mask(e: Env) -> u32 {
         EmergencyGuard::get_pause_state(e)
     }
 
     pub fn get_pause_mask(e: Env) -> u32 {
-        guard_pause_state(&e)
+        EmergencyGuard::get_pause_state(e)
+    }
+
     /// Unpause all via multi-sig approvers (backward-compatible resume entry point).
     pub fn guard_unpause(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
         EmergencyGuard::resume(e, approvers).map_err(map_guard_err)
@@ -425,11 +416,6 @@ impl LiquidityPool {
 
     pub fn is_paused_op(e: Env, operation: u32) -> bool {
         EmergencyGuard::is_paused(e, operation)
-    }
-
-    /// Add a new guard admin — requires multi-sig.
-    pub fn add_admin(e: Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), Error> {
-        EmergencyGuard::add_admin(e, approvers, new_admin).map_err(map_guard_err)
     }
 
     pub fn add_guard_admin(
@@ -440,44 +426,12 @@ impl LiquidityPool {
         EmergencyGuard::add_admin(e, approvers, new_admin).map_err(map_guard_err)
     }
 
-    /// Remove a guard admin — requires multi-sig.
-    pub fn remove_admin(e: Env, approvers: Vec<Address>, admin: Address) -> Result<(), Error> {
-        let pool_admin = load_admin(&e)?;
-        EmergencyGuard::remove_admin(e.clone(), approvers, admin.clone()).map_err(map_guard_err)?;
-        // If the removed address was the primary pool admin, promote the first remaining guard admin.
-        if pool_admin == admin {
-            let admins = EmergencyGuard::get_admins(e.clone());
-            if let Some(remaining) = admins.get(0) {
-                e.storage().instance().set(&DataKey::Admin, &remaining);
-            }
-        }
-        Ok(())
-    }
-
     pub fn remove_guard_admin(
         e: Env,
         approvers: Vec<Address>,
         admin: Address,
     ) -> Result<(), Error> {
         Self::remove_admin(e, approvers, admin)
-    }
-
-    /// Rotate primary pool admin via EmergencyGuard multi-sig.
-    pub fn rotate_admin(
-        e: Env,
-        approvers: Vec<Address>,
-        old_admin: Address,
-        new_admin: Address,
-    ) -> Result<(), Error> {
-        let pool_admin = load_admin(&e)?;
-        if pool_admin != old_admin {
-            return Err(Error::Unauthorized);
-        }
-        EmergencyGuard::add_admin(e.clone(), approvers.clone(), new_admin.clone())
-            .map_err(map_guard_err)?;
-        EmergencyGuard::remove_admin(e.clone(), approvers, old_admin).map_err(map_guard_err)?;
-        e.storage().instance().set(&DataKey::Admin, &new_admin);
-        Ok(())
     }
 
     pub fn get_guard_admins(e: Env) -> Vec<Address> {
@@ -491,7 +445,9 @@ impl LiquidityPool {
     // ── Fee management ────────────────────────────────────────────────────────
 
     pub fn get_fee(e: Env) -> i128 {
-        load_pool(&e).map(|p| p.fee_bps).unwrap_or(DEFAULT_BASE_FEE_BPS)
+        load_pool(&e)
+            .map(|p| p.fee_bps)
+            .unwrap_or(DEFAULT_BASE_FEE_BPS)
     }
 
     pub fn set_fee(e: Env, fee_bps: i128) -> Result<(), Error> {
@@ -592,10 +548,15 @@ impl LiquidityPool {
             executable_after_ledger: execute_after,
             based_on_volatility_bps: volatility_bps,
         };
-        e.storage().instance().set(&DataKey::PendingFeeUpdate, &pending);
+        e.storage()
+            .instance()
+            .set(&DataKey::PendingFeeUpdate, &pending);
         let scheduled_by = e.current_contract_address();
         e.events().publish(
-            (String::from_str(&e, "fee_update_scheduled"), scheduled_by.clone()),
+            (
+                String::from_str(&e, "fee_update_scheduled"),
+                scheduled_by.clone(),
+            ),
             FeeUpdateScheduledEvent {
                 scheduled_by,
                 old_fee_bps: pool.fee_bps,
@@ -664,11 +625,14 @@ impl LiquidityPool {
                 .instance()
                 .get(&DataKey::AccumulatedRewardPerShare)
                 .unwrap_or(0);
-            e.storage()
-                .instance()
-                .set(&DataKey::AccumulatedRewardPerShare, &(accumulated + increment));
+            e.storage().instance().set(
+                &DataKey::AccumulatedRewardPerShare,
+                &(accumulated + increment),
+            );
         }
-        e.storage().instance().set(&DataKey::LastRewardLedger, &current_ledger);
+        e.storage()
+            .instance()
+            .set(&DataKey::LastRewardLedger, &current_ledger);
     }
 
     fn calculate_pending_rewards(e: &Env, user: &Address, staked_amount: i128) -> i128 {
@@ -699,15 +663,28 @@ impl LiquidityPool {
         Self::update_reward_state(&e);
         let staked_key = DataKey::StakedBalance(user.clone());
         let current_staked: i128 = e.storage().persistent().get(&staked_key).unwrap_or(0);
-        e.storage().persistent().set(&balance_key, &(user_balance - amount));
+        e.storage()
+            .persistent()
+            .set(&balance_key, &(user_balance - amount));
         e.storage().persistent().extend_ttl(&balance_key, 100, 100);
-        e.storage().persistent().set(&staked_key, &(current_staked + amount));
+        e.storage()
+            .persistent()
+            .set(&staked_key, &(current_staked + amount));
         e.storage().persistent().extend_ttl(&staked_key, 100, 100);
-        let total_staked: i128 = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
-        e.storage().instance().set(&DataKey::TotalStaked, &(total_staked + amount));
+        let total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &(total_staked + amount));
         e.events().publish(
             (String::from_str(&e, "stake"), user.clone()),
-            StakeEvent { user, amount_staked: amount },
+            StakeEvent {
+                user,
+                amount_staked: amount,
+            },
         );
         Ok(())
     }
@@ -722,15 +699,28 @@ impl LiquidityPool {
         Self::update_reward_state(&e);
         let balance_key = DataKey::Balance(user.clone());
         let user_balance: i128 = e.storage().persistent().get(&balance_key).unwrap_or(0);
-        e.storage().persistent().set(&balance_key, &(user_balance + amount));
+        e.storage()
+            .persistent()
+            .set(&balance_key, &(user_balance + amount));
         e.storage().persistent().extend_ttl(&balance_key, 100, 100);
-        e.storage().persistent().set(&staked_key, &(current_staked - amount));
+        e.storage()
+            .persistent()
+            .set(&staked_key, &(current_staked - amount));
         e.storage().persistent().extend_ttl(&staked_key, 100, 100);
-        let total_staked: i128 = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
-        e.storage().instance().set(&DataKey::TotalStaked, &(total_staked - amount));
+        let total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &(total_staked - amount));
         e.events().publish(
             (String::from_str(&e, "unstake"), user.clone()),
-            UnstakeEvent { user, amount_unstaked: amount },
+            UnstakeEvent {
+                user,
+                amount_unstaked: amount,
+            },
         );
         Ok(())
     }
@@ -753,17 +743,27 @@ impl LiquidityPool {
             .checked_mul(accumulated_per_share)
             .map(|v| v / REWARD_PRECISION)
             .unwrap_or(0);
-        e.storage().persistent().set(&DataKey::UserRewards(user.clone()), &new_claimed);
-        e.storage().persistent().extend_ttl(&DataKey::UserRewards(user.clone()), 100, 100);
+        e.storage()
+            .persistent()
+            .set(&DataKey::UserRewards(user.clone()), &new_claimed);
+        e.storage()
+            .persistent()
+            .extend_ttl(&DataKey::UserRewards(user.clone()), 100, 100);
         e.events().publish(
             (String::from_str(&e, "claim_rewards"), user.clone()),
-            ClaimRewardsEvent { user, rewards_amount: pending },
+            ClaimRewardsEvent {
+                user,
+                rewards_amount: pending,
+            },
         );
         Ok(pending)
     }
 
     pub fn get_staked_balance(e: Env, user: Address) -> i128 {
-        e.storage().persistent().get(&DataKey::StakedBalance(user)).unwrap_or(0)
+        e.storage()
+            .persistent()
+            .get(&DataKey::StakedBalance(user))
+            .unwrap_or(0)
     }
 
     pub fn get_pending_rewards(e: Env, user: Address) -> i128 {
@@ -773,7 +773,10 @@ impl LiquidityPool {
     }
 
     pub fn get_total_staked(e: Env) -> i128 {
-        e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0)
+        e.storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0)
     }
 
     // ── Core AMM operations ───────────────────────────────────────────────────
@@ -800,10 +803,18 @@ impl LiquidityPool {
                 .checked_mul(pool.total_shares)
                 .ok_or(Error::InsufficientLiquidity)?
                 / pool.reserve_b;
-            if share_a < share_b { share_a } else { share_b }
+            if share_a < share_b {
+                share_a
+            } else {
+                share_b
+            }
         };
         let user_key = DataKey::Balance(to.clone());
-        let current = e.storage().persistent().get::<_, i128>(&user_key).unwrap_or(0);
+        let current = e
+            .storage()
+            .persistent()
+            .get::<_, i128>(&user_key)
+            .unwrap_or(0);
         e.storage().persistent().set(&user_key, &(current + shares));
         e.storage().persistent().extend_ttl(&user_key, 100, 100);
         pool.total_shares += shares;
@@ -812,7 +823,12 @@ impl LiquidityPool {
         save_pool(&e, &pool);
         e.events().publish(
             (String::from_str(&e, "deposit"), to.clone()),
-            DepositEvent { user: to, amount_a, amount_b, shares_minted: shares },
+            DepositEvent {
+                user: to,
+                amount_a,
+                amount_b,
+                shares_minted: shares,
+            },
         );
         Ok(shares)
     }
@@ -822,9 +838,19 @@ impl LiquidityPool {
         to.require_auth();
         let mut pool = load_pool(&e)?;
         let (reserve_in, reserve_out, token_in, token_out) = if buy_a {
-            (pool.reserve_b, pool.reserve_a, pool.token_b.clone(), pool.token_a.clone())
+            (
+                pool.reserve_b,
+                pool.reserve_a,
+                pool.token_b.clone(),
+                pool.token_a.clone(),
+            )
         } else {
-            (pool.reserve_a, pool.reserve_b, pool.token_a.clone(), pool.token_b.clone())
+            (
+                pool.reserve_a,
+                pool.reserve_b,
+                pool.token_a.clone(),
+                pool.token_b.clone(),
+            )
         };
         if out >= reserve_out {
             return Err(Error::InsufficientLiquidity);
@@ -862,7 +888,13 @@ impl LiquidityPool {
         save_pool(&e, &pool);
         e.events().publish(
             (String::from_str(&e, "swap"), to.clone()),
-            SwapEvent { user: to, token_in, token_out, amount_in, amount_out: out },
+            SwapEvent {
+                user: to,
+                token_in,
+                token_out,
+                amount_in,
+                amount_out: out,
+            },
         );
         Ok(amount_in)
     }
@@ -872,7 +904,11 @@ impl LiquidityPool {
         to.require_auth();
         let mut pool = load_pool(&e)?;
         let user_key = DataKey::Balance(to.clone());
-        let current = e.storage().persistent().get::<_, i128>(&user_key).unwrap_or(0);
+        let current = e
+            .storage()
+            .persistent()
+            .get::<_, i128>(&user_key)
+            .unwrap_or(0);
         if share_amount > current {
             return Err(Error::InsufficientShares);
         }
@@ -881,7 +917,9 @@ impl LiquidityPool {
         }
         let amount_a = share_amount * pool.reserve_a / pool.total_shares;
         let amount_b = share_amount * pool.reserve_b / pool.total_shares;
-        e.storage().persistent().set(&user_key, &(current - share_amount));
+        e.storage()
+            .persistent()
+            .set(&user_key, &(current - share_amount));
         e.storage().persistent().extend_ttl(&user_key, 100, 100);
         pool.total_shares -= share_amount;
         pool.reserve_a -= amount_a;
@@ -890,14 +928,23 @@ impl LiquidityPool {
         let token_b = pool.token_b.clone();
         save_pool(&e, &pool);
         soroban_sdk::token::Client::new(&e, &token_a).transfer(
-            &e.current_contract_address(), &to, &amount_a,
+            &e.current_contract_address(),
+            &to,
+            &amount_a,
         );
         soroban_sdk::token::Client::new(&e, &token_b).transfer(
-            &e.current_contract_address(), &to, &amount_b,
+            &e.current_contract_address(),
+            &to,
+            &amount_b,
         );
         e.events().publish(
             (String::from_str(&e, "withdraw"), to.clone()),
-            WithdrawEvent { user: to, shares_burned: share_amount, amount_a, amount_b },
+            WithdrawEvent {
+                user: to,
+                shares_burned: share_amount,
+                amount_a,
+                amount_b,
+            },
         );
         Ok((amount_a, amount_b))
     }
@@ -907,7 +954,11 @@ impl LiquidityPool {
         from.require_auth();
         let mut pool = load_pool(&e)?;
         let user_key = DataKey::Balance(from.clone());
-        let current = e.storage().persistent().get::<_, i128>(&user_key).unwrap_or(0);
+        let current = e
+            .storage()
+            .persistent()
+            .get::<_, i128>(&user_key)
+            .unwrap_or(0);
         if amount > current {
             return Err(Error::InsufficientShares);
         }
@@ -917,7 +968,10 @@ impl LiquidityPool {
         save_pool(&e, &pool);
         e.events().publish(
             (String::from_str(&e, "burn"), from.clone()),
-            BurnEvent { user: from, shares_burned: amount },
+            BurnEvent {
+                user: from,
+                shares_burned: amount,
+            },
         );
         Ok(())
     }
@@ -937,7 +991,10 @@ impl LiquidityPool {
     }
 
     pub fn balance(e: Env, id: Address) -> i128 {
-        e.storage().persistent().get(&DataKey::Balance(id)).unwrap_or(0)
+        e.storage()
+            .persistent()
+            .get(&DataKey::Balance(id))
+            .unwrap_or(0)
     }
 
     pub fn total_supply(e: Env) -> i128 {
@@ -949,14 +1006,26 @@ impl LiquidityPool {
         from.require_auth();
         let from_key = DataKey::Balance(from.clone());
         let to_key = DataKey::Balance(to);
-        let from_balance = e.storage().persistent().get::<_, i128>(&from_key).unwrap_or(0);
+        let from_balance = e
+            .storage()
+            .persistent()
+            .get::<_, i128>(&from_key)
+            .unwrap_or(0);
         if from_balance < amount {
             return Err(Error::InsufficientBalance);
         }
-        e.storage().persistent().set(&from_key, &(from_balance - amount));
+        e.storage()
+            .persistent()
+            .set(&from_key, &(from_balance - amount));
         e.storage().persistent().extend_ttl(&from_key, 100, 100);
-        let to_balance = e.storage().persistent().get::<_, i128>(&to_key).unwrap_or(0);
-        e.storage().persistent().set(&to_key, &(to_balance + amount));
+        let to_balance = e
+            .storage()
+            .persistent()
+            .get::<_, i128>(&to_key)
+            .unwrap_or(0);
+        e.storage()
+            .persistent()
+            .set(&to_key, &(to_balance + amount));
         e.storage().persistent().extend_ttl(&to_key, 100, 100);
         Ok(())
     }
@@ -969,10 +1038,16 @@ impl LiquidityPool {
         expiration_ledger: u32,
     ) -> Result<(), Error> {
         from.require_auth();
-        let key = DataKey::Allowance(AllowanceDataKey { from: from.clone(), spender: spender.clone() });
+        let key = DataKey::Allowance(AllowanceDataKey {
+            from: from.clone(),
+            spender: spender.clone(),
+        });
         e.storage().persistent().set(
             &key,
-            &AllowanceValue { amount, expiration_ledger },
+            &AllowanceValue {
+                amount,
+                expiration_ledger,
+            },
         );
         e.storage().persistent().extend_ttl(&key, 100, 100);
         Ok(())
@@ -1000,17 +1075,91 @@ impl LiquidityPool {
             return Err(Error::InsufficientAllowance);
         }
         let new_allowance = current_allowance - amount;
-        let key = DataKey::Allowance(AllowanceDataKey { from: from.clone(), spender: spender.clone() });
+        let key = DataKey::Allowance(AllowanceDataKey {
+            from: from.clone(),
+            spender: spender.clone(),
+        });
         if new_allowance > 0 {
-            let current_val = e.storage().persistent().get::<_, AllowanceValue>(&key).unwrap();
+            let current_val = e
+                .storage()
+                .persistent()
+                .get::<_, AllowanceValue>(&key)
+                .unwrap();
             e.storage().persistent().set(
                 &key,
-                &AllowanceValue { amount: new_allowance, expiration_ledger: current_val.expiration_ledger },
+                &AllowanceValue {
+                    amount: new_allowance,
+                    expiration_ledger: current_val.expiration_ledger,
+                },
             );
             e.storage().persistent().extend_ttl(&key, 100, 100);
         } else {
             e.storage().persistent().remove(&key);
         }
         Self::transfer(e, from, to, amount)
+    }
+}
+
+#[contractimpl]
+impl EmergencyGuardTrait for LiquidityPool {
+    fn check_not_paused(env: &Env, operation: u32) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::check_not_paused(env, operation)
+    }
+
+    fn get_pause_state(env: &Env) -> u32 {
+        DefaultEmergencyGuard::get_pause_state(env)
+    }
+
+    fn set_pause_state(env: &Env, operation: u32, paused: bool) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::set_pause_state(env, operation, paused)
+    }
+
+    fn unpause(env: &Env, operation: u32) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::unpause(env, operation)
+    }
+
+    fn unpause_all(env: &Env) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::unpause_all(env)
+    }
+
+    fn emergency_pause_all(env: &Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::emergency_pause_all(env, approvers)
+    }
+
+    fn resume_all(env: &Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::resume_all(env, approvers)
+    }
+
+    fn init_guard(env: &Env, admins: Vec<Address>, threshold: u32) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::init_guard(env, admins, threshold)
+    }
+
+    fn add_admin(env: &Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::add_admin(env, approvers, new_admin)
+    }
+
+    fn remove_admin(env: &Env, approvers: Vec<Address>, admin: Address) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::remove_admin(env, approvers, admin)
+    }
+
+    fn rotate_admin(
+        env: &Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::rotate_admin(env, approvers, old_admin, new_admin)
+    }
+
+    fn get_admins(env: &Env) -> Vec<Address> {
+        DefaultEmergencyGuard::get_admins(env)
+    }
+
+    fn get_threshold(env: &Env) -> u32 {
+        DefaultEmergencyGuard::get_threshold(env)
+    }
+
+    fn is_admin(env: &Env, addr: Address) -> bool {
+        DefaultEmergencyGuard::is_admin(env, addr)
     }
 }

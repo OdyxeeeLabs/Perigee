@@ -5,6 +5,10 @@ use emergency_guard::PauseType;
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
 
 fn setup_token<'a>(
+// Import EmergencyGuard directly from its crate
+use emergency_guard::{EmergencyGuard, EmergencyGuardClient};
+
+fn setup_guard<'a>(
     env: &'a Env,
     admins: &[Address],
     threshold: u32,

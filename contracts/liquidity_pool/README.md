@@ -30,11 +30,24 @@ Calling `initialize(admin, token_a, token_b)` bootstraps the guard with:
 - A multi-signature threshold of `1`.
 - A pause state of `0`, meaning no operations are paused.
 
-The guard state is stored in instance storage:
+## Guard Parameters
 
-- `GuardAdmins`: `Vec<Address>`
-- `GuardThreshold`: `u32`
-- `GuardPauseState`: `u32`
+The guard state is stored in instance storage using the following parameters:
+
+- `GuardAdmins`: `Vec<Address>` - The list of accounts authorized to perform guard actions.
+- `GuardThreshold`: `u32` - The number of unique admin signatures required for multi-sig operations.
+- `GuardPauseState`: `u32` - The current bitmask representing which operations are active vs paused.
+
+## Events
+
+The guard implementation emits standardized events to allow external systems to index emergency actions:
+
+- `emergency_guard_initialized`: Emitted when the guard is bootstrapped with `admins` and `threshold`.
+- `emergency_guard_pause_state_changed`: Emitted when a single operation is paused or unpaused. Returns `admin`, `operation`, and `paused`.
+- `emergency_guard_emergency_paused_all`: Emitted when all guarded operations are paused via multi-sig. Returns `approvers`.
+- `emergency_guard_resumed_all`: Emitted when all operations are restored. Returns `approvers`.
+- `emergency_guard_admin_added`: Emitted when a new administrator is authorized. Returns `approvers` and `new_admin`.
+- `emergency_guard_admin_removed`: Emitted when an administrator is revoked. Returns `approvers` and `admin`.
 
 ## Granular Pause API
 
