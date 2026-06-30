@@ -3,6 +3,7 @@
 import React, { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { parseWasmError, WasmBackendError } from '../lib/errorHandling';
+import { arrayBufferToBase64 } from '../lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -171,6 +172,7 @@ function ErrorIcon() {
   );
 }
 
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export interface UploadZoneProps {
@@ -180,10 +182,12 @@ export interface UploadZoneProps {
   backendUrl?: string;
   /** Whether to validate with backend after client-side checks */
   enableBackendValidation?: boolean;
+  onReset?: () => void;
 }
 
 export function UploadZone({
   onFileReady,
+  onReset,
   backendUrl = 'http://localhost:8080/analyze/wasm',
   enableBackendValidation = true
 }: UploadZoneProps) {
@@ -210,13 +214,8 @@ export function UploadZone({
             const arrayBuffer = event.target?.result as ArrayBuffer;
             if (!arrayBuffer) throw new Error('Failed to read file');
 
-            // Convert to base64 for backend submission
-            const bytes = new Uint8Array(arrayBuffer);
-            let binary = '';
-            for (let i = 0; i < bytes.byteLength; i++) {
-              binary += String.fromCharCode(bytes[i]);
-            }
-            const base64Data = btoa(binary);
+            // Convert to base64 for backend submission using chunked encoding.
+            const base64Data = arrayBufferToBase64(arrayBuffer);
 
             const response = await fetch(backendUrl, {
               method: 'POST',
@@ -353,6 +352,7 @@ export function UploadZone({
             }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : 'Failed to parse WASM metadata';
+            alert(errorMsg);
             setErrorMessage(errorMsg);
             setErrorDetails({
               title: 'Invalid WASM File',
@@ -401,6 +401,9 @@ export function UploadZone({
     const customMessage = first?.errors?.[0]?.message;
     const errorMsg = customMessage || `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
     setErrorMessage(errorMsg);
+    const errorMsg = `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
+    alert(customMessage || errorMsg);
+    setErrorMessage(customMessage || errorMsg);
     setErrorDetails({
       title: 'Invalid File Type',
       message: errorMsg,

@@ -1,4 +1,5 @@
 #![no_std]
+use emergency_guard::{DefaultEmergencyGuard, EmergencyGuardTrait, GuardError};
 #[cfg(test)]
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{
@@ -8,6 +9,9 @@ use soroban_sdk::{
 use soroban_sdk::xdr::ToXdr;
 
 use emergency_guard::{EmergencyGuard, GuardError, PauseType};
+    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, BytesN, Env, IntoVal,
+    Vec,
+};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -23,17 +27,12 @@ pub enum Error {
 
 const PAUSE_CREATE_PAIR_FLAG: u32 = 1 << 6;
 
-/// Storage keys for the factory contract.
-/// Storage key for pair registry and multi-sig admin data.
-/// Stored in **instance** storage because the factory is a singleton contract
-/// and pair mappings are global state that should share the contract's TTL.
-/// Using instance storage avoids per-entry persistent rent and reduces the
-/// ledger footprint to a single entry per invocation.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DataKey {
     Pair(Address, Address),
     GuardPauseState,
+    Admin,
 }
 
 #[contract]
@@ -44,34 +43,29 @@ impl LiquidityPoolFactory {
     /// Initializes the factory admin committee using the shared EmergencyGuard storage.
     pub fn initialize(env: Env, admins: Vec<Address>, threshold: u32) -> Result<(), GuardError> {
         EmergencyGuard::initialize(env, admins, threshold)
+impl EmergencyGuardTrait for LiquidityPoolFactory {
+    fn check_not_paused(env: &Env, operation: u32) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::check_not_paused(env, operation)
     }
 
-    /// Add a new admin using the shared multi-signature approval flow.
-    pub fn add_admin(
-        env: Env,
-        approvers: Vec<Address>,
-        new_admin: Address,
-    ) -> Result<(), GuardError> {
-        EmergencyGuard::add_admin(env, approvers, new_admin)
+    fn get_pause_state(env: &Env) -> u32 {
+        DefaultEmergencyGuard::get_pause_state(env)
     }
 
-    /// Remove an admin using the shared multi-signature approval flow.
-    pub fn remove_admin(
-        env: Env,
-        approvers: Vec<Address>,
-        admin: Address,
-    ) -> Result<(), GuardError> {
-        EmergencyGuard::remove_admin(env, approvers, admin)
+    fn set_pause_state(env: &Env, operation: u32, paused: bool) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::set_pause_state(env, operation, paused)
     }
 
-    /// Returns the currently configured factory admins.
-    pub fn get_admins(env: Env) -> Vec<Address> {
-        EmergencyGuard::get_admins(env)
+    fn unpause(env: &Env, operation: u32) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::unpause(env, operation)
     }
 
-    /// Returns the required multi-signature threshold.
-    pub fn get_threshold(env: Env) -> u32 {
-        EmergencyGuard::get_threshold(env)
+    fn unpause_all(env: &Env) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::unpause_all(env)
+    }
+
+    fn emergency_pause_all(env: &Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::emergency_pause_all(env, approvers)
     }
 
     /// Checks whether an address is currently authorized as a factory admin.
@@ -124,7 +118,43 @@ impl LiquidityPoolFactory {
         admin: Address,
     ) -> Result<(), GuardError> {
         EmergencyGuard::remove_admin(env, approvers, admin)
+    fn resume_all(env: &Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::resume_all(env, approvers)
     }
+
+    fn init_guard(env: &Env, admins: Vec<Address>, threshold: u32) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::init_guard(env, admins, threshold)
+    }
+
+    fn add_admin(env: &Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::add_admin(env, approvers, new_admin)
+    }
+
+    fn remove_admin(env: &Env, approvers: Vec<Address>, admin: Address) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::remove_admin(env, approvers, admin)
+    }
+
+    fn rotate_admin(
+        env: &Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
+        DefaultEmergencyGuard::rotate_admin(env, approvers, old_admin, new_admin)
+    }
+
+    fn get_admins(env: &Env) -> Vec<Address> {
+        DefaultEmergencyGuard::get_admins(env)
+    }
+
+    fn get_threshold(env: &Env) -> u32 {
+        DefaultEmergencyGuard::get_threshold(env)
+    }
+
+    fn is_admin(env: &Env, addr: Address) -> bool {
+        DefaultEmergencyGuard::is_admin(env, addr)
+    }
+}
 
     /// Returns whether a factory operation is currently paused.
     pub fn is_guard_paused(env: Env, operation: u32) -> bool {
@@ -135,13 +165,24 @@ impl LiquidityPoolFactory {
     pub fn get_pause_state(env: Env) -> u32 {
         EmergencyGuard::get_pause_state(env)
     }
+#[contractimpl]
+impl LiquidityPoolFactory {
+    /// Initializes the factory contract with an admin and setup the emergency guard.
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::AlreadyInitialized);
+        }
+        env.storage().instance().set(&DataKey::Admin, &admin);
+
+        let mut admins = Vec::new(&env);
+        admins.push_back(admin);
+        DefaultEmergencyGuard::init_guard(&env, admins, 1).map_err(|_| Error::Unauthorized)?;
 
     /// Check if a specific operation is paused.
     pub fn is_paused(env: Env, operation: u32) -> bool {
         EmergencyGuard::is_paused(env, operation)
     }
 
-    /// Deploys a new Liquidity Pool contract for a unique pair of tokens.
     pub fn create_pair(
         env: Env,
         token_a: Address,
@@ -152,6 +193,8 @@ impl LiquidityPoolFactory {
         if EmergencyGuard::is_paused(env.clone(), PauseType::CREATE_PAIR) {
             return Err(Error::Paused);
         }
+        DefaultEmergencyGuard::check_not_paused(&env, PAUSE_CREATE_PAIR_FLAG)
+            .map_err(|_| Error::Paused)?;
 
         let (token_0, token_1) = if token_a < token_b {
             (token_a, token_b)
@@ -159,7 +202,6 @@ impl LiquidityPoolFactory {
             (token_b, token_a)
         };
 
-        // Instance storage: cheaper rent, no per-entry TTL management.
         if env
             .storage()
             .instance()
@@ -168,17 +210,24 @@ impl LiquidityPoolFactory {
             return Err(Error::PairAlreadyExists);
         }
 
-        #[cfg(test)]
-        let deployed_address = {
-            let _ = wasm_hash;
-            Address::generate(&env)
-        };
-
-        #[cfg(not(test))]
-        let deployed_address = {
-            let salt = env
-                .crypto()
-                .sha256(&(token_0.clone(), token_1.clone()).to_xdr(&env));
+        let salt = env
+            .crypto()
+            .sha256(&(token_0.clone(), token_1.clone()).to_xdr(&env));
+        let deployed_address = env
+            .deployer()
+            .with_current_contract(salt)
+            .deploy_v2(wasm_hash, soroban_sdk::Vec::<soroban_sdk::Val>::new(&env));
+        let init_args = soroban_sdk::vec![
+            &env,
+            env.current_contract_address().into_val(&env),
+            token_0.clone().into_val(&env),
+            token_1.clone().into_val(&env)
+        ];
+        let _res: soroban_sdk::Val = env.invoke_contract(
+            &deployed_address,
+            &soroban_sdk::Symbol::new(&env, "initialize"),
+            init_args,
+        );
 
             let deployed_address = env
                 .deployer()
@@ -206,18 +255,18 @@ impl LiquidityPoolFactory {
             .instance()
             .set(&DataKey::Pair(token_0, token_1), &deployed_address);
 
+        env.storage()
+            .instance()
+            .set(&DataKey::Pair(token_0, token_1), &deployed_address);
         Ok(deployed_address)
     }
 
-    /// Returns the pool address for the given token pair, if it exists.
     pub fn get_pair(env: Env, token_a: Address, token_b: Address) -> Option<Address> {
         let (token_0, token_1) = if token_a < token_b {
             (token_a, token_b)
         } else {
             (token_b, token_a)
         };
-
-        // One instance read instead of one persistent read.
         env.storage()
             .instance()
             .get(&DataKey::Pair(token_0, token_1))

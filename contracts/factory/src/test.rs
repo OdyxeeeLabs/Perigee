@@ -2,15 +2,12 @@
 extern crate std;
 use super::*;
 
-use emergency_guard::{EmergencyGuardAction, EmergencyGuardEvent, PauseType};
+use emergency_guard::PauseType;
 use soroban_sdk::{
     testutils::{Address as _, Events},
     vec, Address, BytesN, Env, String as SorobanString, TryIntoVal,
 };
 use std::vec::Vec;
-use soroban_sdk::{testutils::Address as _, vec, Address, BytesN, Env};
-use soroban_sdk::{testutils::Address as _, Env, Vec};
-use soroban_sdk::{testutils::Address as _, BytesN, Env};
 
 // Issue #310: Import the compiled Liquidity Pool WASM so integration tests deploy
 // the real contract instead of relying on a placeholder zero-hash.
@@ -21,8 +18,7 @@ mod liquidity_pool {
 }
 
 fn pool_wasm_hash(env: &Env) -> BytesN<32> {
-    env.deployer()
-        .upload_contract_wasm(liquidity_pool::WASM)
+    env.deployer().upload_contract_wasm(liquidity_pool::WASM)
 }
 
 #[test]
@@ -87,7 +83,10 @@ fn test_guard_admin_threshold_checks() {
     );
 
     let full_approvals = vec![&env, admin1.clone(), admin2.clone()];
-    assert_eq!(factory_client.add_admin(&full_approvals, &new_admin), Ok(()));
+    assert_eq!(
+        factory_client.add_admin(&full_approvals, &new_admin),
+        Ok(())
+    );
     assert!(factory_client.is_admin(&new_admin));
 
     assert_eq!(
@@ -95,7 +94,10 @@ fn test_guard_admin_threshold_checks() {
         Err(GuardError::InsufficientSignatures)
     );
 
-    assert_eq!(factory_client.remove_admin(&full_approvals, &new_admin), Ok(()));
+    assert_eq!(
+        factory_client.remove_admin(&full_approvals, &new_admin),
+        Ok(())
+    );
     assert!(!factory_client.is_admin(&new_admin));
 }
 
@@ -230,7 +232,9 @@ fn test_pause_create_pair() {
     assert_eq!(result, Err(Error::Paused));
 
     factory_client.set_paused(&admin, &false).unwrap();
-    let created = factory_client.create_pair(&token_a, &token_b, &pool_hash).unwrap();
+    let created = factory_client
+        .create_pair(&token_a, &token_b, &pool_hash)
+        .unwrap();
     assert!(created != factory_id);
 }
 
@@ -268,10 +272,33 @@ fn test_duplicate_pair_errors() {
 // assert!(pool_address != factory_id);
 */
 
-fn guard_events(env: &Env, contract_id: &Address, action: &str) -> Vec<EmergencyGuardEvent> {
-    let guard_topic = SorobanString::from_str(env, "EmergencyGuard");
-    let action_topic = SorobanString::from_str(env, action);
+fn guard_initialized_events(
+    env: &Env,
+    contract_id: &Address,
+) -> Vec<emergency_guard::GuardInitializedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_initialized");
+    env.events()
+        .all()
+        .iter()
+        .filter_map(|(event_contract, topics, data)| {
+            if event_contract != *contract_id || topics.len() != 1 {
+                return None;
+            }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
+                data.try_into_val(env).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
 
+fn pause_state_changed_events(
+    env: &Env,
+    contract_id: &Address,
+) -> Vec<emergency_guard::PauseStateChangedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_pause_state_changed");
     env.events()
         .all()
         .iter()
@@ -279,11 +306,90 @@ fn guard_events(env: &Env, contract_id: &Address, action: &str) -> Vec<Emergency
             if event_contract != *contract_id || topics.len() != 2 {
                 return None;
             }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
+                data.try_into_val(env).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
 
-            let topic_guard: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
-            let topic_action: SorobanString = topics.get(1)?.try_into_val(env).ok()?;
+fn emergency_paused_events(
+    env: &Env,
+    contract_id: &Address,
+) -> Vec<emergency_guard::EmergencyPausedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_emergency_paused_all");
+    env.events()
+        .all()
+        .iter()
+        .filter_map(|(event_contract, topics, data)| {
+            if event_contract != *contract_id || topics.len() != 1 {
+                return None;
+            }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
+                data.try_into_val(env).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
 
-            if topic_guard == guard_topic && topic_action == action_topic {
+fn resumed_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::ResumedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_resumed_all");
+    env.events()
+        .all()
+        .iter()
+        .filter_map(|(event_contract, topics, data)| {
+            if event_contract != *contract_id || topics.len() != 1 {
+                return None;
+            }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
+                data.try_into_val(env).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn admin_added_events(env: &Env, contract_id: &Address) -> Vec<emergency_guard::AdminAddedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_admin_added");
+    env.events()
+        .all()
+        .iter()
+        .filter_map(|(event_contract, topics, data)| {
+            if event_contract != *contract_id || topics.len() != 2 {
+                return None;
+            }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
+                data.try_into_val(env).ok()
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn admin_removed_events(
+    env: &Env,
+    contract_id: &Address,
+) -> Vec<emergency_guard::AdminRemovedEvent> {
+    let topic = SorobanString::from_str(env, "emergency_guard_admin_removed");
+    env.events()
+        .all()
+        .iter()
+        .filter_map(|(event_contract, topics, data)| {
+            if event_contract != *contract_id || topics.len() != 2 {
+                return None;
+            }
+            let topic_action: SorobanString = topics.get(0)?.try_into_val(env).ok()?;
+            if topic_action == topic {
                 data.try_into_val(env).ok()
             } else {
                 None
@@ -317,20 +423,15 @@ fn setup_guard(
 #[test]
 fn test_initialize_guard_emits_standard_event() {
     let env = Env::default();
-    let (factory_id, _client, _admin1, _admin2, _admin3) = setup_guard(&env);
+    let (factory_id, _client, admin1, admin2, admin3) = setup_guard(&env);
 
-    let events = guard_events(&env, &factory_id, "initialized");
+    let events = guard_initialized_events(&env, &factory_id);
     assert_eq!(events.len(), 1);
     assert_eq!(
         events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::Initialized,
-            admin: None,
-            operation: 0,
-            paused: false,
+        emergency_guard::GuardInitializedEvent {
+            admins: vec![&env, admin1, admin2, admin3],
             threshold: 2,
-            admin_count: 3,
-            approver_count: 0,
         }
     );
 }
@@ -341,36 +442,28 @@ fn test_set_guard_pause_emits_standard_events() {
     let (factory_id, client, admin1, _admin2, _admin3) = setup_guard(&env);
 
     client.set_guard_pause(&admin1, &PauseType::MINT, &true);
-    let events = guard_events(&env, &factory_id, "pause_set");
+    let events = pause_state_changed_events(&env, &factory_id);
     assert_eq!(events.len(), 1);
     assert_eq!(
         events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::PauseSet,
-            admin: Some(admin1.clone()),
+        emergency_guard::PauseStateChangedEvent {
+            admin: admin1.clone(),
             operation: PauseType::MINT,
             paused: true,
-            threshold: 2,
-            admin_count: 3,
-            approver_count: 1,
         }
     );
 
     assert!(client.is_guard_paused(&PauseType::MINT));
 
     client.set_guard_pause(&admin1, &PauseType::MINT, &false);
-    let events = guard_events(&env, &factory_id, "pause_set");
-    assert_eq!(events.len(), 1);
+    let events = pause_state_changed_events(&env, &factory_id);
+    assert_eq!(events.len(), 2);
     assert_eq!(
-        events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::PauseSet,
-            admin: Some(admin1),
+        events[1],
+        emergency_guard::PauseStateChangedEvent {
+            admin: admin1,
             operation: PauseType::MINT,
             paused: false,
-            threshold: 2,
-            admin_count: 3,
-            approver_count: 1,
         }
     );
 }
@@ -379,38 +472,26 @@ fn test_set_guard_pause_emits_standard_events() {
 fn test_emergency_pause_and_resume_emit_standard_events() {
     let env = Env::default();
     let (factory_id, client, admin1, admin2, _admin3) = setup_guard(&env);
-    let approvers = vec![&env, admin1, admin2];
+    let approvers = vec![&env, admin1.clone(), admin2.clone()];
 
     client.emergency_guard_pause(&approvers);
-    let emergency_events = guard_events(&env, &factory_id, "emergency_pause");
+    let emergency_events = emergency_paused_events(&env, &factory_id);
     assert_eq!(emergency_events.len(), 1);
     assert_eq!(
         emergency_events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::EmergencyPause,
-            admin: None,
-            operation: u32::MAX,
-            paused: true,
-            threshold: 2,
-            admin_count: 3,
-            approver_count: 2,
+        emergency_guard::EmergencyPausedEvent {
+            approvers: vec![&env, admin1.clone(), admin2.clone()],
         }
     );
     assert!(client.is_guard_paused(&PauseType::MINT));
 
     client.resume_guard(&approvers);
-    let resume_events = guard_events(&env, &factory_id, "resume");
+    let resume_events = resumed_events(&env, &factory_id);
     assert_eq!(resume_events.len(), 1);
     assert_eq!(
         resume_events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::Resume,
-            admin: None,
-            operation: u32::MAX,
-            paused: false,
-            threshold: 2,
-            admin_count: 3,
-            approver_count: 2,
+        emergency_guard::ResumedEvent {
+            approvers: vec![&env, admin1, admin2],
         }
     );
     assert!(!client.is_guard_paused(&PauseType::MINT));
@@ -420,38 +501,28 @@ fn test_emergency_pause_and_resume_emit_standard_events() {
 fn test_admin_guard_actions_emit_standard_events() {
     let env = Env::default();
     let (factory_id, client, admin1, admin2, admin3) = setup_guard(&env);
-    let approvers = vec![&env, admin1, admin2];
+    let approvers = vec![&env, admin1.clone(), admin2.clone()];
     let admin4 = Address::generate(&env);
 
     client.add_guard_admin(&approvers, &admin4);
-    let added_events = guard_events(&env, &factory_id, "admin_added");
+    let added_events = admin_added_events(&env, &factory_id);
     assert_eq!(added_events.len(), 1);
     assert_eq!(
         added_events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::AdminAdded,
-            admin: Some(admin4),
-            operation: 0,
-            paused: false,
-            threshold: 2,
-            admin_count: 4,
-            approver_count: 2,
+        emergency_guard::AdminAddedEvent {
+            approvers: vec![&env, admin1.clone(), admin2.clone()],
+            new_admin: admin4,
         }
     );
 
     client.remove_guard_admin(&approvers, &admin3);
-    let removed_events = guard_events(&env, &factory_id, "admin_removed");
+    let removed_events = admin_removed_events(&env, &factory_id);
     assert_eq!(removed_events.len(), 1);
     assert_eq!(
         removed_events[0],
-        EmergencyGuardEvent {
-            action: EmergencyGuardAction::AdminRemoved,
-            admin: Some(admin3),
-            operation: 0,
-            paused: false,
-            threshold: 2,
-            admin_count: 3,
-            approver_count: 2,
+        emergency_guard::AdminRemovedEvent {
+            approvers: vec![&env, admin1, admin2],
+            admin: admin3,
         }
     );
 }
@@ -489,8 +560,7 @@ fn test_factory_paused_creation() {
     assert!(!factory_client.is_paused(&create_pair_op));
 
     // Pause create_pair
-    factory_client
-        .set_operation_paused(&admin, &create_pair_op, &true);
+    factory_client.set_operation_paused(&admin, &create_pair_op, &true);
     assert!(factory_client.is_paused(&create_pair_op));
 
     // Setup Tokens & WASM
@@ -511,133 +581,130 @@ fn test_factory_paused_creation() {
 
 #[test]
 fn test_factory_other_operation_independent() {
-// ==================== MULTI-SIG ADMIN TESTS ====================
+    // ==================== MULTI-SIG ADMIN TESTS ====================
 
-#[test]
-fn test_multisig_initialization() {
-    let env = Env::default();
-    env.mock_all_auths();
+    #[test]
+    fn test_multisig_initialization() {
+        let env = Env::default();
+        env.mock_all_auths();
 
-    let factory_id = env.register(LiquidityPoolFactory, ());
-    let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
+        let factory_id = env.register(LiquidityPoolFactory, ());
+        let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
 
-    let admin = Address::generate(&env);
-    factory_client.initialize(&admin);
+        let admin = Address::generate(&env);
+        factory_client.initialize(&admin);
 
-    // Pause a different operation (e.g. SWAP = 1 << 0)
-    let swap_op = PauseType::SWAP;
-    let create_pair_op = PauseType::CREATE_PAIR;
-    factory_client
-        .set_operation_paused(&admin, &swap_op, &true);
+        // Pause a different operation (e.g. SWAP = 1 << 0)
+        let swap_op = PauseType::SWAP;
+        let create_pair_op = PauseType::CREATE_PAIR;
+        factory_client.set_operation_paused(&admin, &swap_op, &true);
 
-    assert!(factory_client.is_paused(&swap_op));
-    assert!(!factory_client.is_paused(&create_pair_op));
+        assert!(factory_client.is_paused(&swap_op));
+        assert!(!factory_client.is_paused(&create_pair_op));
 
-    // Setup Tokens & WASM
-    let token_admin = Address::generate(&env);
-    let token_a = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let token_b = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let pool_hash = env
-        .deployer()
-        .upload_contract_wasm(liquidity_pool_contract::WASM);
+        // Setup Tokens & WASM
+        let token_admin = Address::generate(&env);
+        let token_a = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let token_b = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let pool_hash = env
+            .deployer()
+            .upload_contract_wasm(liquidity_pool_contract::WASM);
 
-    // Creating pair should still succeed because CREATE_PAIR is not paused
-    let _pool_address = factory_client.create_pair(&token_a, &token_b, &pool_hash);
+        // Creating pair should still succeed because CREATE_PAIR is not paused
+        let _pool_address = factory_client.create_pair(&token_a, &token_b, &pool_hash);
 
-    let stored_pair = factory_client.get_pair(&token_a, &token_b);
-    assert!(stored_pair.is_some());
-}
+        let stored_pair = factory_client.get_pair(&token_a, &token_b);
+        assert!(stored_pair.is_some());
+    }
 
-#[test]
-fn test_factory_unpause_resumes() {
-    let admin1 = Address::generate(&env);
-    let admin2 = Address::generate(&env);
-    let admin3 = Address::generate(&env);
+    #[test]
+    fn test_factory_unpause_resumes() {
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let admin3 = Address::generate(&env);
 
-    let admins = soroban_sdk::vec![&env, admin1.clone(), admin2.clone(), admin3.clone()];
+        let admins = soroban_sdk::vec![&env, admin1.clone(), admin2.clone(), admin3.clone()];
 
-    // Initialize with 2-of-3 multi-sig
-    factory_client.init_multisig(&admins, &2);
+        // Initialize with 2-of-3 multi-sig
+        factory_client.init_multisig(&admins, &2);
 
-    // Verify configuration
-    let config = factory_client.get_multisig_config();
-    assert_eq!(config.threshold, 2);
-    assert_eq!(config.admins.len(), 3);
-}
+        // Verify configuration
+        let config = factory_client.get_multisig_config();
+        assert_eq!(config.threshold, 2);
+        assert_eq!(config.admins.len(), 3);
+    }
 
-#[test]
-#[should_panic(expected = "MultiSig already initialized")]
-fn test_multisig_double_initialization_fails() {
-    let env = Env::default();
-    env.mock_all_auths();
+    #[test]
+    #[should_panic(expected = "MultiSig already initialized")]
+    fn test_multisig_double_initialization_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
 
-    let factory_id = env.register(LiquidityPoolFactory, ());
-    let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
+        let factory_id = env.register(LiquidityPoolFactory, ());
+        let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
 
-    let admin = Address::generate(&env);
-    factory_client.initialize(&admin);
+        let admin = Address::generate(&env);
+        factory_client.initialize(&admin);
 
-    let create_pair_op = PauseType::CREATE_PAIR;
-    factory_client
-        .set_operation_paused(&admin, &create_pair_op, &true);
-    assert!(factory_client.is_paused(&create_pair_op));
+        let create_pair_op = PauseType::CREATE_PAIR;
+        factory_client.set_operation_paused(&admin, &create_pair_op, &true);
+        assert!(factory_client.is_paused(&create_pair_op));
 
-    // Unpause CREATE_PAIR
-    factory_client
-        .set_operation_paused(&admin, &create_pair_op, &false);
-    assert!(!factory_client.is_paused(&create_pair_op));
+        // Unpause CREATE_PAIR
+        factory_client.set_operation_paused(&admin, &create_pair_op, &false);
+        assert!(!factory_client.is_paused(&create_pair_op));
 
-    // Setup Tokens & WASM
-    let token_admin = Address::generate(&env);
-    let token_a = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let token_b = env
-        .register_stellar_asset_contract_v2(token_admin.clone())
-        .address();
-    let pool_hash = env
-        .deployer()
-        .upload_contract_wasm(liquidity_pool_contract::WASM);
+        // Setup Tokens & WASM
+        let token_admin = Address::generate(&env);
+        let token_a = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let token_b = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let pool_hash = env
+            .deployer()
+            .upload_contract_wasm(liquidity_pool_contract::WASM);
 
-    // Creating pair should now succeed
-    let _pool_address = factory_client.create_pair(&token_a, &token_b, &pool_hash);
+        // Creating pair should now succeed
+        let _pool_address = factory_client.create_pair(&token_a, &token_b, &pool_hash);
 
-    let stored_pair = factory_client.get_pair(&token_a, &token_b);
-    assert!(stored_pair.is_some());
-}
+        let stored_pair = factory_client.get_pair(&token_a, &token_b);
+        assert!(stored_pair.is_some());
+    }
 
-#[test]
-fn test_factory_unauthorized_pause() {
-    let admin1 = Address::generate(&env);
-    let admin2 = Address::generate(&env);
-    let admins = soroban_sdk::vec![&env, admin1, admin2];
+    #[test]
+    fn test_factory_unauthorized_pause() {
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let admins = soroban_sdk::vec![&env, admin1, admin2];
 
-    factory_client.init_multisig(&admins, &2);
-    factory_client.init_multisig(&admins, &2); // Should panic
-}
+        factory_client.init_multisig(&admins, &2);
+        factory_client.init_multisig(&admins, &2); // Should panic
+    }
 
-#[test]
-#[should_panic(expected = "At least one admin required")]
-fn test_multisig_empty_admins_fails() {
-    let env = Env::default();
-    env.mock_all_auths();
+    #[test]
+    #[should_panic(expected = "At least one admin required")]
+    fn test_multisig_empty_admins_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
 
-    let factory_id = env.register(LiquidityPoolFactory, ());
-    let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
+        let factory_id = env.register(LiquidityPoolFactory, ());
+        let factory_client = LiquidityPoolFactoryClient::new(&env, &factory_id);
 
-    let admin = Address::generate(&env);
-    let non_admin = Address::generate(&env);
-    factory_client.initialize(&admin);
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        factory_client.initialize(&admin);
 
-    let create_pair_op = PauseType::CREATE_PAIR;
-    // Attempting to pause as non_admin should return Error::Unauthorized (value = 2)
-    let res = factory_client.try_set_operation_paused(&non_admin, &create_pair_op, &true);
-    assert_eq!(res, Err(Ok(Error::Unauthorized)));
-}
+        let create_pair_op = PauseType::CREATE_PAIR;
+        // Attempting to pause as non_admin should return Error::Unauthorized (value = 2)
+        let res = factory_client.try_set_operation_paused(&non_admin, &create_pair_op, &true);
+        assert_eq!(res, Err(Ok(Error::Unauthorized)));
+    }
     let admins: Vec<Address> = soroban_sdk::vec![&env];
     factory_client.init_multisig(&admins, &1);
 }
@@ -861,7 +928,7 @@ fn test_execute_add_duplicate_admin_fails() {
     factory_client.init_multisig(&admins, &2);
 
     // Try to add admin2 again
-    let action = AdminAction::AddAdmin(admin2);
+    let action = AdminAction::AddAdmin(admin2.clone());
     let action_id = factory_client.propose_admin_action(&admin1, &action);
 
     factory_client.approve_admin_action(&admin2, &action_id);
@@ -1127,6 +1194,4 @@ fn test_complex_multisig_scenario() {
     assert_eq!(final_config.admins.len(), 4);
     assert!(!factory_client.is_admin(&admin3));
     assert_eq!(final_config.threshold, 3);
-}
-
 }
