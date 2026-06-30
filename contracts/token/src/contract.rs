@@ -63,6 +63,8 @@ impl TokenTrait for Token {
         EmergencyGuard::check_multi_sig(&e, &approvers)
             .expect("unauthorized: insufficient guard admin signatures");
         EmergencyGuard::rotate_admin(e.clone(), approvers, admin, new_admin.clone())
+        // Use EmergencyGuard multi-sig to rotate the guard admin list, then update token admin.
+        EmergencyGuard::rotate_admin(e.clone(), vec![&e, admin.clone()], admin, new_admin.clone())
             .expect("failed to rotate admin via EmergencyGuard");
         write_administrator(&e, &new_admin);
     }

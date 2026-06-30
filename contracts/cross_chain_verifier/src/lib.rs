@@ -58,7 +58,9 @@ impl CrossChainVerifier {
     pub fn set_paused(env: Env, paused: bool) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
-        env.storage().instance().set(&DataKey::VerifyPaused, &paused);
+        env.storage()
+            .instance()
+            .set(&DataKey::VerifyPaused, &paused);
     }
 
     /// Returns true if verification is currently paused.
@@ -72,40 +74,68 @@ impl CrossChainVerifier {
     pub fn update_root(env: Env, block_height: u32, new_root: BytesN<32>) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
-        env.storage().persistent().set(&DataKey::StateRoot(block_height), &new_root);
+        env.storage()
+            .persistent()
+            .set(&DataKey::StateRoot(block_height), &new_root);
     }
 
     pub fn get_root(env: Env, block_height: u32) -> Option<BytesN<32>> {
-        env.storage().persistent().get(&DataKey::StateRoot(block_height))
+        env.storage()
+            .persistent()
+            .get(&DataKey::StateRoot(block_height))
     }
 
     pub fn add_authorized_signer(env: Env, public_key: Bytes, algorithm: SignatureAlgorithm) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
 
-        if env.storage().persistent().has(&DataKey::SignerAlgorithm(public_key.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::SignerAlgorithm(public_key.clone()))
+        {
             panic!("Signer already authorized");
         }
 
-        env.storage().persistent().set(&DataKey::SignerAlgorithm(public_key.clone()), &algorithm);
+        env.storage()
+            .persistent()
+            .set(&DataKey::SignerAlgorithm(public_key.clone()), &algorithm);
 
-        let count: u32 = env.storage().persistent().get(&DataKey::SignerCount).unwrap_or(0);
-        env.storage().persistent().set(&DataKey::SignerCount, &(count + 1));
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SignerCount)
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&DataKey::SignerCount, &(count + 1));
     }
 
     pub fn remove_authorized_signer(env: Env, public_key: Bytes) {
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
 
-        if !env.storage().persistent().has(&DataKey::SignerAlgorithm(public_key.clone())) {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::SignerAlgorithm(public_key.clone()))
+        {
             panic!("Signer not found");
         }
 
-        env.storage().persistent().remove(&DataKey::SignerAlgorithm(public_key));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::SignerAlgorithm(public_key));
 
-        let count: u32 = env.storage().persistent().get(&DataKey::SignerCount).unwrap_or(0);
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SignerCount)
+            .unwrap_or(0);
         if count > 0 {
-            env.storage().persistent().set(&DataKey::SignerCount, &(count - 1));
+            env.storage()
+                .persistent()
+                .set(&DataKey::SignerCount, &(count - 1));
         }
     }
 
@@ -114,7 +144,10 @@ impl CrossChainVerifier {
     }
 
     pub fn get_signer_count(env: Env) -> u32 {
-        env.storage().persistent().get(&DataKey::SignerCount).unwrap_or(0)
+        env.storage()
+            .persistent()
+            .get(&DataKey::SignerCount)
+            .unwrap_or(0)
     }
 
     pub fn verify_signed_message(
@@ -180,16 +213,22 @@ impl CrossChainVerifier {
             return false;
         }
 
-        env.storage().persistent().set(&DataKey::ProcessedNonce(nonce), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProcessedNonce(nonce), &true);
         true
     }
 
     pub fn is_nonce_processed(env: Env, nonce: u64) -> bool {
-        env.storage().persistent().get(&DataKey::ProcessedNonce(nonce)).unwrap_or(false)
+        env.storage()
+            .persistent()
+            .get(&DataKey::ProcessedNonce(nonce))
+            .unwrap_or(false)
     }
 
     fn verify_signature(env: &Env, signed_message: &SignedMessage) -> bool {
-        let signer_key_bytes = Bytes::from_array(&env, &signed_message.signer_public_key.to_array());
+        let signer_key_bytes =
+            Bytes::from_array(&env, &signed_message.signer_public_key.to_array());
         let signer_algorithm: Option<SignatureAlgorithm> = env
             .storage()
             .persistent()
@@ -205,7 +244,11 @@ impl CrossChainVerifier {
         match signer_algorithm {
             SignatureAlgorithm::Ed25519 => {
                 let message_bytes = Bytes::from_array(env, &message_hash.to_array());
-                let _ = env.crypto().ed25519_verify(&signed_message.signer_public_key, &message_bytes, &signed_message.signature);
+                let _ = env.crypto().ed25519_verify(
+                    &signed_message.signer_public_key,
+                    &message_bytes,
+                    &signed_message.signature,
+                );
                 true
             }
             SignatureAlgorithm::Secp256k1 => false,
@@ -216,7 +259,10 @@ impl CrossChainVerifier {
         let mut data = Bytes::new(env);
         data.append(&Bytes::from_slice(env, b"CROSS_CHAIN_MESSAGE_V1"));
         data.append(&Bytes::from_slice(env, &message.source_chain.to_be_bytes()));
-        data.append(&Bytes::from_slice(env, &message.destination_chain.to_be_bytes()));
+        data.append(&Bytes::from_slice(
+            env,
+            &message.destination_chain.to_be_bytes(),
+        ));
         data.append(&Bytes::from_slice(env, &message.nonce.to_be_bytes()));
         data.append(&Bytes::from_slice(env, &message.timestamp.to_be_bytes()));
 
@@ -234,7 +280,11 @@ impl CrossChainVerifier {
         proof: &Vec<BytesN<32>>,
         proof_flags: &Vec<bool>,
     ) -> bool {
-        let expected_root: BytesN<32> = match env.storage().persistent().get(&DataKey::StateRoot(*block_height)) {
+        let expected_root: BytesN<32> = match env
+            .storage()
+            .persistent()
+            .get(&DataKey::StateRoot(*block_height))
+        {
             Some(root) => root,
             None => return false,
         };

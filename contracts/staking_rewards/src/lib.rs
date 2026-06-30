@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String};
 
+use emergency_guard::{EmergencyGuard, PauseType};
 pub use soroscope_error_codes::ContractError;
 use soroscope_math::Fixed;
 
@@ -243,13 +244,17 @@ impl StakingRewards {
             start_block,
             is_paused: false,
         };
-        
 
-        
         e.storage().instance().set(&DataKey::Config, &config);
         e.storage().instance().set(&DataKey::TotalStaked, &0i128);
         e.storage().instance().extend_ttl(10000, 10000);
-        
+
+        // Initialize the embedded EmergencyGuard so granular pause checks
+        // (e.g. PauseType::CLAIM_REWARDS) can be toggled by the owner.
+        // Threshold of 1 means the single owner can trigger any pause.
+        let admins = soroban_sdk::vec![&e, config.owner.clone()];
+        EmergencyGuard::initialize(e, admins, 1).map_err(|_| ContractError::AlreadyInitialized)?;
+
         Ok(())
     }
 
@@ -281,11 +286,17 @@ impl StakingRewards {
             .ok_or(ContractError::Overflow)?;
 
         // Update total staked
-        let mut total_staked: i128 = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
+        let mut total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
         total_staked = total_staked
             .checked_add(amount)
             .ok_or(ContractError::Overflow)?;
-        e.storage().instance().set(&DataKey::TotalStaked, &total_staked);
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &total_staked);
 
         e.storage()
             .persistent()
@@ -326,13 +337,19 @@ impl StakingRewards {
             .staked_amount
             .checked_sub(amount)
             .ok_or(ContractError::Overflow)?;
-        
+
         // Update total staked
-        let mut total_staked: i128 = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
+        let mut total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
         total_staked = total_staked
             .checked_sub(amount)
             .ok_or(ContractError::Overflow)?;
-        e.storage().instance().set(&DataKey::TotalStaked, &total_staked);
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &total_staked);
 
         if state.staked_amount == 0 && state.accrued_rewards == 0 {
             e.storage()
@@ -367,6 +384,10 @@ impl StakingRewards {
     pub fn claim(e: Env, user: Address) -> Result<i128, ContractError> {
         let config = Self::get_config(e.clone())?;
         if config.is_paused {
+            return Err(ContractError::Paused);
+        }
+
+        if EmergencyGuard::is_paused(e.clone(), PauseType::CLAIM_REWARDS) {
             return Err(ContractError::Paused);
         }
 
@@ -427,13 +448,19 @@ impl StakingRewards {
 
         let state: UserStakingState = e.storage().persistent().get(&state_key).unwrap();
         let staked_amount = state.staked_amount;
-        
+
         // Update total staked
-        let mut total_staked: i128 = e.storage().instance().get(&DataKey::TotalStaked).unwrap_or(0);
+        let mut total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
         total_staked = total_staked
             .checked_sub(staked_amount)
             .ok_or(ContractError::Overflow)?;
-        e.storage().instance().set(&DataKey::TotalStaked, &total_staked);
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &total_staked);
 
         if staked_amount <= 0 {
             return Ok(0);
@@ -461,7 +488,7 @@ impl StakingRewards {
         Ok(staked_amount)
     }
 
-    /// Sets the paused state (owner only).
+    /// Sets the global paused state (owner only).
     pub fn set_paused(e: Env, paused: bool) -> Result<(), ContractError> {
         let mut config = Self::get_config(e.clone())?;
         config.owner.require_auth();
@@ -476,6 +503,18 @@ impl StakingRewards {
         );
 
         Ok(())
+    }
+
+    /// Granularly pause or unpause the claim_rewards operation (owner only).
+    /// This is independent of the global `is_paused` flag and uses the
+    /// embedded EmergencyGuard bitmask (PauseType::CLAIM_REWARDS).
+    pub fn set_claim_rewards_paused(e: Env, paused: bool) -> Result<(), ContractError> {
+        let config = Self::get_config(e.clone())?;
+        // `EmergencyGuard::set_pause` performs the ownership auth check itself,
+        // so we pass the owner through directly to avoid double-auth failures
+        // when the same signer is reused within the same transaction.
+        EmergencyGuard::set_pause(e, config.owner, PauseType::CLAIM_REWARDS, paused)
+            .map_err(|_| ContractError::Paused)
     }
 
     // ── View Functions ──────────────────────────────────────────
