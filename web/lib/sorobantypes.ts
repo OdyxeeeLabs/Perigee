@@ -45,12 +45,8 @@ export interface InvocationResult {
   result?: unknown;
   error?: string;
   errorType?: string;
-  resourceCost?: ResourceCost;
-  /** Primary `/analyze` response payload for the latest invocation. */
   analysisReport?: ResourceReport;
-  errorType?: string; // Error type from backend (e.g., BAD_REQUEST, INTERNAL_SERVER_ERROR)
-  analysisReport?: ResourceReport;
-  resourceCost?: ResourceCost;
+  resourceCost?: ResourceCost | ResourceReport;
   callGraph?: CallGraph;
   callGraphMermaid?: string;
   stateSnapshot?: SimulationStateSnapshot;
