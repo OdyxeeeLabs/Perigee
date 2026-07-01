@@ -22,6 +22,19 @@ export function ResultViewer({ result }: ResultViewerProps) {
     URL.revokeObjectURL(url);
   };
 
+  const exportReport = () => {
+    if (!result) return;
+    const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `soroscope-report-${result.functionName}-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   if (!result) {
     return (
       <div
@@ -49,7 +62,7 @@ export function ResultViewer({ result }: ResultViewerProps) {
         border: `1px solid #30363d`,
       }}
     >
-      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h3
             style={{
@@ -66,9 +79,9 @@ export function ResultViewer({ result }: ResultViewerProps) {
           </p>
         </div>
         
-        {result.stateSnapshot && (
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button
-            onClick={downloadSnapshot}
+            onClick={exportReport}
             style={{
               padding: '6px 12px',
               backgroundColor: '#1f2937',
@@ -82,9 +95,28 @@ export function ResultViewer({ result }: ResultViewerProps) {
             onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#374151')}
             onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#1f2937')}
           >
-            Download State Snapshot
+            Export JSON
           </button>
-        )}
+          {result.stateSnapshot && (
+            <button
+              onClick={downloadSnapshot}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#1f2937',
+                color: '#f3f4f6',
+                borderRadius: '6px',
+                border: '1px solid #374151',
+                fontSize: '12px',
+                cursor: 'pointer',
+                transition: 'background-color 0.2s',
+              }}
+              onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#374151')}
+              onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#1f2937')}
+            >
+              Download State Snapshot
+            </button>
+          )}
+        </div>
       </div>
 
       {result.error ? (
@@ -133,8 +165,24 @@ export function ResultViewer({ result }: ResultViewerProps) {
               {result.error}
             </div>
           </div>
-          <div style={{ fontSize: '12px', color: '#8b949e' }}>
-            💡 Tip: Check if the backend is running and all parameters are correct.
+          <div style={{ fontSize: '12px', color: '#8b949e', lineHeight: 1.6 }}>
+            {result.errorType === 'NETWORK_ERROR' ? (
+              <>
+                ⚠️ The analyzer backend isn’t responding — it may have crashed or isn’t running.
+                <br />
+                Start it with <code style={{ color: '#00d9ff' }}>cargo run</code> (expected at{' '}
+                <code style={{ color: '#00d9ff' }}>localhost:8080</code>), then retry.
+              </>
+            ) : result.errorType === 'PARSE_ERROR' ? (
+              <>
+                ⚠️ The backend returned a malformed response — it may have crashed mid-analysis.
+                Check the analyzer logs, then retry.
+              </>
+            ) : result.errorType === 'INTERNAL_SERVER_ERROR' ? (
+              <>💡 The analyzer hit an internal error during simulation. Check the analyzer logs for the panic trace.</>
+            ) : (
+              <>💡 Tip: Check if the backend is running and all parameters are correct.</>
+            )}
           </div>
         </div>
       ) : (

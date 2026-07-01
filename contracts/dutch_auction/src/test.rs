@@ -13,19 +13,19 @@ fn test_dutch_auction() {
     let buyer = Address::generate(&env);
 
     // Deploy NFT contract
-    let nft_contract_id = env.register_contract(None, token_contract::Token);
+    let nft_contract_id = env.register(token_contract::Token, ());
     let nft_client = TokenClient::new(&env, &nft_contract_id);
     nft_client.initialize(&seller, &0, &"NFT".into_val(&env), &"NFT".into_val(&env));
     nft_client.mint(&seller, &1);
 
     // Deploy payment token
-    let payment_contract_id = env.register_contract(None, token_contract::Token);
+    let payment_contract_id = env.register(token_contract::Token, ());
     let payment_client = TokenClient::new(&env, &payment_contract_id);
     payment_client.initialize(&seller, &7, &"USD".into_val(&env), &"USD".into_val(&env));
     payment_client.mint(&buyer, &1000);
 
     // Deploy auction contract
-    let auction_contract_id = env.register_contract(None, DutchAuction);
+    let auction_contract_id = env.register(DutchAuction, ());
     let auction_client = DutchAuctionClient::new(&env, &auction_contract_id);
 
     // Transfer NFT to auction

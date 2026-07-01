@@ -8,10 +8,10 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::cache::SimulationCache;
     use crate::simulation::{
-        CallGraph, CallNode, SimulationCache, SimulationEngine,
-        SimulationStateSnapshot, SorobanResources, TtlEntryReport,
-        SimulationResult, ExtendTtlSuggestion, TtlAnalysisReport,
+        CallGraph, CallNode, SimulationEngine, SimulationResult, SimulationStateSnapshot,
+        SorobanResources, TtlEntryReport,
     };
     use proptest::prelude::*;
     use std::collections::HashMap;
@@ -24,13 +24,15 @@ mod tests {
     }
 
     /// Arbitrary short ASCII-only identifier.
-    fn arb_identifier() -> impl Strategy<Value = String> {
-        "[a-zA-Z_][a-zA-Z0-9_]{0,31}"
-    }
-
     /// Arbitrary `SorobanResources`.
     fn arb_resources() -> impl Strategy<Value = SorobanResources> {
-        (any::<u64>(), any::<u64>(), any::<u64>(), any::<u64>(), any::<u64>())
+        (
+            any::<u64>(),
+            any::<u64>(),
+            any::<u64>(),
+            any::<u64>(),
+            any::<u64>(),
+        )
             .prop_map(|(cpu, ram, lr, lw, tx)| SorobanResources {
                 cpu_instructions: cpu,
                 ram_bytes: ram,
@@ -42,22 +44,22 @@ mod tests {
 
     /// Arbitrary `TtlEntryReport`.
     fn arb_ttl_report() -> impl Strategy<Value = TtlEntryReport> {
-        ("[a-zA-Z0-9]{1,16}", any::<u32>(), -500_000i64..500_000i64)
-            .prop_map(|(key, live, rem)| TtlEntryReport {
+        ("[a-zA-Z0-9]{1,16}", any::<u32>(), -500_000i64..500_000i64).prop_map(|(key, live, rem)| {
+            TtlEntryReport {
                 key,
                 live_until_ledger: live,
                 remaining_ledgers: rem,
-            })
+            }
+        })
     }
 
     /// Arbitrary `CallNode` tree with bounded depth.
     fn arb_call_node() -> impl Strategy<Value = CallNode> {
-        let leaf = ("[a-zA-Z0-9]{4,8}", "[a-zA-Z]{3,10}")
-            .prop_map(|(cid, func)| CallNode {
-                contract_id: cid,
-                function: func,
-                children: vec![],
-            });
+        let leaf = ("[a-zA-Z0-9]{4,8}", "[a-zA-Z]{3,10}").prop_map(|(cid, func)| CallNode {
+            contract_id: cid,
+            function: func,
+            children: vec![],
+        });
 
         leaf.prop_recursive(3, 15, 4, |inner| {
             (
@@ -75,7 +77,12 @@ mod tests {
 
     /// Arbitrary `SimulationResult`.
     fn arb_simulation_result() -> impl Strategy<Value = SimulationResult> {
-        (arb_resources(), any::<u64>(), any::<u64>(), "[a-zA-Z0-9+/=]{0,64}")
+        (
+            arb_resources(),
+            any::<u64>(),
+            any::<u64>(),
+            "[a-zA-Z0-9+/=]{0,64}",
+        )
             .prop_map(|(res, ledger, cost, td)| SimulationResult {
                 resources: res,
                 transaction_hash: None,
@@ -86,6 +93,7 @@ mod tests {
                 transaction_data: td,
                 call_graph: None,
                 state_snapshot: None,
+                protocol_version: 0,
             })
     }
 
@@ -116,7 +124,7 @@ mod tests {
         #[test]
         fn fuzz_parse_sc_val_arg_void(input in prop::sample::select(vec!["void", "()"])) {
             let engine = SimulationEngine::new("https://test.com".into());
-            let result = engine.parse_sc_val_arg(&input);
+            let result = engine.parse_sc_val_arg(input);
             prop_assert!(result.is_ok());
         }
 
@@ -229,9 +237,7 @@ mod tests {
         #[test]
         fn fuzz_extract_footprint_no_panic(input in arb_short_string()) {
             let engine = SimulationEngine::new("https://test.com".into());
-            let (r, w) = engine.extract_footprint_from_xdr(&input);
-            // Just verifying it returns without panic; values >= 0.
-            prop_assert!(r >= 0 || w >= 0 || true);
+            let _ = engine.extract_footprint_from_xdr(&input);
         }
 
         /// Empty input must return (0, 0).
@@ -250,9 +256,7 @@ mod tests {
             input in "[a-zA-Z0-9+/=]{0,128}"
         ) {
             let engine = SimulationEngine::new("https://test.com".into());
-            let keys = engine.extract_touched_ledger_keys(&input);
-            // Result is always a Vec<String>, possibly empty.
-            prop_assert!(keys.len() < usize::MAX);
+            let _ = engine.extract_touched_ledger_keys(&input);
         }
 
         /// Empty input returns empty Vec.
@@ -308,9 +312,8 @@ mod tests {
         #[test]
         fn fuzz_calculate_cost_no_panic(resources in arb_resources()) {
             let engine = SimulationEngine::new("https://test.com".into());
-            let cost = engine.calculate_cost(&resources);
+            let _cost = engine.calculate_cost(&resources);
             // Cost is computed via integer division — always finite.
-            prop_assert!(cost <= u64::MAX);
         }
 
         /// Deterministic: same inputs → same cost.

@@ -254,9 +254,9 @@ mod tests {
 
                 // "critical" iff > 25%
                 if flag.change_percent > 25.0 {
-                    prop_assert_eq!(flag.severity, "critical");
+                    prop_assert_eq!(&flag.severity, "critical");
                 } else {
-                    prop_assert_eq!(flag.severity, "high");
+                    prop_assert_eq!(&flag.severity, "high");
                 }
             }
 

@@ -220,7 +220,7 @@ fn extract_function_body<'a>(wasm: &'a [u8], function_name: &str) -> Option<&'a 
     if s.read_slice(4)? != b"\0asm" {
         return None;
     }
-    if s.read_slice(4)? != &[1u8, 0, 0, 0] {
+    if s.read_slice(4)? != [1u8, 0, 0, 0] {
         return None;
     }
 
@@ -299,7 +299,8 @@ fn extract_function_body<'a>(wasm: &'a [u8], function_name: &str) -> Option<&'a 
                 code_section_data = Some(section_data);
             }
 
-            SECTION_FUNCTION | _ => {} // skip other sections
+            SECTION_FUNCTION => {}
+            _ => {} // skip other sections
         }
     }
 
@@ -395,9 +396,7 @@ fn scan_function_body(body: &[u8]) -> ScanAccumulator {
                 // No immediate; just marks the else arm — already counted with `if`.
             }
             OP_END => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                depth = depth.saturating_sub(1);
             }
             OP_BR => {
                 s.skip_leb128(); // label depth — unconditional jump, no new branch point
@@ -423,11 +422,7 @@ fn scan_function_body(body: &[u8]) -> ScanAccumulator {
                     branch_id,
                     branch_type: BranchType::BranchTable,
                     nesting_depth: depth,
-                    description: format!(
-                        "br_table ({} targets) at depth {}",
-                        n + 1,
-                        depth
-                    ),
+                    description: format!("br_table ({} targets) at depth {}", n + 1, depth),
                 });
                 acc.breakdown.branch_tables += 1;
                 branch_id += 1;
@@ -659,8 +654,13 @@ pub fn analyze_wasm_branches(
     };
 
     // ── 2. Baseline simulation ────────────────────────────────────────────────
-    let baseline_resources =
-        profile_contract(wasm_bytes.clone(), function_name.clone(), args.clone())?;
+    let baseline_resources = profile_contract(
+        wasm_bytes.clone(),
+        function_name.clone(),
+        args.clone(),
+        None,
+        None,
+    )?;
 
     // ── 3. Multi-path dynamic exploration ────────────────────────────────────
     let variations = generate_arg_variations(&args);
@@ -681,6 +681,8 @@ pub fn analyze_wasm_branches(
                 wasm_bytes.clone(),
                 function_name.clone(),
                 variant_args.clone(),
+                None,
+                None,
             )
         }));
 
@@ -802,6 +804,7 @@ mod tests {
         out
     }
 
+    #[allow(dead_code)]
     fn leb128_s32(mut value: i32) -> Vec<u8> {
         let mut out = Vec::new();
         loop {
@@ -958,7 +961,10 @@ mod tests {
 
         let acc = scan_function_body(&body);
         assert_eq!(acc.breakdown.conditionals, 1);
-        assert!(acc.branches.iter().any(|b| b.branch_type == BranchType::Conditional));
+        assert!(acc
+            .branches
+            .iter()
+            .any(|b| b.branch_type == BranchType::Conditional));
     }
 
     #[test]
@@ -1114,23 +1120,25 @@ mod tests {
         let wasm = minimal_wasm_with_body("noop", &[]);
         let body = extract_function_body(&wasm, "noop").expect("body must be found");
         let acc = scan_function_body(body);
-        assert_eq!(acc.branches.len(), 0, "empty function should have zero branches");
+        assert_eq!(
+            acc.branches.len(),
+            0,
+            "empty function should have zero branches"
+        );
     }
 
     #[test]
     fn test_wasm_branch_count_for_if_function() {
-        let mut instructions: Vec<u8> = Vec::new();
-        instructions.push(OP_IF);
-        instructions.push(0x40); // empty blocktype
-        instructions.push(OP_RETURN);
-        instructions.push(OP_END); // end if
-
+        let instructions: Vec<u8> = vec![OP_IF, 0x40, OP_RETURN, OP_END];
         let wasm = minimal_wasm_with_body("branchy", &instructions);
         let body = extract_function_body(&wasm, "branchy").expect("body must be found");
         let acc = scan_function_body(body);
 
         assert_eq!(acc.breakdown.conditionals, 1, "should detect the if block");
-        assert_eq!(acc.breakdown.early_returns, 1, "should detect the early return");
+        assert_eq!(
+            acc.breakdown.early_returns, 1,
+            "should detect the early return"
+        );
         assert!(acc.max_depth >= 1);
     }
 }

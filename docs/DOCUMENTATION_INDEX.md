@@ -1,6 +1,17 @@
-# 📚 EmergencyGuard Documentation Index
+# 📚 SoroScope Documentation Index
 
-## 🎯 Start Here
+## 🎯 Quick Navigation
+
+### Standards & Specifications
+
+- **[CROSS_CHAIN_VERIFIER_STANDARD.md](CROSS_CHAIN_VERIFIER_STANDARD.md)** - Cross-chain message verification standard
+  - Message envelope format
+  - Merkle proof construction
+  - Validation rules and security considerations
+  - Bridge implementation guide
+  - ~45 min read
+
+### EmergencyGuard Documentation
 
 **New to EmergencyGuard?** Start with [README_EMERGENCY_GUARD.md](README_EMERGENCY_GUARD.md) for a complete overview (5 min read).
 

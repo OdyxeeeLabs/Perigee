@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use crate::errors::AppError;
 use reqwest::Client;
 use rusqlite::{params, Connection};

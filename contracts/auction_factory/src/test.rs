@@ -8,7 +8,7 @@ fn test_factory() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let factory_id = env.register_contract(None, AuctionFactory);
+    let factory_id = env.register(AuctionFactory, ());
     let factory_client = AuctionFactoryClient::new(&env, &factory_id);
 
     // For full test, need WASM hashes, which require building the contracts.

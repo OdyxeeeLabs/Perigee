@@ -1,5 +1,6 @@
 #![no_std]
 
+use emergency_guard::EmergencyGuard;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, String,
 };
@@ -99,7 +100,11 @@ fn require_admin(env: &Env) -> Result<Address, Error> {
         .instance()
         .get(&DataKey::Admin)
         .ok_or(Error::NotInitialized)?;
-    admin.require_auth();
+
+    let mut approvers: Vec<Address> = Vec::new(env);
+    approvers.push_back(admin.clone());
+    EmergencyGuard::authorize(env.clone(), approvers).map_err(|_| Error::Unauthorized)?;
+
     Ok(admin)
 }
 
@@ -166,6 +171,12 @@ impl GovernanceContract {
             .instance()
             .set(&DataKey::IdentityRequired, &identity_required);
         env.storage().instance().set(&DataKey::NextProposalId, &0u32);
+
+        let mut admins: Vec<Address> = Vec::new(&env);
+        admins.push_back(admin.clone());
+        EmergencyGuard::initialize(env.clone(), admins, 1)
+            .map_err(|_| Error::Unauthorized)?;
+
         Ok(())
     }
 

@@ -127,6 +127,9 @@ impl LocalRunner {
             state_dependency: None,
             ttl_analysis: None,
             transaction_data: String::new(),
+            call_graph: None,
+            state_snapshot: None,
+            protocol_version: 0,
         })
     }
 }
@@ -145,7 +148,7 @@ fn execute_wasm_invocation(
     function_name: String,
     args: Vec<String>,
 ) -> Result<SorobanResources, SimulationError> {
-    crate::simulation::profile_contract(wasm_bytes, function_name, args)
+    crate::simulation::profile_contract(wasm_bytes, function_name, args, None, None)
 }
 
 /// Match the fee shape of `SimulationEngine::calculate_cost` so results from
