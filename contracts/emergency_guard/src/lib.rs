@@ -212,12 +212,27 @@ impl EmergencyGuard {
 
     /// Check if an operation is paused.
     pub fn is_paused(env: Env, operation: u32) -> bool {
-        let state: PauseType = env
+        Self::is_paused_ref(&env, operation)
+    }
+
+    /// Gas-optimized pause probe: single storage read + inline bitwise AND.
+    #[inline(always)]
+    pub fn is_paused_ref(env: &Env, operation: u32) -> bool {
+        let mask: u32 = env
             .storage()
             .instance()
             .get(&GuardDataKey::PauseState)
-            .unwrap_or(PauseType::new(0));
-        state.is_paused(operation)
+            .map(|state: PauseType| state.as_u32())
+            .unwrap_or(0);
+        (mask & operation) != 0
+    }
+
+    /// Panics when the requested operation bit is set in the pause bitmask.
+    #[inline(always)]
+    pub fn ensure_not_paused(env: &Env, operation: u32) {
+        if Self::is_paused_ref(env, operation) {
+            panic!("operation paused");
+        }
     }
 
     /// Set pause state for a specific operation (any single admin can do this).
@@ -414,5 +429,131 @@ impl EmergencyGuard {
     }
 }
 
+/// Standard emergency-guard surface for host contracts embedding `EmergencyGuard` storage.
+pub trait EmergencyGuardTrait {
+    fn guard_pause(
+        e: Env,
+        admin: Address,
+        operation: u32,
+        paused: bool,
+    ) -> Result<(), GuardError>;
+    fn guard_unpause(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
+    fn guard_is_paused(e: Env, operation: u32) -> bool;
+    fn emergency_pause_all(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
+    fn resume_all(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
+    fn guard_add_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        new_admin: Address,
+    ) -> Result<(), GuardError>;
+    fn guard_remove_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        admin: Address,
+    ) -> Result<(), GuardError>;
+    fn guard_rotate_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError>;
+    fn guard_admins(e: Env) -> Vec<Address>;
+    fn guard_threshold(e: Env) -> u32;
+    fn guard_pause_state(e: Env) -> u32;
 #[cfg(test)]
 mod test;
+
+
+
+pub trait EmergencyGuardTrait {
+    fn check_not_paused(env: &Env, operation: u32) -> Result<(), GuardError>;
+    fn get_pause_state(env: &Env) -> u32;
+    fn set_pause_state(env: &Env, operation: u32, paused: bool) -> Result<(), GuardError>;
+    fn unpause(env: &Env, operation: u32) -> Result<(), GuardError>;
+    fn unpause_all(env: &Env) -> Result<(), GuardError>;
+    fn emergency_pause_all(env: &Env, approvers: Vec<Address>) -> Result<(), GuardError>;
+    fn resume_all(env: &Env, approvers: Vec<Address>) -> Result<(), GuardError>;
+    fn init_guard(env: &Env, admins: Vec<Address>, threshold: u32) -> Result<(), GuardError>;
+    fn add_admin(env: &Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), GuardError>;
+    fn remove_admin(env: &Env, approvers: Vec<Address>, admin: Address) -> Result<(), GuardError>;
+    fn rotate_admin(
+        env: &Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError>;
+    fn get_admins(env: &Env) -> Vec<Address>;
+    fn get_threshold(env: &Env) -> u32;
+    fn is_admin(env: &Env, addr: Address) -> bool;
+}
+
+pub struct DefaultEmergencyGuard;
+
+impl DefaultEmergencyGuard {
+    pub fn check_not_paused(env: &Env, operation: u32) -> Result<(), GuardError> {
+        if EmergencyGuard::is_paused(env.clone(), operation) {
+            Err(GuardError::Paused)
+        } else {
+            Ok(())
+        }
+    }
+    pub fn get_pause_state(env: &Env) -> u32 {
+        EmergencyGuard::get_pause_state(env.clone())
+    }
+    pub fn set_pause_state(env: &Env, operation: u32, paused: bool) -> Result<(), GuardError> {
+        let admins = EmergencyGuard::get_admins(env.clone());
+        if let Some(admin) = admins.get(0) {
+            EmergencyGuard::set_pause(env.clone(), admin, operation, paused)
+        } else {
+            Err(GuardError::Unauthorized)
+        }
+    }
+    pub fn unpause(env: &Env, operation: u32) -> Result<(), GuardError> {
+        let admins = EmergencyGuard::get_admins(env.clone());
+        if let Some(admin) = admins.get(0) {
+            EmergencyGuard::set_pause(env.clone(), admin, operation, false)
+        } else {
+            Err(GuardError::Unauthorized)
+        }
+    }
+    pub fn unpause_all(env: &Env) -> Result<(), GuardError> {
+        let admins = EmergencyGuard::get_admins(env.clone());
+        if let Some(admin) = admins.get(0) {
+            EmergencyGuard::set_pause(env.clone(), admin, u32::MAX, false)
+        } else {
+            Err(GuardError::Unauthorized)
+        }
+    }
+    pub fn emergency_pause_all(env: &Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        EmergencyGuard::emergency_pause(env.clone(), approvers)
+    }
+    pub fn resume_all(env: &Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        EmergencyGuard::resume(env.clone(), approvers)
+    }
+    pub fn init_guard(env: &Env, admins: Vec<Address>, threshold: u32) -> Result<(), GuardError> {
+        EmergencyGuard::initialize(env.clone(), admins, threshold)
+    }
+    pub fn add_admin(env: &Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), GuardError> {
+        EmergencyGuard::add_admin(env.clone(), approvers, new_admin)
+    }
+    pub fn remove_admin(env: &Env, approvers: Vec<Address>, admin: Address) -> Result<(), GuardError> {
+        EmergencyGuard::remove_admin(env.clone(), approvers, admin)
+    }
+    pub fn rotate_admin(
+        env: &Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
+        EmergencyGuard::rotate_admin(env.clone(), approvers, old_admin, new_admin)
+    }
+    pub fn get_admins(env: &Env) -> Vec<Address> {
+        EmergencyGuard::get_admins(env.clone())
+    }
+    pub fn get_threshold(env: &Env) -> u32 {
+        EmergencyGuard::get_threshold(env.clone())
+    }
+    pub fn is_admin(env: &Env, addr: Address) -> bool {
+        EmergencyGuard::is_admin_public(env.clone(), addr)
+    }
+}
