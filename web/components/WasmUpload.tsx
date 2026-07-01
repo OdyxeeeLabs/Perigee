@@ -74,98 +74,103 @@ export default function WasmUpload({
   };
 
   //validate WASM file
-  const validateWasm = (file: File): string | null => {
-    if (!file.name.toLowerCase().endsWith(".wasm")) {
-      return "Validation Error: File must be a .wasm file";
-    }
-    if (file.size > maxFileSize) {
-      return `File too large (max ${(maxFileSize / 1024 / 1024).toFixed(1)}MB)`;
-    }
-    if (file.size === 0) {
-      return "File is empty";
-    }
-    return null;
-  };
-
-  //generate file hash (SHA-256) for WASM identification
-  const generateHash = async (file: File): Promise<string> => {
-    const buffer = await file.arrayBuffer();
-    const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-  };
-
-  const setUploadProgress = (id: string, progress: number) => {
-    setFiles((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, progress } : f))
-    );
-  };
-
-  // Submit WASM to backend simulation engine.
-  const uploadFile = async (wasmFile: WasmFile) => {
-    setFiles((prev) =>
-      prev.map((f) =>
-        f.id === wasmFile.id ? { ...f, status: "uploading" } : f
-      )
+    const validateWasm = useCallback(
+      (file: File): string | null => {
+        if (!file.name.toLowerCase().endsWith(".wasm")) {
+          return "Validation Error: File must be a .wasm file";
+        }
+        if (file.size > maxFileSize) {
+          return `File too large (max ${(maxFileSize / 1024 / 1024).toFixed(1)}MB)`;
+        }
+        if (file.size === 0) {
+          return "File is empty";
+        }
+        return null;
+      },
+      [maxFileSize]
     );
 
-    try {
-      setUploadProgress(wasmFile.id, 20);
-      const buffer = await wasmFile.file.arrayBuffer();
-      setUploadProgress(wasmFile.id, 50);
+    //generate file hash (SHA-256) for WASM identification
+    const generateHash = useCallback(async (file: File): Promise<string> => {
+      const buffer = await file.arrayBuffer();
+      const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    }, []);
 
-      const wasmBytesBase64 = arrayBufferToBase64(buffer);
-      setUploadProgress(wasmFile.id, 80);
-
-      const simulationResult = await analyzeService.analyzeWasm({
-        wasm_bytes: wasmBytesBase64,
-        function_name: "main",
-        args: [],
-      });
-
-      const hash = await generateHash(wasmFile.file);
-      setUploadProgress(wasmFile.id, 100);
-
+    const setUploadProgress = useCallback((id: string, progress: number) => {
       setFiles((prev) =>
-        prev.map((f) =>
-          f.id === wasmFile.id
-            ? { ...f, status: "success", progress: 100, hash, simulationResult }
-            : f
-        )
+        prev.map((f) => (f.id === id ? { ...f, progress } : f))
       );
-    } catch (err) {
-      let errorMessage = "Upload failed. Please try again.";
+    }, []);
 
-      if (err instanceof ApiError) {
-        const backendError = {
-          error:
-            typeof err.body?.error === "string"
-              ? err.body.error
-              : statusToErrorType(err.status),
-          message:
-            typeof err.body?.message === "string" ? err.body.message : err.message,
-          statusCode: err.status,
-        };
-        errorMessage = createUserFriendlyMessage(backendError);
-      } else {
-        const formatted = formatError(err);
-        errorMessage = formatted.message;
-      }
+    // Submit WASM to backend simulation engine.
+    const uploadFile = useCallback(
+      async (wasmFile: WasmFile) => {
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === wasmFile.id ? { ...f, status: "uploading" } : f
+          )
+        );
 
-      setFiles((prev) =>
-        prev.map((f) =>
-          f.id === wasmFile.id
-            ? {
-                ...f,
-                status: "error",
-                error: errorMessage,
-              }
-            : f
-        )
-      );
-    }
-  };
+        try {
+          setUploadProgress(wasmFile.id, 20);
+          const buffer = await wasmFile.file.arrayBuffer();
+          setUploadProgress(wasmFile.id, 50);
 
+          const wasmBytesBase64 = arrayBufferToBase64(buffer);
+          setUploadProgress(wasmFile.id, 80);
+
+          const simulationResult = await analyzeService.analyzeWasm({
+            wasm_bytes: wasmBytesBase64,
+            function_name: "main",
+            args: [],
+          });
+
+          const hash = await generateHash(wasmFile.file);
+          setUploadProgress(wasmFile.id, 100);
+
+          setFiles((prev) =>
+            prev.map((f) =>
+              f.id === wasmFile.id
+                ? { ...f, status: "success", progress: 100, hash, simulationResult }
+                : f
+            )
+          );
+        } catch (err) {
+          let errorMessage = "Upload failed. Please try again.";
+
+          if (err instanceof ApiError) {
+            const backendError = {
+              error:
+                typeof err.body?.error === "string"
+                  ? err.body.error
+                  : statusToErrorType(err.status),
+              message:
+                typeof err.body?.message === "string" ? err.body.message : err.message,
+              statusCode: err.status,
+            };
+            errorMessage = createUserFriendlyMessage(backendError);
+          } else {
+            const formatted = formatError(err);
+            errorMessage = formatted.message;
+          }
+
+          setFiles((prev) =>
+            prev.map((f) =>
+              f.id === wasmFile.id
+                ? {
+                    ...f,
+                    status: "error",
+                    error: errorMessage,
+                  }
+                : f
+            )
+          );
+        }
+      },
+      [generateHash, setUploadProgress]
+    );
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
       const newFiles: WasmFile[] = acceptedFiles.map((file) => ({

@@ -928,7 +928,6 @@ export function ResourceHeatmap({ resourceCost, callGraph }: ResourceHeatmapProp
                           );
                         })}
                       </div>
-                  );
                 })() : (
                   <div className="mt-4">
                     <h4 className="text-sm font-bold text-slate-400">Hover over matrix core blocks</h4>
