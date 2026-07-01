@@ -212,12 +212,27 @@ impl EmergencyGuard {
 
     /// Check if an operation is paused.
     pub fn is_paused(env: Env, operation: u32) -> bool {
-        let state: PauseType = env
+        Self::is_paused_ref(&env, operation)
+    }
+
+    /// Gas-optimized pause probe: single storage read + inline bitwise AND.
+    #[inline(always)]
+    pub fn is_paused_ref(env: &Env, operation: u32) -> bool {
+        let mask: u32 = env
             .storage()
             .instance()
             .get(&GuardDataKey::PauseState)
-            .unwrap_or(PauseType::new(0));
-        state.is_paused(operation)
+            .map(|state: PauseType| state.as_u32())
+            .unwrap_or(0);
+        (mask & operation) != 0
+    }
+
+    /// Panics when the requested operation bit is set in the pause bitmask.
+    #[inline(always)]
+    pub fn ensure_not_paused(env: &Env, operation: u32) {
+        if Self::is_paused_ref(env, operation) {
+            panic!("operation paused");
+        }
     }
 
     /// Set pause state for a specific operation (any single admin can do this).
@@ -414,5 +429,36 @@ impl EmergencyGuard {
     }
 }
 
+/// Standard emergency-guard surface for host contracts embedding `EmergencyGuard` storage.
+pub trait EmergencyGuardTrait {
+    fn guard_pause(
+        e: Env,
+        admin: Address,
+        operation: u32,
+        paused: bool,
+    ) -> Result<(), GuardError>;
+    fn guard_unpause(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
+    fn guard_is_paused(e: Env, operation: u32) -> bool;
+    fn emergency_pause_all(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
+    fn resume_all(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
+    fn guard_add_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        new_admin: Address,
+    ) -> Result<(), GuardError>;
+    fn guard_remove_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        admin: Address,
+    ) -> Result<(), GuardError>;
+    fn guard_rotate_admin(
+        e: Env,
+        approvers: Vec<Address>,
+        old_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), GuardError>;
+    fn guard_admins(e: Env) -> Vec<Address>;
+    fn guard_threshold(e: Env) -> u32;
+    fn guard_pause_state(e: Env) -> u32;
 #[cfg(test)]
 mod test;

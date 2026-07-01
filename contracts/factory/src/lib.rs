@@ -1,6 +1,8 @@
 #![no_std]
 use emergency_guard::{EmergencyGuard, PauseType};
 use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, BytesN, Env,
+    IntoVal, Vec,
     contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, BytesN, Env, IntoVal,
     Vec,
 };
@@ -21,6 +23,18 @@ pub enum Error {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DataKey {
     Pair(Address, Address),
+}
+
+fn map_guard_err(err: GuardError) -> Error {
+    match err {
+        GuardError::AlreadyInitialized => Error::AlreadyInitialized,
+        GuardError::InvalidThreshold => Error::InvalidThreshold,
+        GuardError::NotInitialized => Error::NotInitialized,
+        GuardError::InsufficientSignatures | GuardError::Unauthorized | GuardError::AdminNotFound => {
+            Error::Unauthorized
+        }
+        GuardError::Paused => Error::Paused,
+    }
     Admin,
 }
 
@@ -40,7 +54,29 @@ impl LiquidityPoolFactory {
         admins.push_back(admin);
         EmergencyGuard::initialize(env.clone(), admins, 1).map_err(|_| Error::Unauthorized)?;
 
-        Ok(())
+    pub fn set_guard_pause(
+        env: Env,
+        admin: Address,
+        operation: u32,
+        paused: bool,
+    ) -> Result<(), GuardError> {
+        EmergencyGuard::set_pause(env, admin, operation, paused)
+    }
+
+    pub fn add_guard_admin(
+        env: Env,
+        approvers: Vec<Address>,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
+        EmergencyGuard::add_admin(env, approvers, new_admin)
+    }
+
+    pub fn remove_guard_admin(
+        env: Env,
+        approvers: Vec<Address>,
+        admin: Address,
+    ) -> Result<(), GuardError> {
+        EmergencyGuard::remove_admin(env, approvers, admin)
     }
 
     pub fn create_pair(
@@ -86,6 +122,31 @@ impl LiquidityPoolFactory {
             init_args,
         );
 
+            let deployed_address = env
+                .deployer()
+                .with_current_contract(salt)
+                .deploy_v2(wasm_hash, Vec::<soroban_sdk::Val>::new(&env));
+
+            let init_args = soroban_sdk::vec![
+                &env,
+                env.current_contract_address().into_val(&env),
+                token_0.clone().into_val(&env),
+                token_1.clone().into_val(&env)
+            ];
+
+            let _res: soroban_sdk::Val = env.invoke_contract(
+                &deployed_address,
+                &soroban_sdk::Symbol::new(&env, "initialize"),
+                init_args,
+            );
+
+            deployed_address
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Pair(token_0, token_1), &deployed_address);
+
         env.storage()
             .instance()
             .set(&DataKey::Pair(token_0, token_1), &deployed_address);
@@ -98,6 +159,7 @@ impl LiquidityPoolFactory {
         } else {
             (token_b, token_a)
         };
+
         env.storage()
             .instance()
             .get(&DataKey::Pair(token_0, token_1))
