@@ -44,6 +44,32 @@ interface WasmUploadProps {
   className?: string;
 }
 
+//helpers moved outside component to prevent re-recreation on every render
+const statusToErrorType = (status: number): string => {
+  switch (status) {
+    case 400:
+      return "BAD_REQUEST";
+    case 401:
+      return "UNAUTHORIZED";
+    case 404:
+      return "NOT_FOUND";
+    case 500:
+      return "INTERNAL_SERVER_ERROR";
+    case 503:
+      return "SERVICE_UNAVAILABLE";
+    default:
+      return "UNKNOWN_ERROR";
+  }
+};
+
+//generate file hash (SHA-256) for WASM identification
+const generateHash = async (file: File): Promise<string> => {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+};
+
 //component
 
 export default function WasmUpload({
@@ -56,25 +82,8 @@ export default function WasmUpload({
   const [files, setFiles] = useState<WasmFile[]>([]);
   const [isDragActive, setIsDragActive] = useState(false);
 
-  const statusToErrorType = (status: number): string => {
-    switch (status) {
-      case 400:
-        return "BAD_REQUEST";
-      case 401:
-        return "UNAUTHORIZED";
-      case 404:
-        return "NOT_FOUND";
-      case 500:
-        return "INTERNAL_SERVER_ERROR";
-      case 503:
-        return "SERVICE_UNAVAILABLE";
-      default:
-        return "UNKNOWN_ERROR";
-    }
-  };
-
   //validate WASM file
-  const validateWasm = (file: File): string | null => {
+  const validateWasm = useCallback((file: File): string | null => {
     if (!file.name.toLowerCase().endsWith(".wasm")) {
       return "Validation Error: File must be a .wasm file";
     }
@@ -85,24 +94,16 @@ export default function WasmUpload({
       return "File is empty";
     }
     return null;
-  };
+  }, [maxFileSize]);
 
-  //generate file hash (SHA-256) for WASM identification
-  const generateHash = async (file: File): Promise<string> => {
-    const buffer = await file.arrayBuffer();
-    const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-  };
-
-  const setUploadProgress = (id: string, progress: number) => {
+  const setUploadProgress = useCallback((id: string, progress: number) => {
     setFiles((prev) =>
       prev.map((f) => (f.id === id ? { ...f, progress } : f))
     );
-  };
+  }, []);
 
   // Submit WASM to backend simulation engine.
-  const uploadFile = async (wasmFile: WasmFile) => {
+  const uploadFile = useCallback(async (wasmFile: WasmFile) => {
     setFiles((prev) =>
       prev.map((f) =>
         f.id === wasmFile.id ? { ...f, status: "uploading" } : f
@@ -164,7 +165,7 @@ export default function WasmUpload({
         )
       );
     }
-  };
+  }, [setUploadProgress]);
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {

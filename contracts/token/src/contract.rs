@@ -4,7 +4,7 @@ use crate::admin::{has_administrator, read_administrator, write_administrator};
 use crate::allowance::{read_allowance, spend_allowance, write_allowance};
 use crate::balance::{read_balance, receive_balance, spend_balance};
 use crate::metadata::{read_decimal, read_name, read_symbol, write_metadata};
-use emergency_guard::{EmergencyGuard, EmergencyGuardTrait, GuardError, PauseType};
+use emergency_guard::{EmergencyGuard, GuardError, PauseType, TokenEmergencyGuardTrait};
 use soroban_sdk::{contract, contractimpl, vec, Address, Env, String, Vec};
 
 pub trait TokenTrait {
@@ -51,19 +51,10 @@ impl TokenTrait for Token {
     fn set_admin(e: Env, approvers: Vec<Address>, new_admin: Address) {
         let admin = read_administrator(&e);
         e.storage().instance().extend_ttl(100, 100);
-        EmergencyGuard::rotate_admin(
-            e.clone(),
-            vec![&e, admin.clone()],
-            admin,
-            new_admin.clone(),
-        )
-        .expect("failed to rotate admin via EmergencyGuard");
         // Threshold validation: approvers must meet the guard signature threshold.
-        EmergencyGuard::check_multi_sig(&e, &approvers)
+        EmergencyGuard::validate_multi_sig(e.clone(), approvers.clone())
             .expect("unauthorized: insufficient guard admin signatures");
         EmergencyGuard::rotate_admin(e.clone(), approvers, admin, new_admin.clone())
-        // Use EmergencyGuard multi-sig to rotate the guard admin list, then update token admin.
-        EmergencyGuard::rotate_admin(e.clone(), vec![&e, admin.clone()], admin, new_admin.clone())
             .expect("failed to rotate admin via EmergencyGuard");
         write_administrator(&e, &new_admin);
     }
@@ -138,13 +129,8 @@ impl TokenTrait for Token {
     }
 }
 
-impl EmergencyGuardTrait for Token {
-    fn guard_pause(
-        e: Env,
-        admin: Address,
-        operation: u32,
-        paused: bool,
-    ) -> Result<(), GuardError> {
+impl TokenEmergencyGuardTrait for Token {
+    fn guard_pause(e: Env, admin: Address, operation: u32, paused: bool) -> Result<(), GuardError> {
         EmergencyGuard::set_pause(e, admin, operation, paused)
     }
 
@@ -257,8 +243,7 @@ impl Token {
     }
 
     pub fn resume_all(e: Env, approvers: Vec<Address>) {
-        EmergencyGuard::resume(e, approvers)
-            .expect("unauthorized or insufficient approvals");
+        EmergencyGuard::resume(e, approvers).expect("unauthorized or insufficient approvals");
     }
 
     pub fn emergency_pause(e: Env, approvers: Vec<Address>) {
@@ -267,8 +252,7 @@ impl Token {
     }
 
     pub fn guard_resume(e: Env, approvers: Vec<Address>) {
-        EmergencyGuard::resume(e, approvers)
-            .expect("unauthorized or insufficient approvals");
+        EmergencyGuard::resume(e, approvers).expect("unauthorized or insufficient approvals");
     }
 
     pub fn get_pause_state(e: Env) -> u32 {
@@ -315,10 +299,7 @@ impl Token {
         EmergencyGuard::remove_admin(e, approvers, admin)
     }
 
-    pub fn submit_emergency_pause_all(
-        e: Env,
-        approvers: Vec<Address>,
-    ) -> Result<(), GuardError> {
+    pub fn submit_emergency_pause_all(e: Env, approvers: Vec<Address>) -> Result<(), GuardError> {
         EmergencyGuard::emergency_pause(e, approvers)
     }
 
@@ -340,11 +321,5 @@ impl Token {
         admin: Address,
     ) -> Result<(), GuardError> {
         EmergencyGuard::remove_admin(e, approvers, admin)
-    pub fn guard_admins(e: Env) -> Vec<Address> {
-        EmergencyGuard::get_admins(e)
-    }
-
-    pub fn guard_is_paused(e: Env, operation: u32) -> bool {
-        EmergencyGuard::is_paused(e, operation)
     }
 }

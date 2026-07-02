@@ -4,15 +4,10 @@ use crate::contract::{Token, TokenClient};
 use emergency_guard::PauseType;
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
 
-fn setup_token<'a>(
 // Import EmergencyGuard directly from its crate
 use emergency_guard::{EmergencyGuard, EmergencyGuardClient};
 
-fn setup_guard<'a>(
-    env: &'a Env,
-    admins: &[Address],
-    threshold: u32,
-) -> (TokenClient<'a>, Address) {
+fn setup_token<'a>(env: &'a Env, admins: &[Address], threshold: u32) -> (TokenClient<'a>, Address) {
     env.mock_all_auths();
     let contract_id = env.register(Token, ());
     let client = TokenClient::new(env, &contract_id);

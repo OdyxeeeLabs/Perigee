@@ -1,8 +1,7 @@
 #![no_std]
 
 use emergency_guard::{
-    emit_admin_added, emit_admin_removed, emit_emergency_paused_all, emit_guard_initialized,
-    emit_pause_state_changed, emit_resumed_all, EmergencyGuard, GuardError, PauseType, DefaultEmergencyGuard, EmergencyGuardTrait
+    DefaultEmergencyGuard, EmergencyGuard, EmergencyGuardTrait, GuardError, PauseType,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, vec, Address, Env, String, Vec,
@@ -197,27 +196,6 @@ pub enum DataKey {
     AccumulatedRewardPerShare,
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-pub const MAX_FEE_BPS: i128 = 100;
-pub const DEFAULT_BASE_FEE_BPS: i128 = 30;
-pub const DEFAULT_FEE_TIMELOCK_LEDGERS: u32 = 120;
-
-pub const LOW_VOLATILITY_THRESHOLD_BPS: i128 = 100;
-pub const MEDIUM_VOLATILITY_THRESHOLD_BPS: i128 = 250;
-pub const HIGH_VOLATILITY_THRESHOLD_BPS: i128 = 500;
-
-pub const LOW_VOLATILITY_FEE_BPS: i128 = 40;
-pub const MEDIUM_VOLATILITY_FEE_BPS: i128 = 70;
-pub const HIGH_VOLATILITY_FEE_BPS: i128 = 100;
-
-// ── Oracle trait ──────────────────────────────────────────────────────────────
-
-#[soroban_sdk::contractclient(name = "PriceOracleClient")]
-pub trait PriceOracle {
-    fn latest_price(e: Env) -> i128;
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn sqrt(x: i128) -> i128 {
@@ -331,7 +309,6 @@ impl LiquidityPool {
                 fee_bps: DEFAULT_BASE_FEE_BPS,
                 base_fee_bps: DEFAULT_BASE_FEE_BPS,
                 admin: admin.clone(),
-                paused: false,
             },
         );
         // Issue #419: initialize EmergencyGuard so all multi-sig checks have a threshold.
@@ -344,7 +321,6 @@ impl LiquidityPool {
     pub fn get_admin(e: Env) -> Address {
         load_admin(&e).expect("not initialized")
     }
-
 
     pub fn get_admin_threshold(e: Env) -> u32 {
         EmergencyGuard::get_threshold(e)
@@ -427,10 +403,6 @@ impl LiquidityPool {
         EmergencyGuard::get_pause_state(e)
     }
 
-    pub fn get_pause_mask(e: Env) -> u32 {
-        EmergencyGuard::get_pause_state(e)
-    }
-
     /// Unpause all via multi-sig approvers (backward-compatible resume entry point).
     pub fn guard_unpause(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
         EmergencyGuard::resume(e, approvers).map_err(map_guard_err)
@@ -453,7 +425,7 @@ impl LiquidityPool {
         approvers: Vec<Address>,
         admin: Address,
     ) -> Result<(), Error> {
-        Self::remove_admin(e, approvers, admin)
+        EmergencyGuard::remove_admin(e, approvers, admin).map_err(map_guard_err)
     }
 
     pub fn get_guard_admins(e: Env) -> Vec<Address> {

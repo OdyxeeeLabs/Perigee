@@ -417,6 +417,8 @@ impl EmergencyGuard {
             if Self::is_admin_internal(env, &addr) {
                 addr.require_auth();
                 valid += 1;
+            } else {
+                return Err(GuardError::Unauthorized);
             }
         }
 
@@ -429,13 +431,8 @@ impl EmergencyGuard {
 }
 
 /// Standard emergency-guard surface for host contracts embedding `EmergencyGuard` storage.
-pub trait EmergencyGuardTrait {
-    fn guard_pause(
-        e: Env,
-        admin: Address,
-        operation: u32,
-        paused: bool,
-    ) -> Result<(), GuardError>;
+pub trait TokenEmergencyGuardTrait {
+    fn guard_pause(e: Env, admin: Address, operation: u32, paused: bool) -> Result<(), GuardError>;
     fn guard_unpause(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
     fn guard_is_paused(e: Env, operation: u32) -> bool;
     fn emergency_pause_all(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
@@ -459,10 +456,10 @@ pub trait EmergencyGuardTrait {
     fn guard_admins(e: Env) -> Vec<Address>;
     fn guard_threshold(e: Env) -> u32;
     fn guard_pause_state(e: Env) -> u32;
+}
+
 #[cfg(test)]
 mod test;
-
-
 
 pub trait EmergencyGuardTrait {
     fn check_not_paused(env: &Env, operation: u32) -> Result<(), GuardError>;
@@ -532,10 +529,18 @@ impl DefaultEmergencyGuard {
     pub fn init_guard(env: &Env, admins: Vec<Address>, threshold: u32) -> Result<(), GuardError> {
         EmergencyGuard::initialize(env.clone(), admins, threshold)
     }
-    pub fn add_admin(env: &Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), GuardError> {
+    pub fn add_admin(
+        env: &Env,
+        approvers: Vec<Address>,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
         EmergencyGuard::add_admin(env.clone(), approvers, new_admin)
     }
-    pub fn remove_admin(env: &Env, approvers: Vec<Address>, admin: Address) -> Result<(), GuardError> {
+    pub fn remove_admin(
+        env: &Env,
+        approvers: Vec<Address>,
+        admin: Address,
+    ) -> Result<(), GuardError> {
         EmergencyGuard::remove_admin(env.clone(), approvers, admin)
     }
     pub fn rotate_admin(

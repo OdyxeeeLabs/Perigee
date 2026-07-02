@@ -232,33 +232,57 @@ export function UploadZone({
               let errorMessage = errorText;
               
               // Try to parse as JSON for better error details
-              try {
-                const errorJson = JSON.parse(errorText);
-                errorMessage = errorJson.message || errorJson.error || errorText;
-              } catch (e) {
-                // Use raw error text
-              }
+              const contentType = response.headers.get('content-type');
+              if (contentType && contentType.includes('application/json')) {
+                const errData = await response.json();
 
-              const wasmError = parseWasmError(response, errorMessage);
-              setErrorMessage(wasmError.message);
-              setErrorDetails(wasmError);
+                let detailsMsg = '';
+                if (errData.error && typeof errData.error === 'object') {
+                  const parseResult = parseWasmError(errData.error);
+                  detailsMsg = parseResult.details || parseResult.message;
+
+                  setErrorDetails({
+                    title: 'WASM Validation Failed',
+                    message: parseResult.message,
+                    details: parseResult.details,
+                    suggestedAction: parseResult.suggestion
+                  });
+                  setErrorMessage(parseResult.message);
+                } else {
+                  const errorMsg = errData.message || `Backend error: ${response.status}`;
+                  setErrorMessage(errorMsg);
+                  setErrorDetails({
+                    title: 'Analysis Failed',
+                    message: errorMsg,
+                    suggestedAction: 'Please check your contract code and try again.'
+                  });
+                }
+              } else {
+                const textErr = await response.text();
+                setErrorMessage(textErr || `Server returned ${response.status}`);
+                setErrorDetails({
+                  title: 'Server Error',
+                  message: textErr || `HTTP ${response.status}`,
+                  suggestedAction: 'The server encountered an error. Please try again later.'
+                });
+              }
               setUploadState('error');
               setDroppedFile(null);
               resolve(false);
               return;
             }
 
-            // Backend accepted the WASM file
+            const data = await response.json();
             setUploadState('success');
             onFileReady?.(file);
             resolve(true);
           } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : 'Failed to validate with backend';
+            const errorMsg = error instanceof Error ? error.message : 'Analysis request failed';
             setErrorMessage(errorMsg);
             setErrorDetails({
-              title: 'Validation Error',
+              title: 'Connection Error',
               message: errorMsg,
-              suggestedAction: 'Please try uploading again.',
+              suggestedAction: 'Please verify the backend service is running and accessible.'
             });
             setUploadState('error');
             setDroppedFile(null);
@@ -306,7 +330,7 @@ export function UploadZone({
       setDroppedFile(null);
       return false;
     }
-  };
+  }, [backendUrl, onFileReady]);
 
   // ── Drop handling ────────────────────────────────────────────────────────────
 

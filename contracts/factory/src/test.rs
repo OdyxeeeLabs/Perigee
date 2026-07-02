@@ -54,7 +54,7 @@ fn test_guard_admin_initialization() {
     let admin2 = Address::generate(&env);
     let admins = vec![&env, admin1.clone(), admin2.clone()];
 
-    assert_eq!(factory_client.initialize(&admins, &2), Ok(()));
+    assert_eq!(factory_client.initialize_guard(&admins, &2), Ok(()));
     assert_eq!(factory_client.get_threshold(), 2);
     assert_eq!(factory_client.get_admins().len(), 2);
     assert!(factory_client.is_admin(&admin1));
@@ -74,7 +74,7 @@ fn test_guard_admin_threshold_checks() {
     let new_admin = Address::generate(&env);
     let admins = vec![&env, admin1.clone(), admin2.clone()];
 
-    assert_eq!(factory_client.initialize(&admins, &2), Ok(()));
+    assert_eq!(factory_client.initialize_guard(&admins, &2), Ok(()));
 
     let single_approver = vec![&env, admin1.clone()];
     assert_eq!(
@@ -111,7 +111,7 @@ fn test_guard_pause_create_pair_success() {
     let admin = Address::generate(&env);
     let admins = vec![&env, admin.clone()];
 
-    assert_eq!(factory_client.initialize(&admins, &1), Ok(()));
+    assert_eq!(factory_client.initialize_guard(&admins, &1), Ok(()));
     assert!(!factory_client.guard_is_paused(&CREATE_PAIR));
 
     factory_client
@@ -158,7 +158,7 @@ fn test_guard_pause_create_pair_unauthorized() {
     let stranger = Address::generate(&env);
     let admins = vec![&env, admin.clone()];
 
-    assert_eq!(factory_client.initialize(&admins, &1), Ok(()));
+    assert_eq!(factory_client.initialize_guard(&admins, &1), Ok(()));
 
     assert_eq!(
         factory_client.try_guard_pause(&stranger, &CREATE_PAIR, &true),
@@ -225,7 +225,7 @@ fn test_pause_create_pair() {
 
     let mut admins = Vec::new(&env);
     admins.push_back(admin.clone());
-    factory_client.initialize(&admins, &1).unwrap();
+    factory_client.initialize_guard(&admins, &1).unwrap();
     factory_client.set_paused(&admin, &true).unwrap();
 
     let result = factory_client.create_pair(&token_a, &token_b, &pool_hash);
