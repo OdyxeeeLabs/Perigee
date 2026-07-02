@@ -126,3 +126,111 @@ export function createUserFriendlyMessage(errorResponse: BackendErrorResponse): 
     'An error occurred during analysis'
   );
 }
+
+/**
+ * Categorize and format WASM-specific backend errors
+ */
+export interface WasmBackendError {
+  title: string;
+  message: string;
+  details?: string;
+  suggestedAction?: string;
+  statusCode: number;
+}
+
+/**
+ * Parse WASM-specific errors from backend responses
+ */
+export function parseWasmError(response: Response, errorMessage: string): WasmBackendError {
+  const status = response.status;
+  
+  // Map common backend error messages to user-friendly ones
+  const wasmErrorPatterns: Array<{ pattern: RegExp; title: string; details: (match: RegExpExecArray) => string }> = [
+    {
+      pattern: /Invalid base64|base64 decoding|base64 WASM data/i,
+      title: 'Invalid WASM Encoding',
+      details: () => 'The file appears to be corrupted or improperly encoded. Ensure you\'re uploading a valid compiled Soroban contract.',
+    },
+    {
+      pattern: /Invalid WASM|malformed|not a valid WebAssembly/i,
+      title: 'Invalid WASM Format',
+      details: () => 'This doesn\'t appear to be a valid WebAssembly module. Make sure you\'re uploading a compiled .wasm file from Soroban.',
+    },
+    {
+      pattern: /version|unsupported/i,
+      title: 'Unsupported WASM Version',
+      details: () => 'The WASM version is not supported. Please recompile using a compatible Soroban version.',
+    },
+    {
+      pattern: /memory|out of|limit|overflow/i,
+      title: 'WASM Resource Exceeded',
+      details: () => 'The contract exceeds analysis resource limits. Try simplifying the contract or splitting it into smaller modules.',
+    },
+    {
+      pattern: /timeout|took too long|analysis timeout/i,
+      title: 'Analysis Timeout',
+      details: () => 'The analysis took too long to complete. The contract might be too complex. Please try again or simplify the contract.',
+    },
+    {
+      pattern: /function|export|not found/i,
+      title: 'Function Not Found',
+      details: () => 'The specified contract function was not found. Ensure the function is properly exported from your contract.',
+    },
+  ];
+
+  // Check for pattern matches
+  for (const { pattern, title, details } of wasmErrorPatterns) {
+    const match = pattern.exec(errorMessage);
+    if (match) {
+      return {
+        title,
+        message: details(match),
+        statusCode: status,
+        suggestedAction: 'Please check your contract and try uploading again.',
+      };
+    }
+  }
+
+  // Default mappings by status code
+  const defaultErrors: Record<number, WasmBackendError> = {
+    400: {
+      title: 'Invalid WASM File',
+      message: errorMessage || 'The backend rejected the WASM file. Please ensure it\'s a valid compiled Soroban contract.',
+      statusCode: 400,
+      suggestedAction: 'Try uploading a different contract or check the build logs.',
+    },
+    401: {
+      title: 'Unauthorized',
+      message: 'You don\'t have permission to analyze contracts.',
+      statusCode: 401,
+      suggestedAction: 'Please connect your wallet and try again.',
+    },
+    413: {
+      title: 'File Too Large',
+      message: 'The WASM file is too large for analysis.',
+      statusCode: 413,
+      suggestedAction: 'Optimize your contract to reduce its size.',
+    },
+    500: {
+      title: 'Server Error',
+      message: 'The backend encountered an error while analyzing your contract.',
+      statusCode: 500,
+      suggestedAction: 'Please try again later.',
+    },
+    503: {
+      title: 'Service Unavailable',
+      message: 'The analysis service is temporarily unavailable.',
+      statusCode: 503,
+      suggestedAction: 'Please try again in a few moments.',
+    },
+  };
+
+  return (
+    defaultErrors[status] || {
+      title: 'Analysis Failed',
+      message: errorMessage || 'An error occurred while analyzing the WASM file.',
+      statusCode: status,
+      suggestedAction: 'Please try uploading again.',
+    }
+  );
+}

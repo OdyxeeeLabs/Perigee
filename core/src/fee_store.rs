@@ -125,8 +125,7 @@ impl FeeStore {
         &self,
         limit: i64,
     ) -> Result<Vec<LedgerFeeSample>, FeeStoreError> {
-        let samples = sqlx::query_as!(
-            LedgerFeeSample,
+        let samples = sqlx::query_as::<_, LedgerFeeSample>(
             r#"
             SELECT 
                 ledger_sequence, collected_at, base_reserve, base_fee,

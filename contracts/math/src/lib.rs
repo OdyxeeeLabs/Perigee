@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, Env};
 
 pub use soroscope_error_codes::ContractError as MathError;
 
@@ -10,6 +10,7 @@ pub struct Fixed(pub i128);
 pub const SCALE: i128 = 1_000_000_000_000_000_000; // 18 decimals
 pub const LN2: i128 = 693_147_180_559_945_309; // ln(2) * SCALE
 
+#[allow(clippy::should_implement_trait)]
 impl Fixed {
     pub const ZERO: Fixed = Fixed(0);
     pub const ONE: Fixed = Fixed(SCALE);
@@ -154,9 +155,9 @@ fn mul_div(a: i128, b: i128, d: i128) -> Option<i128> {
     if d == 0 {
         return None;
     }
-    let a_abs = a.abs() as u128;
-    let b_abs = b.abs() as u128;
-    let d_abs = d.abs() as u128;
+    let a_abs = a.unsigned_abs();
+    let b_abs = b.unsigned_abs();
+    let d_abs = d.unsigned_abs();
 
     let (res_abs, overflow) = mul_div_u128(a_abs, b_abs, d_abs);
     if overflow || res_abs > (i128::MAX as u128) {

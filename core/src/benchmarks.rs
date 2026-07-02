@@ -3,7 +3,6 @@ use sha2::{Digest, Sha256};
 use soroban_sdk::{
     testutils::Address as _, Address, Bytes, Env, IntoVal, String, Symbol, Val, Vec,
 };
-use soroban_sdk::{testutils::Address as _, Address, Env, IntoVal, String, Symbol, Val, Vec};
 use std::fs;
 use std::path::PathBuf;
 
@@ -20,7 +19,8 @@ pub async fn run_token_benchmark(
 
     // Register contract
     let wasm_bytes = Bytes::from_slice(&env, &wasm);
-    let contract_id = env.register_contract_wasm(None, wasm_bytes);
+    #[allow(deprecated)]
+    let _contract_id = env.register_contract_wasm(None, wasm_bytes);
     let contract_id = env.register(&*wasm, ());
 
     // Initialize

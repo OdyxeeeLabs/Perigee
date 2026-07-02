@@ -1,4 +1,6 @@
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol, Val, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol, Val, Vec,
+};
 
 #[contracttype]
 pub enum DataKey {
@@ -19,7 +21,9 @@ impl Proxy {
         }
 
         env.storage().persistent().set(&DataKey::Admin, &admin);
-        env.storage().persistent().set(&DataKey::Implementation, &implementation);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Implementation, &implementation);
         env.storage().persistent().set(&DataKey::Counter, &0i32);
     }
 
@@ -28,13 +32,18 @@ impl Proxy {
     }
 
     pub fn get_implementation(env: Env) -> Address {
-        env.storage().persistent().get(&DataKey::Implementation).unwrap()
+        env.storage()
+            .persistent()
+            .get(&DataKey::Implementation)
+            .unwrap()
     }
 
     pub fn upgrade_to(env: Env, implementation: Address) {
         let admin = Self::get_admin(env.clone());
         admin.require_auth();
-        env.storage().persistent().set(&DataKey::Implementation, &implementation);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Implementation, &implementation);
     }
 
     pub fn upgrade_to_and_call(
@@ -45,7 +54,9 @@ impl Proxy {
     ) -> Val {
         let admin = Self::get_admin(env.clone());
         admin.require_auth();
-        env.storage().persistent().set(&DataKey::Implementation, &implementation);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Implementation, &implementation);
         Self::delegate_call(env, method, args)
     }
 
@@ -64,7 +75,10 @@ impl Proxy {
     }
 
     pub fn get_value(env: Env) -> i32 {
-        env.storage().persistent().get(&DataKey::Counter).unwrap_or(0)
+        env.storage()
+            .persistent()
+            .get(&DataKey::Counter)
+            .unwrap_or(0)
     }
 
     pub fn set_value(env: Env, value: i32) {
@@ -74,7 +88,9 @@ impl Proxy {
     pub fn set_storage(env: Env, key: BytesN<32>, value: Val) {
         let admin = Self::get_admin(env.clone());
         admin.require_auth();
-        env.storage().persistent().set(&DataKey::Storage(key), &value);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Storage(key), &value);
     }
 
     pub fn get_storage(env: Env, key: BytesN<32>) -> Option<Val> {

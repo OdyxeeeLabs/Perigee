@@ -83,6 +83,9 @@ where
             state_dependency: None,
             ttl_analysis: None,
             transaction_data: rpc_result.transaction_data,
+            call_graph: None,
+            state_snapshot: None,
+            protocol_version: 0,
         })
     }
     

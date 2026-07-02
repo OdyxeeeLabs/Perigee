@@ -92,7 +92,7 @@ impl DiskCache {
             }
         };
 
-        let entry: DiskCacheEntry = match bincode::deserialize(raw.as_ref()) {
+        let entry: DiskCacheEntry = match serde_json::from_slice(raw.as_ref()) {
             Ok(entry) => entry,
             Err(e) => {
                 // Corrupt / schema-mismatched entry — drop it so the next
@@ -114,17 +114,12 @@ impl DiskCache {
     /// Insert `payload` tagged with `current_ledger`. Returns an error on
     /// backend or serialisation failure — the caller decides whether to
     /// propagate it or log-and-continue.
-    pub fn set(
-        &self,
-        key: &[u8],
-        payload: Vec<u8>,
-        current_ledger: u32,
-    ) -> Result<(), CacheError> {
+    pub fn set(&self, key: &[u8], payload: Vec<u8>, current_ledger: u32) -> Result<(), CacheError> {
         let entry = DiskCacheEntry {
             written_at_ledger: current_ledger,
             payload,
         };
-        let raw = bincode::serialize(&entry)?;
+        let raw = serde_json::to_vec(&entry)?;
         self.db.insert(key, raw)?;
         Ok(())
     }
@@ -151,7 +146,7 @@ impl DiskCache {
                     break;
                 }
             };
-            match bincode::deserialize::<DiskCacheEntry>(value.as_ref()) {
+            match serde_json::from_slice::<DiskCacheEntry>(value.as_ref()) {
                 Ok(entry) => {
                     if self.is_stale(current_ledger, entry.written_at_ledger)
                         && self.db.remove(&key).is_ok()

@@ -191,7 +191,7 @@ Benefits:
 
 | Contract       | Current Status        | Todo                     |
 | -------------- | --------------------- | ------------------------ |
-| liquidity_pool | Has manual pause bool | Integrate EmergencyGuard |
+| liquidity_pool | EmergencyGuard bitmask (`PauseState` u32) | Done |
 | token          | No pause              | Add pause support        |
 | factory        | No pause              | Add pause support        |
 | cross_call     | No pause              | Add pause support        |

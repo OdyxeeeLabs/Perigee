@@ -1,7 +1,5 @@
-#![cfg(test)]
-
 use crate::{Domain, Transfer, TypedDataAuth};
-use soroban_sdk::testutils::{Address as _, BytesN as _};
+use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, BytesN, Env, String};
 
 #[test]
@@ -64,8 +62,8 @@ fn test_domain_separator_consistency() {
         verifying_contract: contract_address,
     };
     assert_eq!(
-        TypedDataAuth::compute_domain_hash(&env, &domain1),
-        TypedDataAuth::compute_domain_hash(&env, &domain2),
+        TypedDataAuth::domain_separator_hash(&env, &domain1),
+        TypedDataAuth::domain_separator_hash(&env, &domain2),
     );
 }
 

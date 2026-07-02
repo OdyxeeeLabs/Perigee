@@ -325,9 +325,6 @@ impl FeeCollector {
             100 // Default base fee
         };
 
-        // Get close time from response
-        let close_time = json["result"]["latestLedger"].as_u64().unwrap_or(sequence);
-
         Ok(LedgerFeeSample {
             ledger_sequence: sequence as i64,
             collected_at: Utc::now(),
@@ -364,7 +361,7 @@ impl FeeCollector {
         let close_timestamp = close_time_str.parse::<i64>().unwrap_or(0);
 
         let ledger_close_time = if close_timestamp > 0 {
-            chrono::DateTime::from_timestamp(close_timestamp, 0).unwrap_or_else(|| Utc::now())
+            chrono::DateTime::from_timestamp(close_timestamp, 0).unwrap_or_else(Utc::now)
         } else {
             Utc::now()
         };

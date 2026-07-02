@@ -50,6 +50,47 @@ RUST_LOG=info cargo run -p soroscope-core
 
 The server listens on `http://localhost:8080` by default.
 
+### Merkle Tree Utility
+
+The core crate includes an off-chain Merkle Tree utility (`core/src/merkle_tree.rs`) for building binary Merkle trees and generating inclusion proofs compatible with the `cross_chain_verifier` contract.
+
+**Build a tree and get the root:**
+
+```bash
+# Run your script that calls MerkleTree::build() and prints the root hex
+ROOT=$(cargo run --example build_tree -- --block 1000)
+
+# Post the root on-chain
+soroban contract invoke \
+  --id <CONTRACT_ID> \
+  --source relayer \
+  --network testnet \
+  -- update_root \
+  --block_height 1000 \
+  --new_root "$ROOT"
+```
+
+**Verify a proof on-chain:**
+
+```bash
+soroban contract invoke \
+  --id <CONTRACT_ID> \
+  --network testnet \
+  -- verify_message \
+  --block_height 1000 \
+  --leaf "<leaf_hex>" \
+  --proof '["<sibling_hex>"]' \
+  --proof_flags '[true]'
+```
+
+**Run Merkle Tree tests:**
+
+```bash
+cargo test -p soroscope-core merkle_tree
+```
+
+See [`core/MERKLE_TREE_README.md`](./core/MERKLE_TREE_README.md) for full API reference, proof generation examples, and the complete relayer pipeline.
+
 ---
 
 ## 🌐 Web Dashboard (`/web`)
@@ -120,7 +161,7 @@ From the **repo root**:
   npm run lint
   ```
 
-(Add CI in `./.github/workflows` to automate these.)
+These checks run automatically on every push and pull request via the CI pipeline in `.github/workflows/ci.yml` (`cargo check`, `cargo fmt`, `cargo clippy`, `cargo test`, and frontend lint).
 
 ---
 

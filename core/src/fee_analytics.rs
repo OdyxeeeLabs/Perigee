@@ -1,3 +1,5 @@
+#![allow(clippy::unnecessary_cast)]
+
 use crate::fee_store::LedgerFeeSample;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

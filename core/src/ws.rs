@@ -230,7 +230,11 @@ impl SimulationBus {
         }
     }
 
-    pub fn completed(job_id: &JobId, resources: &crate::simulation::SorobanResources, cost_stroops: u64) -> SimulationEvent {
+    pub fn completed(
+        job_id: &JobId,
+        resources: &crate::simulation::SorobanResources,
+        cost_stroops: u64,
+    ) -> SimulationEvent {
         SimulationEvent::Completed {
             job_id: job_id.to_string(),
             data: CompletedPayload {
@@ -407,12 +411,8 @@ mod tests {
     #[tokio::test]
     async fn event_json_round_trips() {
         let fake_id = JobId::new();
-        let event = SimulationBus::provider_failover(
-            &fake_id,
-            "primary-node",
-            "backup-node",
-            "timeout",
-        );
+        let event =
+            SimulationBus::provider_failover(&fake_id, "primary-node", "backup-node", "timeout");
         let json = serde_json::to_string(&event).expect("serialise");
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse");
         assert_eq!(parsed["event"], "provider_failover");
@@ -425,7 +425,11 @@ mod tests {
         let event = SimulationBus::consensus_check(
             &fake_id,
             true,
-            vec!["node-a".to_string(), "node-b".to_string(), "node-c".to_string()],
+            vec![
+                "node-a".to_string(),
+                "node-b".to_string(),
+                "node-c".to_string(),
+            ],
             None,
         );
         let json = serde_json::to_string(&event).expect("serialise");

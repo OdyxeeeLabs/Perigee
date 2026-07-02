@@ -6,7 +6,7 @@ use crate::{Error, TwapOracle, TwapOracleClient};
 #[test]
 fn test_initialize() {
     let e = Env::default();
-    let contract_id = e.register_contract(None, TwapOracle);
+    let contract_id = e.register(TwapOracle, ());
     let client = TwapOracleClient::new(&e, &contract_id);
 
     let token_a = Address::generate(&e);
@@ -27,7 +27,7 @@ fn test_update_and_get_twap() {
     let e = Env::default();
     e.ledger().with_mut(|li| li.timestamp = 1000);
 
-    let contract_id = e.register_contract(None, TwapOracle);
+    let contract_id = e.register(TwapOracle, ());
     let client = TwapOracleClient::new(&e, &contract_id);
 
     let token_a = Address::generate(&e);
@@ -63,7 +63,7 @@ fn test_update_too_soon() {
     let e = Env::default();
     e.ledger().with_mut(|li| li.timestamp = 1000);
 
-    let contract_id = e.register_contract(None, TwapOracle);
+    let contract_id = e.register(TwapOracle, ());
     let client = TwapOracleClient::new(&e, &contract_id);
 
     let token_a = Address::generate(&e);
@@ -91,7 +91,7 @@ fn test_update_too_soon() {
 #[test]
 fn test_invalid_price() {
     let e = Env::default();
-    let contract_id = e.register_contract(None, TwapOracle);
+    let contract_id = e.register(TwapOracle, ());
     let client = TwapOracleClient::new(&e, &contract_id);
 
     let token_a = Address::generate(&e);
@@ -106,7 +106,7 @@ fn test_invalid_price() {
 #[test]
 fn test_not_initialized() {
     let e = Env::default();
-    let contract_id = e.register_contract(None, TwapOracle);
+    let contract_id = e.register(TwapOracle, ());
     let client = TwapOracleClient::new(&e, &contract_id);
 
     assert_eq!(client.update_price(&100), Err(Error::NotInitialized));
