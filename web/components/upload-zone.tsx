@@ -203,7 +203,7 @@ export function UploadZone({
 
   // ── Backend submission ───────────────────────────────────────────────────────
 
-  const submitToBackend = async (file: File): Promise<boolean> => {
+  const submitToBackend = useCallback(async (file: File): Promise<boolean> => {
     try {
       setUploadState('submitting');
       const reader = new FileReader();

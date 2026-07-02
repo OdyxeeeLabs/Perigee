@@ -1433,7 +1433,7 @@ fn test_failed_rotate_admin_does_not_add_new_admin() {
 
     assert_eq!(
         client.try_rotate_admin(&vec![&e, admin.clone()], &missing_old_admin, &new_admin),
-        Err(Ok(Error::Unauthorized))
+        Err(Ok(emergency_guard::GuardError::Unauthorized))
     );
 
     let admins = client.get_admins();
@@ -1465,7 +1465,7 @@ fn test_add_then_remove_admin_enforces_rotation_membership() {
 
     assert_eq!(
         client.try_add_admin(&vec![&e, stranger.clone()], &new_admin),
-        Err(Ok(Error::Unauthorized))
+        Err(Ok(emergency_guard::GuardError::Unauthorized))
     );
 
     client.add_admin(&vec![&e, admin.clone()], &new_admin);
@@ -1482,7 +1482,7 @@ fn test_add_then_remove_admin_enforces_rotation_membership() {
 
     assert_eq!(
         client.try_remove_admin(&vec![&e, new_admin.clone()], &new_admin),
-        Err(Ok(Error::Unauthorized))
+        Err(Ok(emergency_guard::GuardError::Unauthorized))
     );
 }
 

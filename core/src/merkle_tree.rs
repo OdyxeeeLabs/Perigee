@@ -4,7 +4,6 @@
 //! sorting each pair of child hashes (min || max) before concatenating and hashing,
 //! making proofs order-independent.
 
-use hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

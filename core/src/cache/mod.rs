@@ -1,7 +1,5 @@
 pub mod disk;
 
-pub use disk::{DiskCache, DiskCacheConfig};
-
 use crate::simulation::SimulationResult;
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
