@@ -173,11 +173,10 @@ pub const HIGH_VOLATILITY_FEE_BPS: i128 = 100;
 
 // ── Oracle trait ──────────────────────────────────────────────────────────────
 
+#[soroban_sdk::contractclient(name = "PriceOracleClient")]
 pub trait PriceOracle {
     fn latest_price(e: Env) -> i128;
 }
-
-soroban_sdk::contractclient!(name = "PriceOracleClient", trait = PriceOracle);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -268,7 +267,7 @@ impl LiquidityPool {
                 total_shares: 0,
                 fee_bps: DEFAULT_BASE_FEE_BPS,
                 base_fee_bps: DEFAULT_BASE_FEE_BPS,
-                admin,
+                admin: admin.clone(),
                 paused: false,
             },
         );
