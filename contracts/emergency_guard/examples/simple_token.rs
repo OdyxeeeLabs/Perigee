@@ -7,13 +7,6 @@ pub enum DataKey {
     Admin,
     TotalSupply,
     Balance(Address),
-    Allowance(AllowanceKey),
-}
-
-#[contracttype]
-pub struct AllowanceKey {
-    from: Address,
-    to: Address,
 }
 
 #[contract]
@@ -64,8 +57,10 @@ impl SimpleToken {
             .set(&DataKey::Balance(to), &(to_balance + amount));
     }
 
-    /// Mint tokens (blocked if MINT pause is active)
     pub fn mint(env: Env, to: Address, amount: i128) {
+        if EmergencyGuard::is_paused(env.clone(), PauseType::MINT) {
+            panic!("Minting is paused");
+        }
         // Check if minting is paused
         if EmergencyGuard::is_paused(env.clone(), PauseType::MINT) {
             panic!("Minting is paused");
@@ -100,8 +95,10 @@ impl SimpleToken {
             .set(&DataKey::TotalSupply, &(supply + amount));
     }
 
-    /// Burn tokens (blocked if BURN pause is active)
     pub fn burn(env: Env, from: Address, amount: i128) {
+        if EmergencyGuard::is_paused(env.clone(), PauseType::BURN) {
+            panic!("Burning is paused");
+        }
         // Check if burning is paused
         if EmergencyGuard::is_paused(env.clone(), PauseType::BURN) {
             panic!("Burning is paused");
@@ -132,6 +129,8 @@ impl SimpleToken {
             .set(&DataKey::TotalSupply, &(supply - amount));
     }
 
+    pub fn get_pause_state(env: Env) -> u32 {
+        EmergencyGuard::get_pause_state(env)
     // ==== EMERGENCY GUARD FUNCTIONS ====
 
     /// Pause only transfers (minting and burning still work)
@@ -146,6 +145,7 @@ impl SimpleToken {
 
     /// Resume transfers
     pub fn resume_transfers(env: Env) {
+        DefaultEmergencyGuard::unpause(&env, PauseType::TRANSFER).expect("Unauthorized");
         let admin: Address = env
             .storage()
             .instance()
@@ -219,19 +219,18 @@ impl SimpleToken {
         EmergencyGuard::get_pause_state(env)
     }
 
-    /// Check if specific operation is paused
     pub fn is_paused(env: Env, operation: u32) -> bool {
         EmergencyGuard::is_paused(env, operation)
     }
 
-    /// Get list of admins
     pub fn get_admins(env: Env) -> Vec<Address> {
         EmergencyGuard::get_admins(env)
     }
 
-    /// Get multi-sig threshold
     pub fn get_threshold(env: Env) -> u32 {
         EmergencyGuard::get_threshold(env)
+    }
+
     }
 
     /// Add new admin (requires existing admin authorization)
@@ -277,7 +276,6 @@ impl SimpleToken {
             .unwrap_or(0)
     }
 
-    /// Get total supply
     pub fn total_supply(env: Env) -> i128 {
         env.storage()
             .instance()
