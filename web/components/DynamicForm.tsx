@@ -3,19 +3,19 @@
 import React from "react"
 
 import { useState } from 'react';
-import type { ContractFunction } from '../lib/sorobantypes';
+import type { ContractFunction, SimulationInputs } from '../lib/sorobantypes';
 import { Loader2 } from 'lucide-react';
 
 interface DynamicFormProps {
   func: ContractFunction;
-  onSubmit: (inputs: Record<string, any>) => void;
+  onSubmit: (inputs: SimulationInputs) => void;
   loading?: boolean;
 }
 
 export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
-  const [formData, setFormData] = useState<Record<string, any>>({});
+  const [formData, setFormData] = useState<SimulationInputs>({});
 
-  const handleChange = (name: string, value: any) => {
+  const handleChange = (name: string, value: string | number | boolean) => {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
