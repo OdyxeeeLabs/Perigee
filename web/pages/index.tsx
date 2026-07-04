@@ -33,6 +33,9 @@ export default function Home() {
   const handleSimulate = async (inputs: Record<string, any>, customWasmData?: string) => {
     setLoading(true);
     try {
+      const url = activeWasmData ? 'http://localhost:8080/analyze/wasm' : 'http://localhost:8080/analyze';
+      const body = activeWasmData
+        ? {
       const activeWasmData = customWasmData ?? wasmData;
       const report = activeWasmData
         ? await analyzeService.analyzeWasm({
@@ -93,6 +96,48 @@ export default function Home() {
             </div>
             <ConnectButton />
           </div>
+
+          {/* Right Column - Results & History Tabs */}
+          <div>
+            {/* Tabs */}
+            <div
+              style={{
+                display: 'flex',
+                borderBottom: '1px solid #30363d',
+                marginBottom: '24px',
+                backgroundColor: '#161b22',
+                borderRadius: '8px 8px 0 0',
+                gap: '0',
+              }}
+            >
+              <button
+                onClick={() => setTab('explorer')}
+                style={{
+                  flex: 1,
+                  padding: '12px 16px',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  borderBottom: tab === 'explorer' ? '2px solid #00d9ff' : 'none',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: tab === 'explorer' ? '600' : '500',
+                  color: tab === 'explorer' ? '#00d9ff' : '#8b949e',
+                }}
+              >
+                Result
+              </button>
+              <button
+                onClick={() => setTab('history')}
+                style={{
+                  flex: 1,
+                  padding: '12px 16px',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  borderBottom: tab === 'history' ? '2px solid #00d9ff' : 'none',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: tab === 'history' ? '600' : '500',
+                  color: tab === 'history' ? '#00d9ff' : '#8b949e',
         </header>
 
         <section className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
@@ -134,6 +179,91 @@ export default function Home() {
               />
             </div>
 
+            {/* Tab Content */}
+            <div
+              style={{
+                backgroundColor: '#161b22',
+                borderRadius: '0 8px 8px 8px',
+                padding: '24px',
+                border: '1px solid #30363d',
+                borderTop: 'none',
+              }}
+            >
+              {tab === 'explorer' ? (
+                loading ? (
+                  <>
+                    <ResultViewerSkeleton />
+                    <div className="mt-4">
+                      <NutritionLabelSkeleton />
+                <>
+                  <ResultViewer result={currentResult} />
+                  {currentResult?.resourceCost && (
+                    <div className="mt-4 flex flex-col gap-4">
+                      <ResourceHeatmap resourceCost={{
+                        cpu_instructions: currentResult.resourceCost.cpu_instructions,
+                        ram_bytes: currentResult.resourceCost.ram_bytes,
+                        ledger_read_bytes: currentResult.resourceCost.ledger_read_bytes,
+                        ledger_write_bytes: currentResult.resourceCost.ledger_write_bytes,
+                        transaction_size_bytes: currentResult.resourceCost.transaction_size_bytes,
+                        cost_stroops: (currentResult.resourceCost as any).cost_stroops,
+                        state_snapshot: currentResult.stateSnapshot
+                      }} />
+                  {analysisReport && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentResult(null);
+                        const resetBtn = document.getElementById('wasm-upload-reset-btn');
+                        if (resetBtn) resetBtn.click();
+                      }}
+                      className="mt-4 px-4 py-2 bg-slate-800 text-slate-300 rounded hover:bg-slate-700 transition"
+                    >
+                      Clear analysis
+                    </button>
+                  )}
+                  {currentResult?.resourceCost && (
+                    <div className="mt-4">
+                    <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <NutritionLabel
+                        cpu_instructions={analysisReport.cpu_instructions}
+                        ram_bytes={analysisReport.ram_bytes}
+                        ledger_read_bytes={analysisReport.ledger_read_bytes}
+                        ledger_write_bytes={analysisReport.ledger_write_bytes}
+                        transaction_size_bytes={analysisReport.transaction_size_bytes}
+                      />
+                      <GasUsageChart
+                        cpu_instructions={currentResult.resourceCost.cpu_instructions}
+                        ram_bytes={currentResult.resourceCost.ram_bytes}
+                        ledger_read_bytes={currentResult.resourceCost.ledger_read_bytes}
+                        ledger_write_bytes={currentResult.resourceCost.ledger_write_bytes}
+                        transaction_size_bytes={currentResult.resourceCost.transaction_size_bytes}
+                        cost_stroops={currentResult.resourceCost.cost_stroops}
+                        testnetAverages={currentResult.resourceCost.testnet_averages}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <ResultViewer result={currentResult} />
+                    {currentResult?.resourceCost && (
+                      <div className="mt-4">
+                        <NutritionLabel
+                          cpu_instructions={currentResult.resourceCost.cpu_instructions}
+                          ram_bytes={currentResult.resourceCost.ram_bytes}
+                          ledger_read_bytes={currentResult.resourceCost.ledger_read_bytes}
+                          ledger_write_bytes={currentResult.resourceCost.ledger_write_bytes}
+                          transaction_size_bytes={currentResult.resourceCost.transaction_size_bytes}
+                        />
+                      </div>
+                    )}
+                  </>
+                )
+              ) : (
+                <InvocationHistory onSelectResult={(result) => {
+                  setCurrentResult(result);
+                  setTab('explorer');
+                }} />
+              )}
             <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
               <ResultViewer result={currentResult} />
             </div>

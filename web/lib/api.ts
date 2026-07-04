@@ -1,12 +1,27 @@
 /**
- * SoroScope API Client
- * Production-grade, lightweight, type-safe API client configuration using native Fetch API.
- * Integrates Next.js frontend to the Rust Axum backend.
+ * SoroScope API client.
+ *
+ * Uses the browser-native Fetch API so the frontend does not need an extra
+ * Axios dependency. Set NEXT_PUBLIC_API_URL in production to point at the Rust
+ * simulation engine backend; local development defaults to localhost.
  */
 
-export interface ApiRequestOptions extends RequestInit {
-  params?: Record<string, string>;
+import type { AnalyzeResponse } from './sorobantypes';
+
+const DEFAULT_DEV_API_URL = 'http://localhost:8080';
+
+export const API_URL =
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, '') ?? DEFAULT_DEV_API_URL;
+
+export const apiConfig = {
+  baseUrl: API_URL,
+  environment: process.env.NODE_ENV ?? 'development',
+};
+
+export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
+  params?: Record<string, string | number | boolean | null | undefined>;
   token?: string;
+  body?: BodyInit | object | null;
 }
 
 export class ApiError extends Error {
@@ -15,7 +30,15 @@ export class ApiError extends Error {
   body: unknown;
 
   constructor(status: number, statusText: string, body: unknown) {
-    super(`API Error ${status}: ${body?.message || statusText}`);
+    const message =
+      typeof body === 'object' &&
+      body !== null &&
+      'message' in body &&
+      typeof body.message === 'string'
+        ? body.message
+        : statusText;
+
+    super(`API Error ${status}: ${message}`);
     this.name = 'ApiError';
     this.status = status;
     this.statusText = statusText;
@@ -23,88 +46,99 @@ export class ApiError extends Error {
   }
 }
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+export function apiUrl(path: string, params?: ApiRequestOptions['params']): string {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const url = new URL(`${API_URL}${normalizedPath}`);
 
-async function request<T>(endpoint: string, options: ApiRequestOptions = {}): Promise<T> {
-  const { params, token, headers, ...customConfig } = options;
-  
-  // Build full query string if params are provided
-  let queryString = '';
   if (params) {
-    const searchParams = new URLSearchParams();
-    Object.entries(params).forEach(([key, val]) => {
-      if (val !== undefined && val !== null) {
-        searchParams.append(key, val);
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        url.searchParams.set(key, String(value));
       }
     });
-    queryString = `?${searchParams.toString()}`;
   }
 
-  const fullUrl = `${BASE_URL}${endpoint}${queryString}`;
-
-  const defaultHeaders: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  };
-
-  if (token) {
-    defaultHeaders['Authorization'] = `Bearer ${token}`;
-  }
-
-  const config: RequestInit = {
-    method: options.method || 'GET',
-    headers: {
-      ...defaultHeaders,
-      ...headers,
-    },
-    ...customConfig,
-  };
-
-  try {
-    const response = await fetch(fullUrl, config);
-    
-    let responseData: any = null;
-    const contentType = response.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      responseData = await response.json();
-    } else {
-      responseData = await response.text();
-    }
-
-    if (!response.ok) {
-      throw new ApiError(response.status, response.statusText, responseData);
-    }
-
-    return responseData as T;
-  } catch (error) {
-    if (error instanceof ApiError) {
-      throw error;
-    }
-    // Network errors or aborts
-    throw new Error(error instanceof Error ? error.message : 'Network request failed');
-  }
+  return url.toString();
 }
 
-// Typed base request methods
+function isJsonBody(body: ApiRequestOptions['body']): body is object {
+  return (
+    body !== null &&
+    body !== undefined &&
+    typeof body === 'object' &&
+    !(typeof Blob !== 'undefined' && body instanceof Blob) &&
+    !(typeof FormData !== 'undefined' && body instanceof FormData) &&
+    !(typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) &&
+    !(body instanceof ArrayBuffer) &&
+    !ArrayBuffer.isView(body)
+  );
+}
+
+function buildBody(body: ApiRequestOptions['body']): BodyInit | undefined {
+  if (body === null || body === undefined) {
+    return undefined;
+  }
+
+  return isJsonBody(body) ? JSON.stringify(body) : body;
+}
+
+async function parseResponse(response: Response): Promise<unknown> {
+  if (response.status === 204) {
+    return null;
+  }
+
+  const contentType = response.headers.get('content-type') ?? '';
+  return contentType.includes('application/json') ? response.json() : response.text();
+}
+
+async function request<T>(endpoint: string, options: ApiRequestOptions = {}): Promise<T> {
+  const { params, token, headers, body, ...requestInit } = options;
+  const requestHeaders = new Headers(headers);
+
+  if (!requestHeaders.has('Accept')) {
+    requestHeaders.set('Accept', 'application/json');
+  }
+
+  if (token && !requestHeaders.has('Authorization')) {
+    requestHeaders.set('Authorization', `Bearer ${token}`);
+  }
+
+  if (isJsonBody(body) && !requestHeaders.has('Content-Type')) {
+    requestHeaders.set('Content-Type', 'application/json');
+  }
+
+  const response = await fetch(apiUrl(endpoint, params), {
+    ...requestInit,
+    headers: requestHeaders,
+    body: buildBody(body),
+  });
+
+  const responseBody = await parseResponse(response);
+
+  if (!response.ok) {
+    throw new ApiError(response.status, response.statusText, responseBody);
+  }
+
+  return responseBody as T;
+}
+
 export const apiClient = {
+  request,
+
   get<T>(endpoint: string, options?: ApiRequestOptions): Promise<T> {
     return request<T>(endpoint, { ...options, method: 'GET' });
   },
 
-  post<T>(endpoint: string, body?: unknown, options?: ApiRequestOptions): Promise<T> {
-    return request<T>(endpoint, {
-      ...options,
-      method: 'POST',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+  post<T>(endpoint: string, body?: ApiRequestOptions['body'], options?: ApiRequestOptions): Promise<T> {
+    return request<T>(endpoint, { ...options, method: 'POST', body });
   },
 
-  put<T>(endpoint: string, body?: unknown, options?: ApiRequestOptions): Promise<T> {
-    return request<T>(endpoint, {
-      ...options,
-      method: 'PUT',
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+  put<T>(endpoint: string, body?: ApiRequestOptions['body'], options?: ApiRequestOptions): Promise<T> {
+    return request<T>(endpoint, { ...options, method: 'PUT', body });
+  },
+
+  patch<T>(endpoint: string, body?: ApiRequestOptions['body'], options?: ApiRequestOptions): Promise<T> {
+    return request<T>(endpoint, { ...options, method: 'PATCH', body });
   },
 
   delete<T>(endpoint: string, options?: ApiRequestOptions): Promise<T> {
@@ -112,7 +146,6 @@ export const apiClient = {
   },
 };
 
-// Domain-specific Analyze Service endpoints
 export interface AnalyzeRequest {
   contract_id: string;
   function_name: string;
@@ -131,36 +164,11 @@ export interface AnalyzeWasmRequest {
 }
 
 export const analyzeService = {
-  /**
-   * Profiling a contract invocation by ID
-   * @param req The contract analysis request payload
-   * @param token JWT authorization token (optional)
-   */
-  async analyze(req: AnalyzeRequest, token?: string): Promise<unknown> {
-    return apiClient.post<unknown>('/analyze', req, { token });
+  analyze(req: AnalyzeRequest, token?: string): Promise<AnalyzeResponse> {
+    return apiClient.post<AnalyzeResponse>('/analyze', req, { token });
   },
 
-  /**
-   * Analyze custom WASM file binary bytes
-   * @param req The WASM bytes analysis request payload
-   * @param token JWT authorization token (optional)
-   */
-  async analyzeWasm(req: AnalyzeWasmRequest, token?: string): Promise<unknown> {
-    return apiClient.post<unknown>('/analyze/wasm', req, { token });
+  analyzeWasm(req: AnalyzeWasmRequest, token?: string): Promise<AnalyzeResponse> {
+    return apiClient.post<AnalyzeResponse>('/analyze/wasm', req, { token });
   },
 };
-
-/**
- * Base URL of the SoroScope analyzer backend.
- *
- * Reads from NEXT_PUBLIC_API_URL (baked in at build time) and falls back to
- * localhost for local development, so no env file is needed to run locally.
- * In production, set NEXT_PUBLIC_API_URL to the deployed backend's URL.
- */
-export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080';
-
-/** Build a full backend URL from a path, e.g. apiUrl('/analyze'). */
-export function apiUrl(path: string): string {
-  return `${API_URL}${path.startsWith('/') ? path : `/${path}`}`;
-}
