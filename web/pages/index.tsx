@@ -33,6 +33,9 @@ export default function Home() {
   const handleSimulate = async (inputs: Record<string, any>, customWasmData?: string) => {
     setLoading(true);
     try {
+      const url = activeWasmData ? 'http://localhost:8080/analyze/wasm' : 'http://localhost:8080/analyze';
+      const body = activeWasmData
+        ? {
       const activeWasmData = customWasmData ?? wasmData;
       const report = activeWasmData
         ? await analyzeService.analyzeWasm({
