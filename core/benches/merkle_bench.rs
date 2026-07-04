@@ -46,9 +46,13 @@ fn bench_build(c: &mut Criterion) {
     // 1 M leaves: use a minimal sample count to avoid multi-minute CI runs.
     group.sample_size(10);
     group.throughput(Throughput::Elements(1_000_000));
-    group.bench_with_input(BenchmarkId::new("leaves", 1_000_000), &1_000_000usize, |b, &n| {
-        b.iter(|| build_tree(n));
-    });
+    group.bench_with_input(
+        BenchmarkId::new("leaves", 1_000_000),
+        &1_000_000usize,
+        |b, &n| {
+            b.iter(|| build_tree(n));
+        },
+    );
 
     group.finish();
 }
