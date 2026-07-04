@@ -2,7 +2,6 @@ use crate::parser::ArgParser;
 use crate::rpc_provider::ProviderRegistry;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ed25519_dalek::Signer as Ed25519Signer;
-use moka::future::Cache;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -17,7 +16,6 @@ use soroban_sdk::xdr::{
     WriteXdr,
 };
 use std::collections::HashMap;
-// use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use stellar_strkey::{Contract as StrkeyContract, Strkey};
 use thiserror::Error;

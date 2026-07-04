@@ -3,6 +3,7 @@
 import React, { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { parseWasmError, WasmBackendError } from '../lib/errorHandling';
+import { arrayBufferToBase64 } from '../lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -171,6 +172,7 @@ function ErrorIcon() {
   );
 }
 
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export interface UploadZoneProps {
@@ -180,20 +182,14 @@ export interface UploadZoneProps {
   backendUrl?: string;
   /** Whether to validate with backend after client-side checks */
   enableBackendValidation?: boolean;
-}
-
-export function UploadZone({ onFileReady }: UploadZoneProps) {
   onReset?: () => void;
 }
 
-export function UploadZone({ onFileReady, onReset }: UploadZoneProps) {
-}
-
-export function UploadZone({ onFileReady }: UploadZoneProps) {
-export function UploadZone({ 
-  onFileReady, 
+export function UploadZone({
+  onFileReady,
+  onReset,
   backendUrl = 'http://localhost:8080/analyze/wasm',
-  enableBackendValidation = true 
+  enableBackendValidation = true
 }: UploadZoneProps) {
   const [uploadState, setUploadState] = useState<UploadState>('idle');
   const [droppedFile, setDroppedFile] = useState<DroppedFile | null>(null);
@@ -218,13 +214,8 @@ export function UploadZone({
             const arrayBuffer = event.target?.result as ArrayBuffer;
             if (!arrayBuffer) throw new Error('Failed to read file');
 
-            // Convert to base64 for backend submission
-            const bytes = new Uint8Array(arrayBuffer);
-            let binary = '';
-            for (let i = 0; i < bytes.byteLength; i++) {
-              binary += String.fromCharCode(bytes[i]);
-            }
-            const base64Data = btoa(binary);
+            // Convert to base64 for backend submission using chunked encoding.
+            const base64Data = arrayBufferToBase64(arrayBuffer);
 
             const response = await fetch(backendUrl, {
               method: 'POST',
@@ -361,6 +352,7 @@ export function UploadZone({
             }
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : 'Failed to parse WASM metadata';
+            alert(errorMsg);
             setErrorMessage(errorMsg);
             setErrorDetails({
               title: 'Invalid WASM File',
@@ -407,13 +399,11 @@ export function UploadZone({
     const fileName = first?.file?.name ?? 'file';
     const ext = fileName.includes('.') ? `.${fileName.split('.').pop()}` : 'unknown type';
     const customMessage = first?.errors?.[0]?.message;
-    setErrorMessage(
-      customMessage || `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`
-    setErrorMessage(
-      `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`
-    );
-    const errorMsg = `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
+    const errorMsg = customMessage || `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
     setErrorMessage(errorMsg);
+    const errorMsg = `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
+    alert(customMessage || errorMsg);
+    setErrorMessage(customMessage || errorMsg);
     setErrorDetails({
       title: 'Invalid File Type',
       message: errorMsg,
@@ -453,7 +443,6 @@ export function UploadZone({
     },
     onDragEnter,
     onDragLeave,
-    accept: { 'application/wasm': ['.wasm'] },
     maxFiles: 1,
     noClick: uploadState === 'scanning',
     noDrag: uploadState === 'scanning',
@@ -662,45 +651,6 @@ export function UploadZone({
     </div>
   );
 }
-'use client';
-
-import React, { useCallback, useState } from 'react';
-import { useDropzone, FileRejection } from 'react-dropzone';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type UploadState = 'idle' | 'hover' | 'scanning' | 'success' | 'error';
-
-interface DroppedFile {
-  name: string;
-  sizeBytes: number;
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-}
-
-const MAX_WASM_SIZE = 5 * 1024 * 1024; // 5 MB — Soroban contract size ceiling
-const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d]; // \0asm
-
-function hasWasmMagic(buffer: ArrayBuffer): boolean {
-  const bytes = new Uint8Array(buffer, 0, 4);
-  return WASM_MAGIC.every((b, i) => bytes[i] === b);
-}
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-/** Animated WASM hex-grid icon */
-function WasmIcon({ state }: { state: UploadState }) {
-  const isActive = state === 'hover' || state === 'scanning' || state === 'success';
-  return (
-    <svg
-      width="64"
-      height="64"
       viewBox="0 0 64 64"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"

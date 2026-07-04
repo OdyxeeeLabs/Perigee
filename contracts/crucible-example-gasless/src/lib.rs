@@ -77,10 +77,9 @@ impl Gasless {
         }
 
         // Nonce check — must match the stored next-nonce for this user.
-        // Persistent storage survives ledger archival so nonces are never lost.
         let expected_nonce: u64 = env
             .storage()
-            .persistent()
+            .instance()
             .get(&DataKey::Nonce(meta_tx.from.clone()))
             .unwrap_or(0u64);
         if meta_tx.nonce != expected_nonce {
@@ -90,12 +89,10 @@ impl Gasless {
         // Require the user's authorization (attached by the relayer).
         meta_tx.from.require_auth();
 
-        // Advance nonce atomically before the transfer so a re-entrant call
-        // with the same nonce is rejected even if the token transfer panics.
-        let next_nonce = expected_nonce + 1;
+        // Advance nonce.
         env.storage()
-            .persistent()
-            .set(&DataKey::Nonce(meta_tx.from.clone()), &next_nonce);
+            .instance()
+            .set(&DataKey::Nonce(meta_tx.from.clone()), &(expected_nonce + 1));
 
         // Execute the transfer.
         token::Client::new(&env, &meta_tx.token).transfer(
@@ -113,7 +110,7 @@ impl Gasless {
     /// Return the current nonce for `user` (the next expected nonce).
     pub fn nonce(env: Env, user: Address) -> u64 {
         env.storage()
-            .persistent()
+            .instance()
             .get(&DataKey::Nonce(user))
             .unwrap_or(0u64)
     }
