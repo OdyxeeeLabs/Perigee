@@ -3,6 +3,9 @@ use emergency_guard::PauseType;
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
 
 // ── Existing Tests ─────────────────────────────────────────────────────────────
+use emergency_guard::{GuardError, PauseType};
+use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
+use soroban_sdk::{testutils::Address as _, Address, Env, String, vec, Vec};
 
 #[test]
 fn test_mint_and_transfer() {
