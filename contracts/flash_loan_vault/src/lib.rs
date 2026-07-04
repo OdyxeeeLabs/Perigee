@@ -19,7 +19,7 @@
 //!
 //! ```text
 //! 1. if BorrowPaused → Err(BorrowPaused)
-//! 2. check_not_paused()
+//! 2. check_not_paused(PauseType::BORROW)
 //! 3. if FlashLoanActive → Err(Reentrancy)
 //! 4. set FlashLoanActive = true
 //! 5. pre_balance = token.balance(self)
@@ -32,7 +32,7 @@
 //! 12. emit FlashLoanEvent
 //! ```
 
-use emergency_guard::EmergencyGuard;
+use emergency_guard::{EmergencyGuard, PauseType};
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec};
 
 #[cfg(test)]
@@ -149,13 +149,10 @@ pub const MAX_FEE_BPS: i128 = 100;
 /// Default fee: 0 bps (free flash loans).
 pub const DEFAULT_FEE_BPS: i128 = 0;
 
-/// Pause type flag for flash loan operations (bit 6, after existing flags).
-pub const FLASH_LOAN_PAUSE_FLAG: u32 = 1 << 6;
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn check_not_paused(e: &Env) -> Result<(), Error> {
-    if EmergencyGuard::is_paused(e.clone(), FLASH_LOAN_PAUSE_FLAG) {
+fn check_not_paused(e: &Env, operation: u32) -> Result<(), Error> {
+    if EmergencyGuard::is_paused(e.clone(), operation) {
         Err(Error::Paused)
     } else {
         Ok(())
@@ -372,7 +369,7 @@ impl FlashLoanVault {
     pub fn set_paused(e: Env, admin: Address, paused: bool) -> Result<(), Error> {
         check_no_flash_loan_active(&e)?;
 
-        EmergencyGuard::set_pause(e, admin, FLASH_LOAN_PAUSE_FLAG, paused)
+        EmergencyGuard::set_pause(e, admin, PauseType::BORROW, paused)
             .map_err(|_| Error::Unauthorized)
     }
 
@@ -435,7 +432,7 @@ impl FlashLoanVault {
         }
 
         // 1. Pause check.
-        check_not_paused(&e)?;
+        check_not_paused(&e, PauseType::BORROW)?;
 
         // 2. Validate amount.
         if amount <= 0 {
@@ -510,8 +507,13 @@ impl FlashLoanVault {
     /// returning. Stores a temporary `BorrowRecord` with `fee` and
     /// `total_repayment` while the callback executes.
     pub fn borrow(e: Env, borrower: Address, amount: i128) -> Result<i128, Error> {
+        // Granular pause check: BORROW only.
+        if is_borrow_paused(&e) {
+            return Err(Error::BorrowPaused);
+        }
+
         // 1. Pause check.
-        check_not_paused(&e)?;
+        check_not_paused(&e, PauseType::BORROW)?;
 
         // 2. Validate amount > 0.
         if amount <= 0 {
