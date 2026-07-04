@@ -24,16 +24,7 @@ mod ws;
 use crate::cache::{ContractCache, SimulationCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
 use crate::errors::AppError;
-use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
-use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
-use crate::fee_store::FeeStore;
-use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
-use crate::insights::InsightsEngine;
-use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
 use crate::merkle_tree::MerkleTree;
-use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
-use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
-use crate::ws::SimulationBus;
 use axum::{
     extract::{Json, Multipart, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
@@ -50,6 +41,17 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
+// CLI Argument Handling
+use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
+use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
+use crate::fee_store::FeeStore;
+use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
+use crate::insights::InsightsEngine;
+use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
+use crate::merkle_tree::MerkleTree;
+use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
+use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
+use crate::ws::SimulationBus;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -181,7 +183,6 @@ fn default_fee_analysis_enabled() -> bool {
 fn default_emergency_verification_paused() -> bool {
     false
 }
-
 fn default_disk_cache_path() -> String {
     // Empty == L2 disabled. Operators who want persistence set this in
     // env / config.toml explicitly; we don't create a hidden directory
@@ -879,16 +880,15 @@ async fn analyze(
                 tracing::warn!("No ledger entries available for Merkle tree generation");
                 None
             } else {
+                let mut tree = MerkleTree::new(256);
                 let mut tree = MerkleTree::new(32);
-                match tree.build(leaves) {
-                    Ok(()) => {
-                        tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count());
-                        Some(tree.get_root_hex())
-                    }
-                    Err(err) => {
-                        tracing::error!("Failed to generate Merkle tree: {}", err);
-                        None
-                    }
+                if let Err(e) = tree.build(leaves) {
+                    tracing::error!("Failed to generate Merkle tree: {}", e);
+                    None
+                } else {
+                    tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count);
+                    tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count());
+                    Some(tree.get_root_hex())
                 }
             }
         })
@@ -1610,12 +1610,6 @@ async fn main() {
     );
 
     let args: Vec<String> = env::args().collect();
-    let db_path =
-        env::var("SOROSCOPE_DB_PATH").unwrap_or_else(|_| "soroscope_metrics.db".to_string());
-    let webhook_url = env::var("SOROSCOPE_ALERT_WEBHOOK_URL").ok();
-    let simulation_service = Arc::new(
-        SimulationService::new(db_path, webhook_url).expect("initialize simulation service"),
-    );
 
     if args.len() > 1 && args[1] == "benchmark" {
         tracing::info!("Starting SoroScope Benchmark...");
@@ -1635,9 +1629,13 @@ async fn main() {
         }
 
         if let Some(path) = wasm_path {
-            if let Err(e) = benchmarks::run_token_benchmark(path, simulation_service.as_ref()).await
-            {
-                eprintln!("Benchmark failed: {}", e);
+            let db_path = env::var("SOROSCOPE_DB_PATH")
+                .unwrap_or_else(|_| "soroscope_metrics.db".to_string());
+            let webhook_url = env::var("SOROSCOPE_ALERT_WEBHOOK_URL").ok();
+            let simulation_service = SimulationService::new(db_path, webhook_url)
+                .expect("initialize simulation service");
+            if let Err(e) = benchmarks::run_token_benchmark(path, &simulation_service).await {
+                tracing::error!("Benchmark failed: {}", e);
             }
         } else {
             tracing::error!(
@@ -1651,10 +1649,9 @@ async fn main() {
     // ── CLI: merkle subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "merkle" {
         if args.len() < 4 {
-            eprintln!("Usage: soroscope-core merkle <build|build-file|proof> <args>");
+            eprintln!("Usage: soroscope-core merkle <build|proof> <args>");
             eprintln!("Commands:");
-            eprintln!("  build <leaf1> <leaf2> ...              Build a Merkle tree and print the root hash");
-            eprintln!("  build-file <file>                      Build a Merkle tree from a newline-delimited leaf file");
+            eprintln!("  build <leaf1> <leaf2> ...            Build a Merkle tree and print the root hash");
             eprintln!("  proof <leaf_index> <leaf1> <leaf2> ... Generate a Merkle proof for the given leaf index");
             std::process::exit(1);
         }
@@ -1717,41 +1714,9 @@ async fn main() {
                 });
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             }
-            "build-file" => {
-                if args.len() < 4 {
-                    eprintln!("Usage: soroscope-core merkle build-file <file>");
-                    eprintln!("  Each non-empty line in <file> is treated as a leaf value.");
-                    std::process::exit(1);
-                }
-                let file_path = &args[3];
-                let content = match std::fs::read_to_string(file_path) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("Error reading {}: {}", file_path, e);
-                        std::process::exit(1);
-                    }
-                };
-                let leaves: Vec<Vec<u8>> = content
-                    .lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .map(|l| l.as_bytes().to_vec())
-                    .collect();
-                if leaves.is_empty() {
-                    eprintln!("Error: file contains no leaf values.");
-                    std::process::exit(1);
-                }
-                let mut tree = merkle_tree::MerkleTree::new(32);
-                match tree.build(leaves) {
-                    Ok(()) => println!("{}", tree.get_root_hex()),
-                    Err(err) => {
-                        eprintln!("Error building Merkle tree: {}", err);
-                        std::process::exit(1);
-                    }
-                }
-            }
             unknown => {
                 eprintln!("Unknown merkle command: {}", unknown);
-                eprintln!("Available commands: build, build-file, proof");
+                eprintln!("Available commands: build, proof");
                 std::process::exit(1);
             }
         }
@@ -1762,21 +1727,6 @@ async fn main() {
     // Default Web Server
     println!("SoroScope CLI Initialized. Run with 'benchmark' argument to profile token contract.");
 
-    // build our application with a single route
-    let _default_app: Router<Arc<SimulationService>> = Router::new()
-        .route(
-            "/",
-            get(|| async {
-                "Hello from SoroScope! Use POST /simulations/analyze to persist + compare simulation metrics."
-            }),
-        )
-        .route("/health", get(|| async { "ok" }))
-        .route(
-            "/error",
-            get(|| async { Err::<&str, AppError>(AppError::BadRequest("Test error".to_string())) }),
-        )
-        .route("/simulations/analyze", post(analyze_simulation))
-        .with_state(simulation_service.clone());
     // ── CLI: compare subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "compare" {
         if args.len() < 4 {
@@ -2262,7 +2212,7 @@ mod tests {
         };
 
         let insights_engine = InsightsEngine::new();
-        let report = to_report(&sim_result, &insights_engine);
+        let report = to_report(&sim_result, &insights_engine, None);
 
         assert_eq!(report.cost_stroops, 5000);
         assert_eq!(report.cpu_instructions, 1000000);
