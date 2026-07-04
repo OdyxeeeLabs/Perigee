@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::*;
 use crate::chain_info::BridgeEndpoint;
 use crate::payload::{EncodedPayload, PayloadBatch, PayloadRoute};
 use crate::signatures::{RecoveryKey, SignatureScheme};
@@ -9,6 +10,7 @@ use soroban_sdk::{Bytes, BytesN, Env, String, Symbol, Vec};
 
 #[test]
 fn test_chain_info_creation() {
+    let bridge_contract = BytesN::from_array(&[0u8; 32]);
     let e = Env::default();
 
     let bridge_contract = BytesN::from_array(&e, &[0u8; 32]);
@@ -29,6 +31,7 @@ fn test_chain_info_creation() {
 
 #[test]
 fn test_bridge_endpoint_creation() {
+    let bridge_contract = BytesN::from_array(&[0u8; 32]);
     let e = Env::default();
     let bridge_contract = BytesN::from_array(&e, &[0u8; 32]);
 
@@ -64,6 +67,9 @@ fn test_bridge_endpoint_creation() {
 
 #[test]
 fn test_cross_chain_payload_creation() {
+    let payload_id = BytesN::from_array(&[1u8; 32]);
+    let nonce = BytesN::from_array(&[2u8; 32]);
+    let payload_hash = BytesN::from_array(&[3u8; 32]);
     let e = Env::default();
     let payload_id = BytesN::from_array(&e, &[1u8; 32]);
     let nonce = BytesN::from_array(&e, &[2u8; 32]);
@@ -77,6 +83,9 @@ fn test_cross_chain_payload_creation() {
         nonce,
     };
 
+    let sender = Bytes::new(&soroban_sdk::Env::default());
+    let recipient = Bytes::new(&soroban_sdk::Env::default());
+    let data = Bytes::new(&soroban_sdk::Env::default());
     let sender = Bytes::new(&e);
     let recipient = Bytes::new(&e);
     let data = Bytes::new(&e);
@@ -101,6 +110,8 @@ fn test_cross_chain_payload_creation() {
 
 #[test]
 fn test_payload_batch_creation() {
+    let batch_id = BytesN::from_array(&[4u8; 32]);
+    let merkle_root = BytesN::from_array(&[5u8; 32]);
     let e = Env::default();
     let batch_id = BytesN::from_array(&e, &[4u8; 32]);
     let merkle_root = BytesN::from_array(&e, &[5u8; 32]);
@@ -120,6 +131,7 @@ fn test_payload_batch_creation() {
 
 #[test]
 fn test_verification_result_creation() {
+    let error_msg = String::from_small_str("test error");
     let e = Env::default();
     let error_msg = String::from_str(&e, "test error");
 
@@ -191,6 +203,9 @@ fn test_payload_route_creation() {
 
 #[test]
 fn test_encoded_payload_creation() {
+    let encoded_data = Bytes::new(&soroban_sdk::Env::default());
+    let encoding_scheme = String::from_small_str("borsh");
+    let compression_type = String::from_small_str("gzip");
     let e = Env::default();
     let encoded_data = Bytes::new(&e);
     let encoding_scheme = String::from_str(&e, "borsh");
@@ -210,6 +225,7 @@ fn test_encoded_payload_creation() {
 
 #[test]
 fn test_recovery_key_creation() {
+    let compressed_key = BytesN::from_array(&[6u8; 33]);
     let e = Env::default();
     let compressed_key = BytesN::from_array(&e, &[6u8; 33]);
 

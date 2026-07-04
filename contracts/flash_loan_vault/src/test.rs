@@ -339,7 +339,7 @@ fn test_set_fee_invalid() {
 // ── Granular borrow pause (Issue #320) ───────────────────────────────────────
 
 #[test]
-fn test_borrow_pause_blocks_flash_loan_and_resume_allows() {
+fn test_borrow_pause_blocks_flash_loan_and_borrow_and_resume_allows() {
     let s = setup();
     fund_vault(&s, 10_000);
 
@@ -352,17 +352,29 @@ fn test_borrow_pause_blocks_flash_loan_and_resume_allows() {
     s.vault_client.pause_borrow();
     assert_eq!(s.vault_client.get_borrow_paused(), true);
 
+    // While paused, flash-loan style borrows must fail with BorrowPaused.
+    let flash_loan_res = s
+        .vault_client
+        .try_flash_loan(&initiator, &receiver_id, &5_000);
+    assert_eq!(flash_loan_res, Err(Ok(Error::BorrowPaused)));
     // While paused, borrowing must fail with BorrowPaused.
     let res = s
         .vault_client
         .try_flash_loan(&initiator, &receiver_id, &5_000);
     assert_eq!(res, Err(Ok(Error::BorrowPaused)));
 
-    // Resume and borrowing works again.
+    let borrow_res = s.vault_client.try_borrow(&receiver_id, &5_000);
+    assert_eq!(borrow_res, Err(Ok(Error::BorrowPaused)));
+
+    // Resume and both borrowing entrypoints work again.
     s.vault_client.resume_borrow();
     assert_eq!(s.vault_client.get_borrow_paused(), false);
-    let fee = s.vault_client.flash_loan(&initiator, &receiver_id, &5_000);
-    assert_eq!(fee, 0);
+
+    let flash_loan_fee = s.vault_client.flash_loan(&initiator, &receiver_id, &5_000);
+    assert_eq!(flash_loan_fee, 0);
+
+    let borrow_fee = s.vault_client.borrow(&receiver_id, &5_000);
+    assert_eq!(borrow_fee, 0);
 }
 
 #[test]

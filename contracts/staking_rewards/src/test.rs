@@ -232,8 +232,8 @@ fn test_emergency_withdraw() {
     // Verify rewards accrued
     assert!(client.get_pending_rewards(&user) > 0);
 
-    // Pause contract to simulate extreme conditions
-    client.set_paused(&true);
+    // Pause staking to simulate extreme conditions
+    client.pause_staking();
 
     // Emergency withdraw should succeed even when paused
     let withdrawn = client.emergency_withdraw(&user);
@@ -258,7 +258,7 @@ fn test_pause_safeguards_stake() {
     let staking_client = token::StellarAssetClient::new(&e, &staking_token);
     staking_client.mint(&user, &STAKE_AMOUNT);
 
-    client.set_paused(&true);
+    client.pause_staking();
     client.stake(&user, &STAKE_AMOUNT);
 }
 
@@ -272,7 +272,7 @@ fn test_pause_safeguards_withdraw() {
     staking_client.mint(&user, &STAKE_AMOUNT);
 
     client.stake(&user, &STAKE_AMOUNT);
-    client.set_paused(&true);
+    client.pause_staking();
     client.withdraw(&user, &STAKE_AMOUNT);
 }
 
@@ -286,7 +286,7 @@ fn test_pause_safeguards_claim() {
     staking_client.mint(&user, &STAKE_AMOUNT);
 
     client.stake(&user, &STAKE_AMOUNT);
-    client.set_paused(&true);
+    client.pause_staking();
     client.claim(&user);
 }
 
@@ -446,6 +446,45 @@ fn test_complete_withdrawal_state_cleanup() {
 
     // Verify user state is cleaned up (no pending rewards)
     assert_eq!(client.get_pending_rewards(&user), 0);
+}
+
+#[test]
+fn test_granular_pause_staking() {
+    let (e, client, _owner, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    // Verify staking is not paused initially
+    assert!(!client.is_staking_paused());
+
+    // Stake should work when not paused
+    client.stake(&user, &STAKE_AMOUNT);
+    assert_eq!(client.get_staked_balance(&user), STAKE_AMOUNT);
+
+    // Pause staking
+    client.pause_staking();
+
+    // Verify staking is paused
+    assert!(client.is_staking_paused());
+
+    // Stake should fail when paused
+    let result = client.try_stake(&user, &STAKE_AMOUNT);
+    assert!(result.is_err());
+
+    // Resume staking
+    client.resume_staking();
+
+    // Verify staking is not paused
+    assert!(!client.is_staking_paused());
+
+    // Mint more tokens for second stake
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    // Stake should work again after resume
+    client.stake(&user, &STAKE_AMOUNT);
+    assert_eq!(client.get_staked_balance(&user), STAKE_AMOUNT * 2);
     client.stake(&user, &STAKE_AMOUNT);
     advance_ledger(&e, 5);
 
