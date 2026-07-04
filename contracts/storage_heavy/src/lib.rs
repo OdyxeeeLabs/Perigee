@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, Bytes, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, Bytes, Env, Symbol, Vec, Map};
 
 #[cfg(test)]
 mod test;
@@ -177,6 +177,41 @@ impl StorageHeavyContract {
             mask &= !(1 << flag_idx);
         }
         env.storage().persistent().set(&key, &mask);
+    }
+
+    /// Write boolean values using a Map<u32, bool> in persistent storage.
+    pub fn write_map_booleans(env: Env, key: Symbol, values: Vec<bool>) {
+        let mut map: Map<u32, bool> = Map::new(&env);
+        for i in 0..values.len() {
+            map.set(i, values.get(i).unwrap());
+        }
+        env.storage().persistent().set(&key, &map);
+    }
+
+    /// Read boolean values using a Map<u32, bool> from persistent storage.
+    pub fn read_map_booleans(env: Env, key: Symbol, len: u32) -> Vec<bool> {
+        let map: Map<u32, bool> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Map::new(&env));
+        
+        let mut results = Vec::new(&env);
+        for i in 0..len {
+            results.push_back(map.get(i).unwrap_or(false));
+        }
+        results
+    }
+
+    /// Update a single boolean flag in a Map<u32, bool> stored under a single key.
+    pub fn update_map_boolean(env: Env, key: Symbol, flag_idx: u32, value: bool) {
+        let mut map: Map<u32, bool> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Map::new(&env));
+        map.set(flag_idx, value);
+        env.storage().persistent().set(&key, &map);
     }
 }
 
