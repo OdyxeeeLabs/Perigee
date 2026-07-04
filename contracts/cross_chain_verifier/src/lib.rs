@@ -37,6 +37,8 @@ pub enum DataKey {
     SignerCount,
     ProcessedMessages(BytesN<32>),
     ProcessedNonce(u64),
+    /// Whether verification is paused (PauseType::VERIFY)
+    VerifyPaused,
 }
 
 #[contract]
@@ -50,6 +52,23 @@ impl CrossChainVerifier {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().persistent().set(&DataKey::SignerCount, &0u32);
+    }
+
+    /// Admin-only: pause or unpause all verification operations.
+    pub fn set_paused(env: Env, paused: bool) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::VerifyPaused, &paused);
+    }
+
+    /// Returns true if verification is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::VerifyPaused)
+            .unwrap_or(false)
     }
 
     pub fn update_root(env: Env, block_height: u32, new_root: BytesN<32>) {
@@ -138,6 +157,10 @@ impl CrossChainVerifier {
         proof: Vec<BytesN<32>>,
         proof_flags: Vec<bool>,
     ) -> bool {
+        if Self::is_paused(env.clone()) {
+            panic!("verification paused");
+        }
+
         if !Self::verify_signature(&env, &signed_message) {
             return false;
         }
@@ -163,6 +186,9 @@ impl CrossChainVerifier {
         proof: Vec<BytesN<32>>,
         proof_flags: Vec<bool>,
     ) -> bool {
+        if Self::is_paused(env.clone()) {
+            return false;
+        }
         Self::verify_merkle_proof(&env, &leaf, &block_height, &proof, &proof_flags)
     }
 
@@ -174,6 +200,10 @@ impl CrossChainVerifier {
         proof: Vec<BytesN<32>>,
         proof_flags: Vec<bool>,
     ) -> bool {
+        if Self::is_paused(env.clone()) {
+            panic!("verification paused");
+        }
+
         if Self::is_nonce_processed(env.clone(), nonce) {
             panic!("nonce already processed");
         }
