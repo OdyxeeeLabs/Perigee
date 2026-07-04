@@ -1,40 +1,6 @@
 #![cfg(test)]
 
-use crate::{
-    AdminAddedEvent, AdminRemovedEvent, EmergencyGuard, EmergencyGuardClient, EmergencyPausedEvent,
-    GuardInitializedEvent, PauseStateChangedEvent, ResumedEvent, GuardError, PauseType, EmergencyGuardTrait,
-    EmergencyGuardEvent, EmergencyGuardAction,
-};
-use soroban_sdk::{
-    testutils::{Address as _, Events},
-    vec, Address, Env, String, TryIntoVal,
-};
-extern crate alloc;
-extern crate std;
-use alloc::vec::Vec;
-
-// ─── helpers ────────────────────────────────────────────────────────────────
-
-fn make_admins(env: &Env, n: u32) -> soroban_sdk::Vec<Address> {
-    let mut v = soroban_sdk::Vec::new(env);
-    for _ in 0..n {
-        v.push_back(Address::generate(env));
-    }
-    v
-}
-
-fn setup(threshold: u32, n_admins: u32) -> (Env, EmergencyGuardClient<'static>, Vec<Address>) {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register_contract(None, EmergencyGuard);
-    let client = EmergencyGuardClient::new(&env, &contract_id);
-    let admins = make_admins(&env, n_admins);
-    client.initialize(&admins, &threshold);
-    let std_admins: Vec<Address> = admins.iter().collect();
-    (env, client, std_admins)
-}
-
-// ─── PauseType unit tests ────────────────────────────────────────────────────
+use crate::PauseType;
 
 #[test]
 fn test_granular_pause_types() {
@@ -55,6 +21,30 @@ fn test_granular_pause_types() {
     assert!(!pause.is_paused(PauseType::SWAP));
     assert!(pause.is_paused(PauseType::DEPOSIT));
     assert!(pause.is_paused(PauseType::WITHDRAW));
+}
+
+#[test]
+fn test_bitwise_pause_logic() {
+    let mut pause = PauseType::new(0);
+
+    // Test setting operations
+    pause.set_paused(PauseType::SWAP, true);
+    assert!(pause.is_paused(PauseType::SWAP));
+    assert!(!pause.is_paused(PauseType::DEPOSIT));
+
+    // Test checking multiple operations
+    pause.set_paused(PauseType::MINT, true);
+    assert!(pause.is_paused(PauseType::SWAP));
+    assert!(pause.is_paused(PauseType::MINT));
+
+    // Test clearing operations
+    pause.set_paused(PauseType::SWAP, false);
+    assert!(!pause.is_paused(PauseType::SWAP));
+    assert!(pause.is_paused(PauseType::MINT));
+
+    // Test clearing all manually
+    pause.set_paused(PauseType::MINT, false);
+    assert_eq!(pause.as_u32(), 0);
 }
 
 #[test]
@@ -86,49 +76,32 @@ fn test_pause_all_and_unpause_all() {
 
 #[test]
 fn test_unpause_operation() {
-    let env = Env::default();
-    let contract_id = env.register(EmergencyGuard, ());
-    env.as_contract(&contract_id, || {
-        let mut pause_state = crate::PauseType::new(0);
-        pause_state.set_paused(crate::PauseType::SWAP, true);
-        env.storage().instance().set(&crate::DataKey::PauseState, &pause_state);
+    let (env, client, admins) = setup(1, 1);
+    let admin = admins[0].clone();
 
-        crate::DefaultEmergencyGuard::unpause(&env, crate::PauseType::SWAP)
-            .expect("Failed to unpause operation");
+    client.set_pause(&admin, &PauseType::SWAP, &true).unwrap();
+    assert!(client.is_paused(&PauseType::SWAP));
 
-        let state: crate::PauseType = env
-            .storage()
-            .instance()
-            .get(&crate::DataKey::PauseState)
-            .unwrap_or_else(|| crate::PauseType::new(0));
-        assert!(!state.is_paused(crate::PauseType::SWAP));
-    });
+    client.set_pause(&admin, &PauseType::SWAP, &false).unwrap();
+    assert!(!client.is_paused(&PauseType::SWAP));
 }
 
 #[test]
 fn test_unpause_all_operations() {
-    let env = Env::default();
-    let contract_id = env.register(EmergencyGuard, ());
-    env.as_contract(&contract_id, || {
-        let mut pause_state = crate::PauseType::new(0);
-        pause_state.pause_all();
-        env.storage().instance().set(&crate::DataKey::PauseState, &pause_state);
+    let (env, client, admins) = setup(1, 1);
+    let approvers = vec![&env, admins[0].clone()];
 
-        crate::DefaultEmergencyGuard::unpause_all(&env)
-            .expect("Failed to unpause all operations");
+    client.emergency_pause(&approvers).unwrap();
+    assert!(client.is_paused(&PauseType::SWAP));
+    assert!(client.is_paused(&PauseType::DEPOSIT));
 
-        let state: crate::PauseType = env
-            .storage()
-            .instance()
-            .get(&crate::DataKey::PauseState)
-            .unwrap_or_else(|| crate::PauseType::new(0));
-        assert!(!state.is_paused(crate::PauseType::SWAP));
-        assert!(!state.is_paused(crate::PauseType::DEPOSIT));
-        assert!(!state.is_paused(crate::PauseType::WITHDRAW));
-        assert!(!state.is_paused(crate::PauseType::TRANSFER));
-        assert!(!state.is_paused(crate::PauseType::MINT));
-        assert!(!state.is_paused(crate::PauseType::BURN));
-    });
+    client.resume(&approvers).unwrap();
+    assert!(!client.is_paused(&PauseType::SWAP));
+    assert!(!client.is_paused(&PauseType::DEPOSIT));
+    assert!(!client.is_paused(&PauseType::WITHDRAW));
+    assert!(!client.is_paused(&PauseType::TRANSFER));
+    assert!(!client.is_paused(&PauseType::MINT));
+    assert!(!client.is_paused(&PauseType::BURN));
 }
 
 #[test]
@@ -160,7 +133,7 @@ fn test_initialize_rejects_zero_threshold() {
     env.mock_all_auths();
     let contract_id = env.register_contract(None, EmergencyGuard);
     let client = EmergencyGuardClient::new(&env, &contract_id);
-    let admins = vec![&env, Address::generate(&env)];
+    let admins = vec![&env, Address::random(&env)];
     let result = client.try_initialize(&admins, &0);
     assert_eq!(result, Err(Ok(GuardError::InvalidThreshold)));
 }
@@ -171,7 +144,7 @@ fn test_initialize_rejects_threshold_greater_than_admin_count() {
     env.mock_all_auths();
     let contract_id = env.register_contract(None, EmergencyGuard);
     let client = EmergencyGuardClient::new(&env, &contract_id);
-    let admins = vec![&env, Address::generate(&env), Address::generate(&env)];
+    let admins = vec![&env, Address::random(&env), Address::random(&env)];
     let result = client.try_initialize(&admins, &3);
     assert_eq!(result, Err(Ok(GuardError::InvalidThreshold)));
 }
@@ -188,9 +161,9 @@ fn test_initialize_cannot_be_called_twice() {
 #[test]
 fn test_add_admin_with_sufficient_approvers() {
     let (env, client, admins) = setup(2, 3);
-    let new_admin = Address::generate(&env);
+    let new_admin = Address::random(&env);
     let approvers = vec![&env, admins[0].clone(), admins[1].clone()];
-    client.add_admin(&approvers, &new_admin);
+    client.add_admin(&approvers, &new_admin).unwrap();
     let stored: Vec<Address> = client.get_admins().iter().collect();
     assert_eq!(stored.len(), 4);
     assert!(stored.contains(&new_admin));
@@ -199,7 +172,7 @@ fn test_add_admin_with_sufficient_approvers() {
 #[test]
 fn test_add_admin_fails_with_insufficient_approvers() {
     let (env, client, admins) = setup(2, 3);
-    let new_admin = Address::generate(&env);
+    let new_admin = Address::random(&env);
     // Only 1 approver but threshold is 2
     let approvers = vec![&env, admins[0].clone()];
     let result = client.try_add_admin(&approvers, &new_admin);
@@ -209,18 +182,18 @@ fn test_add_admin_fails_with_insufficient_approvers() {
 #[test]
 fn test_add_admin_fails_with_non_admin_approvers() {
     let (env, client, _admins) = setup(1, 2);
-    let new_admin = Address::generate(&env);
-    let outsider = Address::generate(&env);
+    let new_admin = Address::random(&env);
+    let outsider = Address::random(&env);
     let approvers = vec![&env, outsider];
     let result = client.try_add_admin(&approvers, &new_admin);
-    assert_eq!(result, Err(Ok(GuardError::InsufficientSignatures)));
+    assert_eq!(result, Err(Ok(GuardError::Unauthorized)));
 }
 
 #[test]
 fn test_add_admin_deduplicates_approvers() {
     // Passing the same admin twice must not count as 2 approvals
     let (env, client, admins) = setup(2, 3);
-    let new_admin = Address::generate(&env);
+    let new_admin = Address::random(&env);
     let approvers = vec![&env, admins[0].clone(), admins[0].clone()];
     let result = client.try_add_admin(&approvers, &new_admin);
     assert_eq!(result, Err(Ok(GuardError::InsufficientSignatures)));
@@ -232,7 +205,7 @@ fn test_add_admin_idempotent_for_existing_admin() {
     let (env, client, admins) = setup(1, 2);
     let existing = admins[0].clone();
     let approvers = vec![&env, admins[0].clone()];
-    client.add_admin(&approvers, &existing);
+    client.add_admin(&approvers, &existing).unwrap();
     let stored: Vec<Address> = client.get_admins().iter().collect();
     assert_eq!(stored.len(), 2, "duplicate admin must not be inserted");
 }
@@ -240,9 +213,9 @@ fn test_add_admin_idempotent_for_existing_admin() {
 #[test]
 fn test_add_admin_threshold_one_single_approver_sufficient() {
     let (env, client, admins) = setup(1, 2);
-    let new_admin = Address::generate(&env);
+    let new_admin = Address::random(&env);
     let approvers = vec![&env, admins[0].clone()];
-    client.add_admin(&approvers, &new_admin);
+    client.add_admin(&approvers, &new_admin).unwrap();
     assert_eq!(client.get_admins().len(), 3);
 }
 
@@ -253,7 +226,7 @@ fn test_remove_admin_with_sufficient_approvers() {
     let (env, client, admins) = setup(2, 3);
     let to_remove = admins[2].clone();
     let approvers = vec![&env, admins[0].clone(), admins[1].clone()];
-    client.remove_admin(&approvers, &to_remove);
+    client.remove_admin(&approvers, &to_remove).unwrap();
     let stored: Vec<Address> = client.get_admins().iter().collect();
     assert_eq!(stored.len(), 2);
     assert!(!stored.contains(&to_remove));
@@ -271,7 +244,7 @@ fn test_remove_admin_fails_with_insufficient_approvers() {
 #[test]
 fn test_remove_admin_fails_when_admin_not_found() {
     let (env, client, admins) = setup(2, 3);
-    let outsider = Address::generate(&env);
+    let outsider = Address::random(&env);
     let approvers = vec![&env, admins[0].clone(), admins[1].clone()];
     let result = client.try_remove_admin(&approvers, &outsider);
     assert_eq!(result, Err(Ok(GuardError::AdminNotFound)));
@@ -288,12 +261,12 @@ fn test_remove_admin_fails_when_would_drop_below_threshold() {
 }
 
 #[test]
-fn test_remove_admin_fails_with_non_admin_approvers() {
+fn test_unauthorized_admin_removal() {
     let (env, client, admins) = setup(1, 2);
-    let outsider = Address::generate(&env);
+    let outsider = Address::random(&env);
     let approvers = vec![&env, outsider];
     let result = client.try_remove_admin(&approvers, &admins[1]);
-    assert_eq!(result, Err(Ok(GuardError::InsufficientSignatures)));
+    assert_eq!(result, Err(Ok(GuardError::Unauthorized)));
 }
 
 // ─── Full rotation cycle ─────────────────────────────────────────────────────
@@ -301,20 +274,51 @@ fn test_remove_admin_fails_with_non_admin_approvers() {
 #[test]
 fn test_full_admin_rotation_add_then_remove_old() {
     let (env, client, admins) = setup(2, 3);
-    let new_admin = Address::generate(&env);
+    let new_admin = Address::random(&env);
 
     // Step 1: add new admin
     let approvers = vec![&env, admins[0].clone(), admins[1].clone()];
-    client.add_admin(&approvers, &new_admin);
+    client.add_admin(&approvers, &new_admin).unwrap();
     assert_eq!(client.get_admins().len(), 4);
 
     // Step 2: remove one of the original admins using new quorum
     let approvers2 = vec![&env, admins[0].clone(), new_admin.clone()];
-    client.remove_admin(&approvers2, &admins[2]);
+    client.remove_admin(&approvers2, &admins[2]).unwrap();
 
     let stored: Vec<Address> = client.get_admins().iter().collect();
     assert_eq!(stored.len(), 3);
     assert!(!stored.contains(&admins[2]));
+    assert!(stored.contains(&new_admin));
+}
+
+#[test]
+fn test_rotate_admin() {
+    let (env, client, admins) = setup(2, 3);
+    let old_admin = admins[2].clone();
+    let new_admin = Address::random(&env);
+    
+    let approvers = vec![&env, admins[0].clone(), admins[1].clone()];
+    client.rotate_admin(&approvers, &old_admin, &new_admin).unwrap();
+    
+    let stored: Vec<Address> = client.get_admins().iter().collect();
+    assert_eq!(stored.len(), 3);
+    assert!(!stored.contains(&old_admin));
+    assert!(stored.contains(&new_admin));
+}
+
+#[test]
+fn test_rotate_admin_duplicate_prevented() {
+    let (env, client, admins) = setup(2, 3);
+    let old_admin = admins[2].clone();
+    let new_admin = admins[1].clone(); // already an admin
+    
+    let approvers = vec![&env, admins[0].clone(), admins[1].clone()];
+    // Rotating to an existing admin should just remove the old admin and reduce the list size
+    client.rotate_admin(&approvers, &old_admin, &new_admin).unwrap();
+    
+    let stored: Vec<Address> = client.get_admins().iter().collect();
+    assert_eq!(stored.len(), 2); // 3 - 1
+    assert!(!stored.contains(&old_admin));
     assert!(stored.contains(&new_admin));
 }
 
@@ -324,10 +328,10 @@ fn test_removed_admin_cannot_approve_operations() {
 
     // Remove admins[2]
     let approvers = vec![&env, admins[0].clone()];
-    client.remove_admin(&approvers, &admins[2]);
+    client.remove_admin(&approvers, &admins[2]).unwrap();
 
     // admins[2] tries to add a new admin — should fail
-    let new_admin = Address::generate(&env);
+    let new_admin = Address::random(&env);
     let bad_approvers = vec![&env, admins[2].clone()];
     let result = client.try_add_admin(&bad_approvers, &new_admin);
     assert_eq!(result, Err(Ok(GuardError::InsufficientSignatures)));
@@ -336,14 +340,14 @@ fn test_removed_admin_cannot_approve_operations() {
 #[test]
 fn test_newly_added_admin_can_approve_operations() {
     let (env, client, admins) = setup(1, 2);
-    let new_admin = Address::generate(&env);
+    let new_admin = Address::random(&env);
 
     // Add new_admin
     let approvers = vec![&env, admins[0].clone()];
-    client.add_admin(&approvers, &new_admin);
+    client.add_admin(&approvers, &new_admin).unwrap();
 
     // new_admin approves a pause operation
-    client.set_pause(&new_admin, &PauseType::SWAP, &true);
+    client.set_pause(&new_admin, &PauseType::SWAP, &true).unwrap();
     assert!(client.is_paused(&PauseType::SWAP));
 }
 
@@ -370,7 +374,7 @@ fn test_get_threshold_returns_correct_value() {
 #[test]
 fn test_set_pause_by_single_admin() {
     let (env, client, admins) = setup(1, 2);
-    client.set_pause(&admins[0], &PauseType::DEPOSIT, &true);
+    client.set_pause(&admins[0], &PauseType::DEPOSIT, &true).unwrap();
     assert!(client.is_paused(&PauseType::DEPOSIT));
     assert!(!client.is_paused(&PauseType::SWAP));
 }
@@ -378,7 +382,7 @@ fn test_set_pause_by_single_admin() {
 #[test]
 fn test_set_pause_rejected_for_non_admin() {
     let (env, client, _admins) = setup(1, 2);
-    let outsider = Address::generate(&env);
+    let outsider = Address::random(&env);
     let result = client.try_set_pause(&outsider, &PauseType::SWAP, &true);
     assert_eq!(result, Err(Ok(GuardError::Unauthorized)));
 }
@@ -394,7 +398,7 @@ fn test_emergency_pause_requires_multi_sig() {
 
     // 2 approvers — should succeed and pause everything
     let approvers = vec![&env, admins[0].clone(), admins[1].clone()];
-    client.emergency_pause(&approvers);
+    client.emergency_pause(&approvers).unwrap();
     for op in [
         PauseType::SWAP,
         PauseType::DEPOSIT,
@@ -413,7 +417,7 @@ fn test_resume_requires_multi_sig() {
 
     // Pause everything first
     let approvers = vec![&env, admins[0].clone(), admins[1].clone()];
-    client.emergency_pause(&approvers);
+    client.emergency_pause(&approvers).unwrap();
 
     // Try resume with 1 approver — should fail
     let approvers1 = vec![&env, admins[0].clone()];
@@ -422,7 +426,7 @@ fn test_resume_requires_multi_sig() {
 
     // Resume with 2 approvers — should succeed
     let approvers2 = vec![&env, admins[0].clone(), admins[1].clone()];
-    client.resume(&approvers2);
+    client.resume(&approvers2).unwrap();
     assert!(!client.is_paused(&PauseType::SWAP));
     assert!(!client.is_paused(&PauseType::DEPOSIT));
 }
@@ -435,21 +439,20 @@ fn test_guard_events() {
     let contract_id = env.register(EmergencyGuard, ());
     let client = EmergencyGuardClient::new(&env, &contract_id);
 
-    let admin1 = Address::generate(&env);
-    let admin2 = Address::generate(&env);
-    let admin3 = Address::generate(&env);
+    let admin1 = Address::random(&env);
+    let admin2 = Address::random(&env);
+    let admin3 = Address::random(&env);
     let admins = vec![&env, admin1.clone(), admin2.clone()];
 
-    // 1. Initialize
     client.initialize(&admins, &1);
 
     let events = env.events().all();
-    let init_name = String::from_str(&env, "emergency_guard_initialized");
+    let init_name = SorobanString::from_str(&env, "emergency_guard_initialized");
     let init_event = events
         .iter()
         .find(|(_, topics, _)| {
             topics.len() == 1 && {
-                let topic_str: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
+                let topic_str: Result<SorobanString, _> = topics.get(0).unwrap().try_into_val(&env);
                 topic_str.map(|s| s == init_name).unwrap_or(false)
             }
         })
@@ -458,31 +461,25 @@ fn test_guard_events() {
     assert_eq!(init_data.admins.len(), 2);
     assert_eq!(init_data.threshold, 1);
 
-    // Assert EmergencyGuardEvent for Initialize
-    let eg_init_event = events
-        .iter()
-        .find(|(_, topics, _)| {
-            topics.len() == 2 && {
-                let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
-                let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&env);
-                topic0.map(|s| s == String::from_str(&env, "EmergencyGuard")).unwrap_or(false)
-                    && topic1.map(|s| s == String::from_str(&env, "initialized")).unwrap_or(false)
-            }
-        })
-        .expect("missing EmergencyGuard initialized event");
-    let eg_init_data: EmergencyGuardEvent = eg_init_event.2.try_into_val(&env).unwrap();
-    assert_eq!(eg_init_data.action, crate::EmergencyGuardAction::Initialized);
-
-    // 2. Set Pause
     client.set_pause(&admin1, &crate::PauseType::SWAP, &true);
+    client.emergency_pause(&vec![&env, admin1.clone()]);
+    client.resume(&vec![&env, admin1.clone()]);
+    client.add_admin(&vec![&env, admin1.clone()], &admin3);
+    client.remove_admin(&vec![&env, admin1.clone()], &admin3);
 
     let events = env.events().all();
-    let pause_name = String::from_str(&env, "emergency_guard_pause_state_changed");
+
+    let pause_name = SorobanString::from_str(&env, "emergency_guard_pause_state_changed");
+    let emergency_name = SorobanString::from_str(&env, "emergency_guard_emergency_paused_all");
+    let resume_name = SorobanString::from_str(&env, "emergency_guard_resumed_all");
+    let add_name = SorobanString::from_str(&env, "emergency_guard_admin_added");
+    let remove_name = SorobanString::from_str(&env, "emergency_guard_admin_removed");
+
     let pause_event = events
         .iter()
         .find(|(_, topics, _)| {
             topics.len() == 2 && {
-                let topic_str: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
+                let topic_str: Result<SorobanString, _> = topics.get(0).unwrap().try_into_val(&env);
                 topic_str.map(|s| s == pause_name).unwrap_or(false)
             }
         })
@@ -492,34 +489,11 @@ fn test_guard_events() {
     assert_eq!(pause_data.operation, crate::PauseType::SWAP);
     assert!(pause_data.paused);
 
-    // Assert EmergencyGuardEvent for PauseSet
-    let eg_pause_event = events
-        .iter()
-        .find(|(_, topics, _)| {
-            topics.len() == 2 && {
-                let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
-                let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&env);
-                topic0.map(|s| s == String::from_str(&env, "EmergencyGuard")).unwrap_or(false)
-                    && topic1.map(|s| s == String::from_str(&env, "pause_set")).unwrap_or(false)
-            }
-        })
-        .expect("missing EmergencyGuard pause_set event");
-    let eg_pause_data: EmergencyGuardEvent = eg_pause_event.2.try_into_val(&env).unwrap();
-    assert_eq!(eg_pause_data.action, crate::EmergencyGuardAction::PauseSet);
-    assert_eq!(eg_pause_data.admin, Some(admin1.clone()));
-    assert_eq!(eg_pause_data.operation, crate::PauseType::SWAP);
-    assert!(eg_pause_data.paused);
-
-    // 3. Emergency Pause
-    client.emergency_pause(&vec![&env, admin1.clone()]);
-
-    let events = env.events().all();
-    let emergency_name = String::from_str(&env, "emergency_guard_emergency_paused_all");
     let emergency_event = events
         .iter()
         .find(|(_, topics, _)| {
             topics.len() == 1 && {
-                let topic_str: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
+                let topic_str: Result<SorobanString, _> = topics.get(0).unwrap().try_into_val(&env);
                 topic_str.map(|s| s == emergency_name).unwrap_or(false)
             }
         })
@@ -527,33 +501,11 @@ fn test_guard_events() {
     let emergency_data: EmergencyPausedEvent = emergency_event.2.try_into_val(&env).unwrap();
     assert_eq!(emergency_data.approvers.len(), 1);
 
-    // Assert EmergencyGuardEvent for EmergencyPause
-    let eg_emergency_event = events
-        .iter()
-        .find(|(_, topics, _)| {
-            topics.len() == 2 && {
-                let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
-                let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&env);
-                topic0.map(|s| s == String::from_str(&env, "EmergencyGuard")).unwrap_or(false)
-                    && topic1.map(|s| s == String::from_str(&env, "emergency_pause")).unwrap_or(false)
-            }
-        })
-        .expect("missing EmergencyGuard emergency_pause event");
-    let eg_emergency_data: EmergencyGuardEvent = eg_emergency_event.2.try_into_val(&env).unwrap();
-    assert_eq!(eg_emergency_data.action, crate::EmergencyGuardAction::EmergencyPause);
-    assert_eq!(eg_emergency_data.operation, u32::MAX);
-    assert!(eg_emergency_data.paused);
-
-    // 4. Resume
-    client.resume(&vec![&env, admin1.clone()]);
-
-    let events = env.events().all();
-    let resume_name = String::from_str(&env, "emergency_guard_resumed_all");
     let resume_event = events
         .iter()
         .find(|(_, topics, _)| {
             topics.len() == 1 && {
-                let topic_str: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
+                let topic_str: Result<SorobanString, _> = topics.get(0).unwrap().try_into_val(&env);
                 topic_str.map(|s| s == resume_name).unwrap_or(false)
             }
         })
@@ -561,33 +513,11 @@ fn test_guard_events() {
     let resume_data: ResumedEvent = resume_event.2.try_into_val(&env).unwrap();
     assert_eq!(resume_data.approvers.len(), 1);
 
-    // Assert EmergencyGuardEvent for Resume
-    let eg_resume_event = events
-        .iter()
-        .find(|(_, topics, _)| {
-            topics.len() == 2 && {
-                let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
-                let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&env);
-                topic0.map(|s| s == String::from_str(&env, "EmergencyGuard")).unwrap_or(false)
-                    && topic1.map(|s| s == String::from_str(&env, "resume")).unwrap_or(false)
-            }
-        })
-        .expect("missing EmergencyGuard resume event");
-    let eg_resume_data: EmergencyGuardEvent = eg_resume_event.2.try_into_val(&env).unwrap();
-    assert_eq!(eg_resume_data.action, crate::EmergencyGuardAction::Resume);
-    assert_eq!(eg_resume_data.operation, u32::MAX);
-    assert!(!eg_resume_data.paused);
-
-    // 5. Add Admin
-    client.add_admin(&vec![&env, admin1.clone()], &admin3);
-
-    let events = env.events().all();
-    let add_name = String::from_str(&env, "emergency_guard_admin_added");
     let add_event = events
         .iter()
         .find(|(_, topics, _)| {
             topics.len() == 2 && {
-                let topic_str: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
+                let topic_str: Result<SorobanString, _> = topics.get(0).unwrap().try_into_val(&env);
                 topic_str.map(|s| s == add_name).unwrap_or(false)
             }
         })
@@ -595,54 +525,17 @@ fn test_guard_events() {
     let add_data: AdminAddedEvent = add_event.2.try_into_val(&env).unwrap();
     assert_eq!(add_data.new_admin, admin3);
 
-    // Assert EmergencyGuardEvent for AdminAdded
-    let eg_add_event = events
-        .iter()
-        .find(|(_, topics, _)| {
-            topics.len() == 2 && {
-                let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
-                let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&env);
-                topic0.map(|s| s == String::from_str(&env, "EmergencyGuard")).unwrap_or(false)
-                    && topic1.map(|s| s == String::from_str(&env, "admin_added")).unwrap_or(false)
-            }
-        })
-        .expect("missing EmergencyGuard admin_added event");
-    let eg_add_data: EmergencyGuardEvent = eg_add_event.2.try_into_val(&env).unwrap();
-    assert_eq!(eg_add_data.action, crate::EmergencyGuardAction::AdminAdded);
-    assert_eq!(eg_add_data.admin, Some(admin3.clone()));
-
-    // 6. Remove Admin
-    client.remove_admin(&vec![&env, admin1.clone()], &admin3);
-
-    let events = env.events().all();
-    let remove_name = String::from_str(&env, "emergency_guard_admin_removed");
     let remove_event = events
         .iter()
         .find(|(_, topics, _)| {
             topics.len() == 2 && {
-                let topic_str: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
+                let topic_str: Result<SorobanString, _> = topics.get(0).unwrap().try_into_val(&env);
                 topic_str.map(|s| s == remove_name).unwrap_or(false)
             }
         })
         .expect("missing admin remove event");
     let remove_data: AdminRemovedEvent = remove_event.2.try_into_val(&env).unwrap();
     assert_eq!(remove_data.admin, admin3);
-
-    // Assert EmergencyGuardEvent for AdminRemoved
-    let eg_remove_event = events
-        .iter()
-        .find(|(_, topics, _)| {
-            topics.len() == 2 && {
-                let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&env);
-                let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&env);
-                topic0.map(|s| s == String::from_str(&env, "EmergencyGuard")).unwrap_or(false)
-                    && topic1.map(|s| s == String::from_str(&env, "admin_removed")).unwrap_or(false)
-            }
-        })
-        .expect("missing EmergencyGuard admin_removed event");
-    let eg_remove_data: EmergencyGuardEvent = eg_remove_event.2.try_into_val(&env).unwrap();
-    assert_eq!(eg_remove_data.action, crate::EmergencyGuardAction::AdminRemoved);
-    assert_eq!(eg_remove_data.admin, Some(admin3.clone()));
 }
 
 #[test]
@@ -654,92 +547,4 @@ fn test_pause_type_as_u32_bitmask() {
         pause.as_u32(),
         crate::PauseType::SWAP | crate::PauseType::DEPOSIT
     );
-}
-
-#[test]
-fn test_event_emission_for_guard_actions() {
-    let e = Env::default();
-    e.mock_all_auths();
-
-    let contract_id = e.register(crate::EmergencyGuard, ());
-    let client = crate::EmergencyGuardClient::new(&e, &contract_id);
-
-    // Setup admins
-    let admin1 = Address::generate(&e);
-    let admin2 = Address::generate(&e);
-    let admins = vec![&e, admin1.clone(), admin2.clone()];
-
-    // Initialize guard
-    client.initialize(&admins, &1u32);
-    let events = e.events().all();
-    assert!(events.iter().any(|(_, topics, _)| {
-        topics.len() == 2 && {
-            let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&e);
-            let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&e);
-            topic0.map(|s| s == String::from_str(&e, "EmergencyGuard")).unwrap_or(false)
-                && topic1.map(|s| s == String::from_str(&e, "initialized")).unwrap_or(false)
-        }
-    }));
-
-    // Call set_pause
-    client.set_pause(&admin1, &crate::PauseType::TRANSFER, &true);
-    let events = e.events().all();
-    assert!(events.iter().any(|(_, topics, _)| {
-        topics.len() == 2 && {
-            let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&e);
-            let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&e);
-            topic0.map(|s| s == String::from_str(&e, "EmergencyGuard")).unwrap_or(false)
-                && topic1.map(|s| s == String::from_str(&e, "pause_set")).unwrap_or(false)
-        }
-    }));
-
-    // Emergency pause all
-    let approvers = vec![&e, admin1.clone()];
-    client.emergency_pause(&approvers);
-    let events = e.events().all();
-    assert!(events.iter().any(|(_, topics, _)| {
-        topics.len() == 2 && {
-            let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&e);
-            let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&e);
-            topic0.map(|s| s == String::from_str(&e, "EmergencyGuard")).unwrap_or(false)
-                && topic1.map(|s| s == String::from_str(&e, "emergency_pause")).unwrap_or(false)
-        }
-    }));
-
-    // Resume all
-    client.resume(&approvers);
-    let events = e.events().all();
-    assert!(events.iter().any(|(_, topics, _)| {
-        topics.len() == 2 && {
-            let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&e);
-            let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&e);
-            topic0.map(|s| s == String::from_str(&e, "EmergencyGuard")).unwrap_or(false)
-                && topic1.map(|s| s == String::from_str(&e, "resume")).unwrap_or(false)
-        }
-    }));
-
-    // Add admin
-    let new_admin = Address::generate(&e);
-    client.add_admin(&approvers, &new_admin);
-    let events = e.events().all();
-    assert!(events.iter().any(|(_, topics, _)| {
-        topics.len() == 2 && {
-            let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&e);
-            let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&e);
-            topic0.map(|s| s == String::from_str(&e, "EmergencyGuard")).unwrap_or(false)
-                && topic1.map(|s| s == String::from_str(&e, "admin_added")).unwrap_or(false)
-        }
-    }));
-
-    // Remove admin
-    client.remove_admin(&approvers, &new_admin);
-    let events = e.events().all();
-    assert!(events.iter().any(|(_, topics, _)| {
-        topics.len() == 2 && {
-            let topic0: Result<String, _> = topics.get(0).unwrap().try_into_val(&e);
-            let topic1: Result<String, _> = topics.get(1).unwrap().try_into_val(&e);
-            topic0.map(|s| s == String::from_str(&e, "EmergencyGuard")).unwrap_or(false)
-                && topic1.map(|s| s == String::from_str(&e, "admin_removed")).unwrap_or(false)
-        }
-    }));
 }

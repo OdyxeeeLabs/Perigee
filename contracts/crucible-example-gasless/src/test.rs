@@ -240,7 +240,8 @@ fn test_execute_emits_event() {
 
     let events = ctx.env.events().all();
     let has_executed = events.iter().any(|(_, topics, _)| {
-        topics.len() == 1 && topics.get(0) == Some(Symbol::new(&ctx.env, "executed").into_val(&ctx.env))
+        topics.len() == 1
+            && topics.get(0) == Some(Symbol::new(&ctx.env, "executed").into_val(&ctx.env))
     });
     assert!(has_executed, "expected 'executed' event");
 }
