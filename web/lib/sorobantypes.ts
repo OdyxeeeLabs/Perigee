@@ -44,13 +44,11 @@ export interface InvocationResult {
   inputs: SimulationInputs;
   result?: unknown;
   error?: string;
-  errorType?: string;
-  resourceCost?: ResourceCost;
+  errorType?: string; // Error type from backend (e.g., BAD_REQUEST, INTERNAL_SERVER_ERROR)
   /** Primary `/analyze` response payload for the latest invocation. */
   analysisReport?: ResourceReport;
-  errorType?: string; // Error type from backend (e.g., BAD_REQUEST, INTERNAL_SERVER_ERROR)
-  analysisReport?: ResourceReport;
-  resourceCost?: ResourceCost;
+  /** Backward-compatible alias for older stored history entries. */
+  resourceCost?: ResourceReport | ResourceCost;
   callGraph?: CallGraph;
   callGraphMermaid?: string;
   stateSnapshot?: SimulationStateSnapshot;
@@ -121,6 +119,7 @@ export interface ResourceReport extends SorobanResources {
   call_graph_mermaid: string | null;
   state_snapshot: SimulationStateSnapshot | null;
   protocol_version: number;
+  testnet_averages?: TestnetAverages;
 }
 
 export type AnalyzeResponse = ResourceReport;

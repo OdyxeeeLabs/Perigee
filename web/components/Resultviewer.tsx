@@ -22,19 +22,6 @@ export function ResultViewer({ result }: ResultViewerProps) {
     URL.revokeObjectURL(url);
   };
 
-  const exportReport = () => {
-    if (!result) return;
-    const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `soroscope-report-${result.functionName}-${Date.now()}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   if (!result) {
     return (
       <div
@@ -79,9 +66,9 @@ export function ResultViewer({ result }: ResultViewerProps) {
           </p>
         </div>
         
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        {result.stateSnapshot && (
           <button
-            onClick={exportReport}
+            onClick={downloadSnapshot}
             style={{
               padding: '6px 12px',
               backgroundColor: '#1f2937',
@@ -95,28 +82,9 @@ export function ResultViewer({ result }: ResultViewerProps) {
             onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#374151')}
             onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#1f2937')}
           >
-            Export JSON
+            Download State Snapshot
           </button>
-          {result.stateSnapshot && (
-            <button
-              onClick={downloadSnapshot}
-              style={{
-                padding: '6px 12px',
-                backgroundColor: '#1f2937',
-                color: '#f3f4f6',
-                borderRadius: '6px',
-                border: '1px solid #374151',
-                fontSize: '12px',
-                cursor: 'pointer',
-                transition: 'background-color 0.2s',
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#374151')}
-              onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#1f2937')}
-            >
-              Download State Snapshot
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
       {result.error ? (
