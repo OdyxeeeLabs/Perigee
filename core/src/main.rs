@@ -48,6 +48,7 @@ use crate::fee_store::FeeStore;
 use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
 use crate::insights::InsightsEngine;
 use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
+use crate::merkle_tree::MerkleTree;
 use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
 use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
 use crate::ws::SimulationBus;
@@ -879,11 +880,13 @@ async fn analyze(
                 tracing::warn!("No ledger entries available for Merkle tree generation");
                 None
             } else {
+                let mut tree = MerkleTree::new(256);
                 let mut tree = MerkleTree::new(32);
                 if let Err(e) = tree.build(leaves) {
                     tracing::error!("Failed to generate Merkle tree: {}", e);
                     None
                 } else {
+                    tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count);
                     tracing::info!("Generated Merkle tree with {} leaves", tree.leaf_count());
                     Some(tree.get_root_hex())
                 }
@@ -1646,10 +1649,9 @@ async fn main() {
     // ── CLI: merkle subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "merkle" {
         if args.len() < 4 {
-            eprintln!("Usage: soroscope-core merkle <build|build-file|proof> <args>");
+            eprintln!("Usage: soroscope-core merkle <build|proof> <args>");
             eprintln!("Commands:");
-            eprintln!("  build <leaf1> <leaf2> ...              Build a Merkle tree and print the root hash");
-            eprintln!("  build-file <file>                      Build a Merkle tree from a newline-delimited leaf file");
+            eprintln!("  build <leaf1> <leaf2> ...            Build a Merkle tree and print the root hash");
             eprintln!("  proof <leaf_index> <leaf1> <leaf2> ... Generate a Merkle proof for the given leaf index");
             std::process::exit(1);
         }
@@ -1712,41 +1714,9 @@ async fn main() {
                 });
                 println!("{}", serde_json::to_string_pretty(&output).unwrap());
             }
-            "build-file" => {
-                if args.len() < 4 {
-                    eprintln!("Usage: soroscope-core merkle build-file <file>");
-                    eprintln!("  Each non-empty line in <file> is treated as a leaf value.");
-                    std::process::exit(1);
-                }
-                let file_path = &args[3];
-                let content = match std::fs::read_to_string(file_path) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("Error reading {}: {}", file_path, e);
-                        std::process::exit(1);
-                    }
-                };
-                let leaves: Vec<Vec<u8>> = content
-                    .lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .map(|l| l.as_bytes().to_vec())
-                    .collect();
-                if leaves.is_empty() {
-                    eprintln!("Error: file contains no leaf values.");
-                    std::process::exit(1);
-                }
-                let mut tree = merkle_tree::MerkleTree::new(32);
-                match tree.build(leaves) {
-                    Ok(()) => println!("{}", tree.get_root_hex()),
-                    Err(err) => {
-                        eprintln!("Error building Merkle tree: {}", err);
-                        std::process::exit(1);
-                    }
-                }
-            }
             unknown => {
                 eprintln!("Unknown merkle command: {}", unknown);
-                eprintln!("Available commands: build, build-file, proof");
+                eprintln!("Available commands: build, proof");
                 std::process::exit(1);
             }
         }
@@ -2242,7 +2212,7 @@ mod tests {
         };
 
         let insights_engine = InsightsEngine::new();
-        let report = to_report(&sim_result, &insights_engine);
+        let report = to_report(&sim_result, &insights_engine, None);
 
         assert_eq!(report.cost_stroops, 5000);
         assert_eq!(report.cpu_instructions, 1000000);

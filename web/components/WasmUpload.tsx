@@ -138,13 +138,17 @@ export default function WasmUpload({
       let errorMessage = "Upload failed. Please try again.";
 
       if (err instanceof ApiError) {
+        const body =
+          typeof err.body === "object" && err.body !== null
+            ? (err.body as { error?: unknown; message?: unknown })
+            : undefined;
         const backendError = {
           error:
-            typeof err.body?.error === "string"
-              ? err.body.error
+            typeof body?.error === "string"
+              ? body.error
               : statusToErrorType(err.status),
           message:
-            typeof err.body?.message === "string" ? err.body.message : err.message,
+            typeof body?.message === "string" ? body.message : err.message,
           statusCode: err.status,
         };
         errorMessage = createUserFriendlyMessage(backendError);
@@ -248,8 +252,8 @@ export default function WasmUpload({
   return (
     <div className={cn("w-full max-w-2xl mx-auto", className)}>
       {/*drop Zone*/}
-      <motion.div
-        {...(getRootProps() as any)}
+      <div
+        {...getRootProps()}
         className={cn(
           "relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-colors duration-200",
           isDragActive
@@ -258,8 +262,6 @@ export default function WasmUpload({
             ? "border-red-400 bg-red-50/50"
             : "border-slate-300 hover:border-slate-400 bg-slate-50/50 hover:bg-slate-50"
         )}
-        whileHover={{ scale: 1.01 }}
-        whileTap={{ scale: 0.99 }}
       >
         <input {...getInputProps()} />
 
@@ -297,7 +299,7 @@ export default function WasmUpload({
           <span className="text-slate-300">•</span>
           <span>Up to {maxFiles} files</span>
         </div>
-      </motion.div>
+      </div>
 
       {/* file List  */}
       <AnimatePresence>

@@ -19,6 +19,11 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
+  const fieldValue = (name: string) => {
+    const value = formData[name];
+    return typeof value === 'boolean' ? String(value) : value ?? '';
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit(formData);
@@ -67,7 +72,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               <input
                 type="text"
                 placeholder="Enter Stellar address (G...)"
-                value={formData[input.name] || ''}
+                value={fieldValue(input.name)}
                 onChange={(e) => handleChange(input.name, e.target.value)}
                 required={!input.optional}
                 disabled={loading}
@@ -86,7 +91,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               <input
                 type="number"
                 placeholder={`Enter ${input.type} value`}
-                value={formData[input.name] || ''}
+                value={fieldValue(input.name)}
                 onChange={(e) => handleChange(input.name, e.target.value)}
                 required={!input.optional}
                 disabled={loading}
@@ -104,7 +109,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               <input
                 type="text"
                 placeholder={`Enter ${input.type}`}
-                value={formData[input.name] || ''}
+                value={fieldValue(input.name)}
                 onChange={(e) => handleChange(input.name, e.target.value)}
                 required={!input.optional}
                 disabled={loading}
@@ -120,7 +125,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               />
             ) : input.type === 'bool' ? (
               <select
-                value={formData[input.name] === undefined ? '' : formData[input.name]}
+                value={formData[input.name] === undefined ? '' : String(formData[input.name])}
                 onChange={(e) => handleChange(input.name, e.target.value === 'true')}
                 required={!input.optional}
                 disabled={loading}
@@ -142,7 +147,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               <input
                 type="text"
                 placeholder="Enter value"
-                value={formData[input.name] || ''}
+                value={fieldValue(input.name)}
                 onChange={(e) => handleChange(input.name, e.target.value)}
                 required={!input.optional}
                 disabled={loading}
