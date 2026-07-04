@@ -96,4 +96,87 @@ impl StorageHeavyContract {
         }
         results
     }
+
+    /// Write separate boolean values using individual keys in persistent storage.
+    pub fn write_separate_booleans(env: Env, keys: Vec<Symbol>, values: Vec<bool>) {
+        if keys.len() != values.len() {
+            panic!("Keys and values must have the same length");
+        }
+        for i in 0..keys.len() {
+            env.storage()
+                .persistent()
+                .set(&keys.get(i).unwrap(), &values.get(i).unwrap());
+        }
+    }
+
+    /// Read separate boolean values using individual keys from persistent storage.
+    pub fn read_separate_booleans(env: Env, keys: Vec<Symbol>) -> Vec<bool> {
+        let mut results = Vec::new(&env);
+        for i in 0..keys.len() {
+            let value = env
+                .storage()
+                .persistent()
+                .get(&keys.get(i).unwrap())
+                .unwrap_or(false);
+            results.push_back(value);
+        }
+        results
+    }
+
+    /// Write packed boolean values as bits in a single u32 entry in persistent storage.
+    pub fn write_packed_booleans(env: Env, key: Symbol, values: Vec<bool>) {
+        if values.len() > 32 {
+            panic!("Cannot pack more than 32 boolean values into a u32");
+        }
+        let mut mask: u32 = 0;
+        for i in 0..values.len() {
+            if values.get(i).unwrap() {
+                mask |= 1 << i;
+            }
+        }
+        env.storage().persistent().set(&key, &mask);
+    }
+
+    /// Read packed boolean values from a single u32 entry in persistent storage.
+    pub fn read_packed_booleans(env: Env, key: Symbol, len: u32) -> Vec<bool> {
+        if len > 32 {
+            panic!("Cannot unpack more than 32 boolean values from a u32");
+        }
+        let mask: u32 = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(0u32);
+        
+        let mut results = Vec::new(&env);
+        for i in 0..len {
+            results.push_back((mask & (1 << i)) != 0);
+        }
+        results
+    }
+
+    /// Update a single boolean flag in separate storage slots.
+    pub fn update_separate_boolean(env: Env, key: Symbol, value: bool) {
+        env.storage().persistent().set(&key, &value);
+    }
+
+    /// Update a single boolean flag in a packed u32 storage slot.
+    pub fn update_packed_boolean(env: Env, key: Symbol, flag_idx: u32, value: bool) {
+        if flag_idx >= 32 {
+            panic!("Flag index out of range for u32");
+        }
+        let mut mask: u32 = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(0u32);
+
+        if value {
+            mask |= 1 << flag_idx;
+        } else {
+            mask &= !(1 << flag_idx);
+        }
+        env.storage().persistent().set(&key, &mask);
+    }
 }
+
