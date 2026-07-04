@@ -123,6 +123,7 @@ impl MerkleTree {
 
         for level in 0..self.nodes.len() - 1 {
             let level_nodes = &self.nodes[level];
+            let sibling_index = if path_index.is_multiple_of(2) {
             let is_left = path_index.is_multiple_of(2);
             let sibling_index = if is_left {
                 path_index + 1
@@ -138,6 +139,7 @@ impl MerkleTree {
 
             proof.push(ProofNode {
                 hash: sibling_hash,
+                is_left: path_index.is_multiple_of(2),
                 is_left,
             });
 
@@ -198,8 +200,11 @@ impl MerkleTree {
     fn hash_leaf(data: &[u8]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(data);
-        let digest = hasher.finalize();
-        digest.into()
+        let digest1 = hasher.finalize();
+        let mut hasher2 = Sha256::new();
+        hasher2.update(digest1);
+        let digest2 = hasher2.finalize();
+        digest2.into()
     }
 
     fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
@@ -397,73 +402,73 @@ mod tests {
         assert_eq!(t1.root, t2.root);
     }
 
+// ── #491: Even and odd leaf count tests with reference values ────────
     // ── Even and odd leaf count tests with reference values ────────────────
 
-    #[test]
-    fn test_even_leaf_count_root_matches_reference() {
-        // Reference computed with SHA-256 + sorted hash_pair (identical algorithm).
-        // Leaves: ["a", "b", "c", "d"] — 4 leaves (even).
-        // Expected root: 4c6aae040ffada3d02598207b8485fcbe161c03f4cb3f660e4d341e7496ff3b2
-        let tree = make_tree(&["a", "b", "c", "d"]);
-        let expected = "4c6aae040ffada3d02598207b8485fcbe161c03f4cb3f660e4d341e7496ff3b2";
-        assert_eq!(tree.get_root_hex(), expected);
-    }
+#[test]
+fn test_even_leaf_count_root_matches_reference() {
+    // Reference computed with SHA-256 + sorted hash_pair (identical algorithm).
+    // Leaves: ["a", "b", "c", "d"] — 4 leaves (even).
+    // Expected root: 4c6aae040ffada3d02598207b8485fcbe161c03f4cb3f660e4d341e7496ff3b2
+    let tree = make_tree(&["a", "b", "c", "d"]);
+    let expected = "4c6aae040ffada3d02598207b8485fcbe161c03f4cb3f660e4d341e7496ff3b2";
+    assert_eq!(tree.get_root_hex(), expected);
+}
 
-    #[test]
-    fn test_odd_leaf_count_root_matches_reference() {
-        // Leaves: ["a", "b", "c"] — 3 leaves (odd).
-        // The last leaf is paired with itself when building the next level.
-        // Expected root: b1da020d217b348265d6578cdfe4cc717bb79b5deaffce7fc167180e9e1ec8c6
-        let tree = make_tree(&["a", "b", "c"]);
-        let expected = "b1da020d217b348265d6578cdfe4cc717bb79b5deaffce7fc167180e9e1ec8c6";
-        assert_eq!(tree.get_root_hex(), expected);
-    }
+#[test]
+fn test_odd_leaf_count_root_matches_reference() {
+    // Leaves: ["a", "b", "c"] — 3 leaves (odd).
+    // The last leaf is paired with itself when building the next level.
+    // Expected root: b1da020d217b348265d6578cdfe4cc717bb79b5deaffce7fc167180e9e1ec8c6
+    let tree = make_tree(&["a", "b", "c"]);
+    let expected = "b1da020d217b348265d6578cdfe4cc717bb79b5deaffce7fc167180e9e1ec8c6";
+    assert_eq!(tree.get_root_hex(), expected);
+}
 
-    #[test]
-    fn test_single_leaf_root_matches_reference() {
-        // Single leaf: SHA-256("solo") with no pairing.
-        // Expected root: 5364f2f2fc4f54e9d47ad29cfb08ef430c8153394bf2a0dff5cbe77a0ffef861
-        let tree = make_tree(&["solo"]);
-        let expected = "5364f2f2fc4f54e9d47ad29cfb08ef430c8153394bf2a0dff5cbe77a0ffef861";
-        assert_eq!(tree.get_root_hex(), expected);
-    }
+#[test]
+fn test_single_leaf_root_matches_reference() {
+    // Single leaf: SHA-256("solo") with no pairing.
+    // Expected root: 5364f2f2fc4f54e9d47ad29cfb08ef430c8153394bf2a0dff5cbe77a0ffef861
+    let tree = make_tree(&["solo"]);
+    let expected = "5364f2f2fc4f54e9d47ad29cfb08ef430c8153394bf2a0dff5cbe77a0ffef861";
+    assert_eq!(tree.get_root_hex(), expected);
+}
 
-    #[test]
-    fn test_two_leaf_root_matches_reference() {
-        // Leaves: ["alice", "bob"] — 2 leaves (even).
-        // Expected root: cb57721dc3aa8df0eef91989560b053a86be98131f45650bd1c3955e0167ef17
-        let tree = make_tree(&["alice", "bob"]);
-        let expected = "cb57721dc3aa8df0eef91989560b053a86be98131f45650bd1c3955e0167ef17";
-        assert_eq!(tree.get_root_hex(), expected);
-    }
+#[test]
+fn test_two_leaf_root_matches_reference() {
+    // Leaves: ["alice", "bob"] — 2 leaves (even).
+    // Expected root: cb57721dc3aa8df0eef91989560b053a86be98131f45650bd1c3955e0167ef17
+    let tree = make_tree(&["alice", "bob"]);
+    let expected = "cb57721dc3aa8df0eef91989560b053a86be98131f45650bd1c3955e0167ef17";
+    assert_eq!(tree.get_root_hex(), expected);
+}
 
-    #[test]
-    fn test_five_leaf_root_matches_reference() {
-        // Leaves: ["a", "b", "c", "d", "e"] — 5 leaves (odd).
-        // Expected root: df947ef1b6dda4cb4ef081afd68f255104ccaab2661f2047d2f1a05c5440076f
-        let tree = make_tree(&["a", "b", "c", "d", "e"]);
-        let expected = "df947ef1b6dda4cb4ef081afd68f255104ccaab2661f2047d2f1a05c5440076f";
-        assert_eq!(tree.get_root_hex(), expected);
-    }
+#[test]
+fn test_five_leaf_root_matches_reference() {
+    // Leaves: ["a", "b", "c", "d", "e"] — 5 leaves (odd).
+    // Expected root: df947ef1b6dda4cb4ef081afd68f255104ccaab2661f2047d2f1a05c5440076f
+    let tree = make_tree(&["a", "b", "c", "d", "e"]);
+    let expected = "df947ef1b6dda4cb4ef081afd68f255104ccaab2661f2047d2f1a05c5440076f";
+    assert_eq!(tree.get_root_hex(), expected);
+}
 
-    #[test]
-    fn test_even_leaves_all_proofs_valid() {
-        // 4 leaves — all proofs must verify against the known root.
-        let tree = make_tree(&["a", "b", "c", "d"]);
-        for i in 0..tree.leaf_count() {
-            let proof = tree.generate_proof(i).unwrap();
-            assert!(proof.verify(), "proof for leaf {i} failed");
-        }
+#[test]
+fn test_even_leaves_all_proofs_valid() {
+    // 4 leaves — all proofs must verify against the known root.
+    let tree = make_tree(&["a", "b", "c", "d"]);
+    for i in 0..tree.leaf_count() {
+        let proof = tree.generate_proof(i).unwrap();
+        assert!(proof.verify(), "proof for leaf {i} failed");
     }
+}
 
-    #[test]
-    fn test_odd_leaves_all_proofs_valid() {
-        // 3 leaves — includes the "duplicate-last" padding case.
-        let tree = make_tree(&["a", "b", "c"]);
-        for i in 0..tree.leaf_count() {
-            let proof = tree.generate_proof(i).unwrap();
-            assert!(proof.verify(), "proof for leaf {i} failed");
-        }
+#[test]
+fn test_odd_leaves_all_proofs_valid() {
+    // 3 leaves — includes the "duplicate-last" padding case.
+    let tree = make_tree(&["a", "b", "c"]);
+    for i in 0..tree.leaf_count() {
+        let proof = tree.generate_proof(i).unwrap();
+        assert!(proof.verify(), "proof for leaf {i} failed");
     }
 }
 
