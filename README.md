@@ -1,176 +1,176 @@
-# 🔬 SoroScope: Soroban Resource Profiler
+# Perigee
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Stellar Wave](https://img.shields.io/badge/Stellar-Wave_Program-blue)](https://www.drips.network/wave/stellar)
+**Autonomous portfolio agents for Stellar — non-custodial, rules-based, and paid only on performance.**
 
-**SoroScope** is a developer tool designed to provide deep visibility into Soroban smart contract resource consumption (CPU, RAM, and Ledger Footprint).
+Perigee is a non-custodial portfolio protocol on Stellar that runs a simple, rules-based macro strategy for you — hold a BTC/ETH basket through the bull market, rotate into an auto-rebalanced stable liquidity position during the bear — executed by a fleet of autonomous on-chain agents, settled through a private, tokenless micropayment rail, and offered white-label to wealth managers who want to run their own fleet under their own brand.
 
-## 🚀 The Vision
-Building on Soroban requires careful resource management. SoroScope provides a "Nutrition Label" for your smart contracts, helping you optimize for lower fees and higher performance before you deploy to Mainnet.
+You never give up your keys. Perigee never touches your withdrawal rights. We only get paid when you make money.
 
-## 🧱 Monorepo Structure
-- `/core`: Rust-based CLI for simulating and profiling contracts.
-- `/web`: Next.js + Tailwind CSS dashboard for visualizing resource heatmaps.
-- `/contracts`: Sample Soroban contracts used for benchmarking.
-- `/.github/workflows`: CI/CD pipelines.
+---
 
-## ⚙️ Getting Started
+## Why Perigee
 
-### Prerequisites
-- **Rust** (stable, via [rustup](https://rustup.rs))
-- **Node.js** (>= 18) and **npm** / **pnpm** / **yarn**
-- Soroban CLI & tooling (recommended) for real-network interaction
+Most "automated" crypto portfolio tools ask you to trust a custodian, a centralized bot operator, or an opaque fee structure. Perigee is built to remove all three:
 
-### Clone the Repository
-```bash
-git clone https://github.com/SoroLabs/soroscope
-cd soroscope
+- **Non-custodial by construction.** Funds live in your own smart wallet on Stellar. The strategy agent can rebalance and rotate positions — it can never move funds to an address outside the vault's policy.
+- **Rules-based, not discretionary.** The strategy is a fixed, published set of triggers (halving-cycle phase, drawdown thresholds, volatility bands). No human is making ad-hoc calls with your money.
+- **Agents, not a black box.** Every action a strategy agent takes is an on-chain call from an identifiable, reputation-tracked agent — inspectable, attributable, and revocable.
+- **Aligned fees.** 10% performance fee above a high-water mark. No management fee, no fee if you're underwater, no fee on capital you put in and immediately withdraw.
+- **Private settlement.** Fee payments and agent-to-agent micropayments settle over a shielded, tokenless payment rail — no new token to buy, no public ledger trail of exactly what you paid and when.
+
+---
+
+## How it works
+
+### 1. The Vault (custody layer)
+
+Each user deposits into their own **Policy Vault** — a Stellar multi-signature account paired with a Soroban policy contract that scopes exactly what the strategy agent is allowed to do:
+
+- ✅ Swap basket asset A for basket asset B, within the strategy's approved asset list
+- ✅ Add/remove liquidity in the approved rotation pool
+- ✅ Claim and route the performance fee once a high-water mark is crossed
+- ❌ Transfer funds to any address outside the vault
+- ❌ Change the vault's own signers or policy rules
+- ❌ Approve arbitrary contract calls
+
+This mirrors the Safe + scoped-permissions model used in EVM portfolio tooling, rebuilt natively on Stellar's account model and Soroban, so the keeper has *just enough* rope to run the strategy and no more.
+
+### 2. The Strategy Engine
+
+A single, published, rules-based rotation:
+
+| Phase | Position | Trigger to exit |
+|---|---|---|
+| **Bull** | BTC/ETH basket (bridged/anchored representations held natively in the vault) | Drawdown or cycle-phase trigger fires |
+| **Bear** | Auto-rebalanced stable LP (synthetic-stable / USDC pair) on a Stellar AMM | Cycle-phase trigger flips back to bull |
+
+The strategy stepping into the LP position during the bear is designed to sidestep the worst of the drawdown while still earning yield on idle capital, rather than sitting in cash or trying to time the bottom.
+
+### 3. The Agent Fleet
+
+Strategy execution isn't a single centralized bot — it's a **fleet of autonomous agents**, each with its own on-chain identity, deployed and orchestrated the same way you'd manage any fleet of workers:
+
+- Each agent is bound to one or more vaults it's authorized (by that vault's policy contract) to operate.
+- Agents carry an on-chain identity and reputation record — every rebalance/rotation call is attributable to a specific agent, and misbehaving or underperforming agents can be rotated out without touching user funds.
+- Fleet orchestration means the same infrastructure that runs your own vault also scales horizontally to run thousands of vaults for a white-label partner, with per-agent monitoring, health checks, and failover.
+
+### 4. The Payment Rail
+
+Two kinds of value move through Perigee, and both settle over the same private, tokenless payment layer:
+
+- **Performance fees** — computed on-chain against each vault's high-water mark, claimed by the protocol only on realized gains above that mark.
+- **Agent micropayments** — the machine-to-machine payments that keep the fleet running (data feeds, execution routing, cross-agent coordination), settled the same way a human's fee would be: non-custodially, without requiring anyone to hold a proprietary token.
+
+No new token. No custodial fee wallet. Payments are private by default and visible only to the parties involved.
+
+---
+
+## White-label: Perigee for Wealth Managers
+
+Everything above is also exposed as an API, so a small wealth manager can offer "Perigee inside" to their own clients without building any of this themselves:
+
+- **Vault provisioning API** — spin up a scoped Policy Vault per end-client, under the wealth manager's own branding.
+- **Fleet-as-a-service** — the wealth manager doesn't run their own agents; they rent capacity on the Perigee fleet, scoped per-client.
+- **Reporting & reconciliation endpoints** — performance, fee accrual, and high-water-mark status per client, exportable for the manager's own client reporting.
+- **White-label fee splits** — the manager sets their own client-facing fee on top of (or instead of) the base performance fee; settlement still runs through the same non-custodial rail.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────┐        ┌──────────────────────────┐
+│   User / Client      │        │  Wealth Manager (WL API) │
+│  (owns the vault)     │        │  provisions vaults for    │
+└──────────┬────────────┘        │  many end-clients         │
+           │                     └───────────┬──────────────┘
+           ▼                                 ▼
+┌────────────────────────────────────────────────────────────┐
+│                       Policy Vault (Soroban)                 │
+│   Stellar multi-sig account + scoped policy contract          │
+│   allows: rebalance / rotate / claim fee                      │
+│   forbids: arbitrary transfer, signer change, approvals        │
+└──────────┬───────────────────────────────────────────────────┘
+           │  scoped calls only
+           ▼
+┌────────────────────────────────────────────────────────────┐
+│                     Strategy Agent Fleet                     │
+│  on-chain identity · reputation · health checks · failover    │
+│  reads: cycle-phase / drawdown / volatility triggers           │
+│  executes: basket rotation via Stellar AMM (Soroswap-style)    │
+└──────────┬───────────────────────────────────────────────────┘
+           │  fee + micropayment settlement
+           ▼
+┌────────────────────────────────────────────────────────────┐
+│                Private Payment Rail (tokenless)               │
+│   performance fee settlement · agent-to-agent micropayments   │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🧰 Core CLI (`/core`)
+## Fee model
 
-The **core** crate is a Rust binary that will power SoroScope's resource profiling.
-
-### Features
-- **Resource Profiling**: Analyze CPU, RAM, and ledger footprint consumption
-- **Gas Golfing Analysis**: Automated detection of gas-heavy patterns with optimization suggestions
-- **Contract Simulation**: Test contract functions with various inputs
-- **Fee Market Analysis**: Real-time fee predictions and market conditions
-
-### Build & Run
-```bash
-# Build the binary
-cargo build -p soroscope-core
-
-# Run the server (RUST_LOG=info is required to see API logs)
-RUST_LOG=info cargo run -p soroscope-core
-```
-
-The server listens on `http://localhost:8080` by default.
-
-### Merkle Tree Utility
-
-The core crate includes an off-chain Merkle Tree utility (`core/src/merkle_tree.rs`) for building binary Merkle trees and generating inclusion proofs compatible with the `cross_chain_verifier` contract.
-
-**Build a tree and get the root:**
-
-```bash
-# Run your script that calls MerkleTree::build() and prints the root hex
-ROOT=$(cargo run --example build_tree -- --block 1000)
-
-# Post the root on-chain
-soroban contract invoke \
-  --id <CONTRACT_ID> \
-  --source relayer \
-  --network testnet \
-  -- update_root \
-  --block_height 1000 \
-  --new_root "$ROOT"
-```
-
-**Verify a proof on-chain:**
-
-```bash
-soroban contract invoke \
-  --id <CONTRACT_ID> \
-  --network testnet \
-  -- verify_message \
-  --block_height 1000 \
-  --leaf "<leaf_hex>" \
-  --proof '["<sibling_hex>"]' \
-  --proof_flags '[true]'
-```
-
-**Run Merkle Tree tests:**
-
-```bash
-cargo test -p soroscope-core merkle_tree
-```
-
-See [`core/MERKLE_TREE_README.md`](./core/MERKLE_TREE_README.md) for full API reference, proof generation examples, and the complete relayer pipeline.
+- **10% performance fee**, charged only above a per-vault high-water mark.
+- **0% management fee.**
+- Fees accrue and settle on-chain, computed from the vault's own realized NAV — never estimated or self-reported by the operator.
+- White-label partners set their own client-facing markup independently of the base protocol fee.
 
 ---
 
-## 🌐 Web Dashboard (`/web`)
+## Non-custodial guarantees
 
-The **web** app is a Next.js + Tailwind CSS dashboard for exploring resource usage visually.
+- The protocol operator **cannot** withdraw user funds under any circumstance — the Policy Vault contract has no code path that allows it.
+- The strategy agent's permissions are scoped to a fixed allow-list of contract calls, enforced on-chain, not by convention.
+- Users can revoke agent authorization on their vault at any time and retain full sole custody via their own Stellar account signers.
 
-### Install Dependencies
+---
+
+## Tech stack
+
+- **Stellar** — base settlement layer, native multi-signature accounts
+- **Soroban** — policy vault contracts, strategy trigger logic, fee accrual/high-water-mark tracking
+- **Stellar AMM (Soroswap-style pools)** — basket rotation and the stable LP rotation position
+- **Anchored/bridged BTC & ETH representations** — for the bull-phase basket
+- **Private tokenless payment rail** — fee settlement and agent-to-agent micropayments
+- **Fleet orchestration layer** — agent identity, reputation, health/failover, per-vault authorization
+
+---
+
+## Getting started
+
+> This repository contains the Soroban contracts (Policy Vault, Strategy Trigger, Fee Accrual), the agent fleet runtime, and the white-label API. See `/contracts`, `/agent`, and `/api` for component-level setup instructions.
+
 ```bash
-cd web
-npm install        # or: pnpm install / yarn install
-```
+# clone
+git clone https://github.com/<org>/perigee.git
+cd perigee
 
-### Run in Development
-```bash
-npm run dev
-```
+# install
+npm install
 
-Then open:
-- http://localhost:3000
+# build & test the Soroban contracts
+cd contracts && soroban contract build && cargo test
 
-### Build for Production
-```bash
-npm run build
-npm start
+# run the agent runtime locally against Stellar testnet
+cd ../agent && npm run start:testnet
+
+# run the white-label API
+cd ../api && npm run dev
 ```
 
 ---
 
-## 📦 Contracts (`/contracts`)
+## Roadmap
 
-This folder contains sample Soroban contracts. To build them for analysis:
-
-```bash
-# Build all contracts to WASM
-cargo build --target wasm32-unknown-unknown --release
-```
-
-The resulting `.wasm` files will be located in `target/wasm32-unknown-unknown/release/`. You can upload these to the Web Dashboard for profiling.
+- [ ] Mainnet Policy Vault contract audit
+- [ ] Additional rotation strategies (beyond BTC/ETH ↔ stable LP)
+- [ ] Public agent reputation dashboard
+- [ ] Expanded white-label reporting (tax-lot level detail)
+- [ ] Multi-asset high-water-mark accounting (beyond single stable-denominated NAV)
 
 ---
 
+## License
 
-
-## 📅 Roadmap (2026)
-- **Phase 1 [COMPLETED]:** Core CLI engine for resource extraction.
-- **Phase 2 [IN PROGRESS]:** Integration of Frontend dashboard with Backend simulation engine.
-- **Phase 3 [IN PROGRESS]:** Automated optimization recommendations (Gas Golfing Analysis ✓).
-
----
-
-## 🧪 Development & Scripts
-
-From the **repo root**:
-
-- Check workspace builds:
-  ```bash
-  cargo build
-  ```
-
-- Format Rust code:
-  ```bash
-  cargo fmt
-  ```
-
-- Lint / type-check web app:
-  ```bash
-  cd web
-  npm run lint
-  ```
-
-These checks run automatically on every push and pull request via the CI pipeline in `.github/workflows/ci.yml` (`cargo check`, `cargo fmt`, `cargo clippy`, `cargo test`, and frontend lint).
-
----
-
-## 🤝 Contributing
-Contributions are welcome! Please read our [**Contributing Guide**](./CONTRIBUTING.md) to learn about our development process, coding standards, and how to submit a pull request.
-
----
-### 🧪 Live Analysis
-SoroScope now supports live simulation via the web dashboard. Connect your wallet, select a function, and get your **Contract Nutrition Label** instantly.
-
----
-Built with ❤️ by **SoroLabs**. Powered by the Soroban ecosystem.
+MIT
