@@ -1,10 +1,10 @@
 [package]
-name = "soroscope-core"
+name = "Perigee-core"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "soroscope_core"
+name = "Perigee_core"
 path = "src/lib.rs"
 crate-type = ["rlib"]
 

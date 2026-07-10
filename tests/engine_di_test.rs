@@ -1,5 +1,5 @@
 // tests/engine_di_test.rs
-use soroscope::engine::{
+use Perigee::engine::{
     SimulationEngine, MockProvider, NoOpCache,
     SimulationRpcResult, ProviderError,
 };
@@ -10,12 +10,12 @@ mod tests {
     
     struct MockParser;
     
-    impl soroscope::engine::Parser for MockParser {
-        fn parse_contract_id(&self, contract_id: &str) -> Result<[u8; 32], soroscope::engine::ParserError> {
+    impl Perigee::engine::Parser for MockParser {
+        fn parse_contract_id(&self, contract_id: &str) -> Result<[u8; 32], Perigee::engine::ParserError> {
             Ok([0u8; 32])
         }
         
-        fn parse_sc_val_arg(&self, arg: &str) -> Result<soroban_sdk::xdr::ScVal, soroscope::engine::ParserError> {
+        fn parse_sc_val_arg(&self, arg: &str) -> Result<soroban_sdk::xdr::ScVal, Perigee::engine::ParserError> {
             use soroban_sdk::xdr::ScVal;
             Ok(ScVal::Void)
         }

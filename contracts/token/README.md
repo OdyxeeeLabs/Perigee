@@ -49,29 +49,31 @@ pub const BURN: u32 = 1 << 5;        // 0x00000020 - Pause burning
 
 On `initialize`, the token calls `EmergencyGuard::initialize(admins, threshold)`:
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `admins` | `Vec<Address>` | `[admin]` | Guard administrators authorized for pause and multi-sig actions |
-| `threshold` | `u32` | `1` | Minimum distinct guard admin signatures required for multi-sig operations |
+| Parameter   | Type           | Default   | Description                                                               |
+| ----------- | -------------- | --------- | ------------------------------------------------------------------------- |
+| `admins`    | `Vec<Address>` | `[admin]` | Guard administrators authorized for pause and multi-sig actions           |
+| `threshold` | `u32`          | `1`       | Minimum distinct guard admin signatures required for multi-sig operations |
 
 ### Storage Keys (`GuardDataKey`)
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `PauseState` | `PauseType(u32)` | Bitmask of paused operations |
-| `Admins` | `Vec<Address>` | Current guard administrator list |
-| `SignatureThreshold` | `u32` | Required signature count for multi-sig |
+| Key                  | Type             | Description                            |
+| -------------------- | ---------------- | -------------------------------------- |
+| `PauseState`         | `PauseType(u32)` | Bitmask of paused operations           |
+| `Admins`             | `Vec<Address>`   | Current guard administrator list       |
+| `SignatureThreshold` | `u32`            | Required signature count for multi-sig |
 
 Token-specific storage (`DataKey::Admin`) holds the mint authority. After `set_admin`, both `DataKey::Admin` and `GuardDataKey::Admins` are updated to the new address (single-admin setups).
 
 ## Initialization
 
 When the token is initialized, the EmergencyGuard is automatically set up with:
+
 - **Admin**: The contract admin (set during initialization)
 - **Signature Threshold**: 1 (single admin can pause specific operations)
 - **Initial Pause State**: No operations paused (`0`)
 
 Example initialization:
+
 ```bash
 stellar contract invoke \
   --source-account <account> \
@@ -87,20 +89,21 @@ stellar contract invoke \
 
 All guard events are emitted by the `emergency_guard` library into the token contract's event log:
 
-| Event topic | Payload | When emitted |
-|-------------|---------|--------------|
-| `emergency_guard_initialized` | `{ admins, threshold }` | `initialize` |
-| `emergency_guard_pause_state_changed` | `{ admin, operation, paused }` | `set_pause` / `guard_pause` |
-| `emergency_guard_emergency_paused_all` | `{ approvers }` | `emergency_pause_all` |
-| `emergency_guard_resumed_all` | `{ approvers }` | `resume_all` / `guard_unpause` |
-| `emergency_guard_admin_added` | `{ approvers, new_admin }` | `guard_add_admin` |
-| `emergency_guard_admin_removed` | `{ approvers, admin }` | `guard_remove_admin` |
+| Event topic                            | Payload                        | When emitted                   |
+| -------------------------------------- | ------------------------------ | ------------------------------ |
+| `emergency_guard_initialized`          | `{ admins, threshold }`        | `initialize`                   |
+| `emergency_guard_pause_state_changed`  | `{ admin, operation, paused }` | `set_pause` / `guard_pause`    |
+| `emergency_guard_emergency_paused_all` | `{ approvers }`                | `emergency_pause_all`          |
+| `emergency_guard_resumed_all`          | `{ approvers }`                | `resume_all` / `guard_unpause` |
+| `emergency_guard_admin_added`          | `{ approvers, new_admin }`     | `guard_add_admin`              |
+| `emergency_guard_admin_removed`        | `{ approvers, admin }`         | `guard_remove_admin`           |
 
 ## Features
 
 ### 1. Standard Token Operations
 
 The token supports all standard Soroban token operations:
+
 - `mint(admin, to, amount)` - Create new tokens (respects `MINT` pause; requires token admin auth)
 - `transfer(from, to, amount)` - Transfer tokens (respects `TRANSFER` pause)
 - `burn(from, amount)` - Destroy tokens (respects `BURN` pause)
@@ -153,19 +156,20 @@ Unauthorized callers (non-guard admins or insufficient signatures) receive `Guar
 
 ### 4. Error Handling
 
-| `GuardError` | Code | When |
-|--------------|------|------|
-| `NotInitialized` | 0 | Guard not yet initialized |
-| `Unauthorized` | 1 | Caller not a guard admin |
-| `Paused` | 2 | Operation is paused |
-| `InsufficientSignatures` | 3 | Multi-sig threshold not met |
-| `InvalidThreshold` | 4 | Invalid threshold configuration |
-| `AdminNotFound` | 5 | Admin not in guard list |
-| `AlreadyInitialized` | 6 | Double initialization |
+| `GuardError`             | Code | When                            |
+| ------------------------ | ---- | ------------------------------- |
+| `NotInitialized`         | 0    | Guard not yet initialized       |
+| `Unauthorized`           | 1    | Caller not a guard admin        |
+| `Paused`                 | 2    | Operation is paused             |
+| `InsufficientSignatures` | 3    | Multi-sig threshold not met     |
+| `InvalidThreshold`       | 4    | Invalid threshold configuration |
+| `AdminNotFound`          | 5    | Admin not in guard list         |
+| `AlreadyInitialized`     | 6    | Double initialization           |
 
 ## Storage
 
 The token contract stores:
+
 - **Token Metadata**: Name, symbol, decimals (`DataKey` metadata keys)
 - **Balances**: Map of address to balance
 - **Allowances**: Map of (holder, spender) to allowance
@@ -211,21 +215,24 @@ fn get_guard_threshold(e: Env) -> u32
 ## Development
 
 The token contract is built with:
+
 - **Language**: Rust
 - **Framework**: Soroban SDK 22.0.0
 - **Dependencies**: `emergency_guard` crate (`default-features = false`)
 
 To build the contract:
+
 ```bash
 cd contracts/token
 cargo build --target wasm32-unknown-unknown --release
 ```
 
 To run tests:
+
 ```bash
 cargo test -p soroban-token-contract --lib
 ```
 
 ## License
 
-This contract is part of the SoroScope project.
+This contract is part of the Perigee project.

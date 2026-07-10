@@ -27,7 +27,7 @@ use utoipa::ToSchema;
 
 const CHALLENGE_EXPIRY_SECS: u64 = 300;
 const JWT_EXPIRY_SECS: u64 = 86400;
-const WEB_AUTH_DOMAIN: &str = "soroscope";
+const WEB_AUTH_DOMAIN: &str = "Perigee";
 
 pub struct AuthState {
     pub encoding_key: EncodingKey,

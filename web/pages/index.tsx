@@ -81,7 +81,7 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>SoroScope - Soroban Smart Contract Resource Analyzer</title>
+        <title>Perigee - Soroban Smart Contract Resource Analyzer</title>
         <meta
           name="description"
           content="Explore, test, and analyze the CPU, RAM, and ledger footprint of Soroban smart contracts."
@@ -91,7 +91,7 @@ export default function Home() {
         <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
           <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
             <div>
-              <h1 className="text-2xl font-bold text-cyan-400">SoroScope</h1>
+              <h1 className="text-2xl font-bold text-cyan-400">Perigee</h1>
               <p className="text-sm text-slate-400">Soroban analysis workspace</p>
             </div>
             <ConnectButton />

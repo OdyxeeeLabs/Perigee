@@ -1,4 +1,4 @@
-//! Merkle Tree implementation for SoroScope state commitments.
+//! Merkle Tree implementation for Perigee state commitments.
 //!
 //! Leaves are SHA-256 hashed to form leaf nodes. Internal nodes are produced by
 //! sorting each pair of child hashes (min || max) before concatenating and hashing,

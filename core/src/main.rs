@@ -157,7 +157,7 @@ fn default_gossip_interval_secs() -> u64 {
 }
 
 fn default_database_url() -> String {
-    "sqlite://soroscope.db".to_string()
+    "sqlite://Perigee.db".to_string()
 }
 
 fn default_job_timeout_secs() -> u64 {
@@ -212,7 +212,7 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("gossip_interval_secs", 30)?
         .set_default("simulation_timeout_secs", 30)?
         .set_default("simulation_mode", "failover")?
-        .set_default("database_url", "sqlite://soroscope.db")?
+        .set_default("database_url", "sqlite://Perigee.db")?
         .set_default("job_timeout_secs", 300)?
         .set_default("max_concurrent_jobs", 10)?
         .set_default("fee_collection_interval_secs", 5)?
@@ -898,11 +898,11 @@ async fn analyze(
 
     let mut headers = HeaderMap::new();
     headers.insert(
-        HeaderName::from_static("x-soroscope-cache"),
+        HeaderName::from_static("x-Perigee-cache"),
         HeaderValue::from_static(cache_status),
     );
     headers.insert(
-        HeaderName::from_static("x-soroscope-latency-ms"),
+        HeaderName::from_static("x-Perigee-latency-ms"),
         HeaderValue::from_str(&latency_ms.to_string())
             .unwrap_or_else(|_| HeaderValue::from_static("0")),
     );
@@ -1558,7 +1558,7 @@ async fn fee_analytics(
         (name = "Streaming", description = "WebSocket real-time simulation progress streaming")
     ),
     info(
-        title = "SoroScope API",
+        title = "Perigee API",
         version = "0.1.0",
         description = "API for analyzing Soroban smart contract resource consumption and fee market predictions"
     )
@@ -1600,10 +1600,10 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::info!("SoroScope Starting...");
+    tracing::info!("Perigee Starting...");
 
     let config = load_config().expect("Failed to load configuration");
-    tracing::info!("SoroScope initialized with config: {:?}", config);
+    tracing::info!("Perigee initialized with config: {:?}", config);
     tracing::info!(
         redis_url = %config.redis_url,
         "Cache config: using in-memory (moka) MVP; Redis URL reserved for future migration"
@@ -1612,7 +1612,7 @@ async fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() > 1 && args[1] == "benchmark" {
-        tracing::info!("Starting SoroScope Benchmark...");
+        tracing::info!("Starting Perigee Benchmark...");
 
         let possible_paths = vec![
             "target/wasm32-unknown-unknown/release/soroban_token_contract.wasm",
@@ -1629,9 +1629,9 @@ async fn main() {
         }
 
         if let Some(path) = wasm_path {
-            let db_path = env::var("SOROSCOPE_DB_PATH")
-                .unwrap_or_else(|_| "soroscope_metrics.db".to_string());
-            let webhook_url = env::var("SOROSCOPE_ALERT_WEBHOOK_URL").ok();
+            let db_path = env::var("Perigee_DB_PATH")
+                .unwrap_or_else(|_| "Perigee_metrics.db".to_string());
+            let webhook_url = env::var("Perigee_ALERT_WEBHOOK_URL").ok();
             let simulation_service = SimulationService::new(db_path, webhook_url)
                 .expect("initialize simulation service");
             if let Err(e) = benchmarks::run_token_benchmark(path, &simulation_service).await {
@@ -1649,7 +1649,7 @@ async fn main() {
     // ── CLI: merkle subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "merkle" {
         if args.len() < 4 {
-            eprintln!("Usage: soroscope-core merkle <build|proof> <args>");
+            eprintln!("Usage: Perigee-core merkle <build|proof> <args>");
             eprintln!("Commands:");
             eprintln!("  build <leaf1> <leaf2> ...            Build a Merkle tree and print the root hash");
             eprintln!("  proof <leaf_index> <leaf1> <leaf2> ... Generate a Merkle proof for the given leaf index");
@@ -1660,7 +1660,7 @@ async fn main() {
         match command.as_str() {
             "build" => {
                 if args.len() < 4 {
-                    eprintln!("Usage: soroscope-core merkle build <leaf1> <leaf2> ...");
+                    eprintln!("Usage: Perigee-core merkle build <leaf1> <leaf2> ...");
                     std::process::exit(1);
                 }
                 let leaves: Vec<Vec<u8>> = args[3..]
@@ -1679,7 +1679,7 @@ async fn main() {
             "proof" => {
                 if args.len() < 5 {
                     eprintln!(
-                        "Usage: soroscope-core merkle proof <leaf_index> <leaf1> <leaf2> ..."
+                        "Usage: Perigee-core merkle proof <leaf_index> <leaf1> <leaf2> ..."
                     );
                     std::process::exit(1);
                 }
@@ -1725,12 +1725,12 @@ async fn main() {
     }
 
     // Default Web Server
-    println!("SoroScope CLI Initialized. Run with 'benchmark' argument to profile token contract.");
+    println!("Perigee CLI Initialized. Run with 'benchmark' argument to profile token contract.");
 
     // ── CLI: compare subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "compare" {
         if args.len() < 4 {
-            eprintln!("Usage: soroscope-core compare <current.wasm> <base.wasm>");
+            eprintln!("Usage: Perigee-core compare <current.wasm> <base.wasm>");
             eprintln!("\nCompare two WASM contract versions and detect resource regressions.");
             eprintln!("\nArguments:");
             eprintln!("  <current.wasm>  Path to the new (current) version WASM file");
@@ -1779,7 +1779,7 @@ async fn main() {
     if args.len() > 1 && args[1] == "export" {
         if args.len() < 6 {
             eprintln!(
-                "Usage: soroscope-core export <contract_id> <function> <args_json> <output_file>"
+                "Usage: Perigee-core export <contract_id> <function> <args_json> <output_file>"
             );
             eprintln!("\nSimulate a transaction and export the touched state to a JSON file.");
             std::process::exit(1);
@@ -1825,7 +1825,7 @@ async fn main() {
     // ── CLI: restore subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "restore" {
         if args.len() < 6 {
-            eprintln!("Usage: soroscope-core restore <snapshot_file> <contract_id> <function> <args_json>");
+            eprintln!("Usage: Perigee-core restore <snapshot_file> <contract_id> <function> <args_json>");
             eprintln!("\nRestore state from a JSON file and run a simulation.");
             std::process::exit(1);
         }
@@ -1873,7 +1873,7 @@ async fn main() {
         return;
     }
 
-    tracing::info!("Starting SoroScope API Server...");
+    tracing::info!("Starting Perigee API Server...");
 
     let auth_state = Arc::new(auth::AuthState::new(
         config.jwt_private_key.clone(),
@@ -2037,7 +2037,7 @@ async fn main() {
     }
 
     // ── Persistent Cache Setup (L2) ─────────────────────────────────────
-    let sled_db = sled::open("soroscope_cache").expect("Failed to open sled database");
+    let sled_db = sled::open("Perigee_cache").expect("Failed to open sled database");
     let simulation_cache = SimulationCache::new(&sled_db);
     let contract_cache = Arc::new(ContractCache::new(&sled_db));
 
@@ -2074,7 +2074,7 @@ async fn main() {
         .route(
             "/",
             get(|| async {
-                "Hello from SoroScope! Usage: cargo run -p soroscope-core -- benchmark"
+                "Hello from Perigee! Usage: cargo run -p Perigee-core -- benchmark"
             }),
         )
         .route("/health", get(health_check))
