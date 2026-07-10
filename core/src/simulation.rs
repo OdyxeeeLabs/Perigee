@@ -133,7 +133,7 @@ pub struct ProfileResult {
 /// Instruments a WASM binary by injecting per-function instruction counters.
 ///
 /// Strategy: for each exported function `f` at absolute index `abs_idx`, adds a
-/// wrapper `soroscope_profile_<name>() -> i64` that:
+/// wrapper `Perigee_profile_<name>() -> i64` that:
 ///   1. Resets counter global for `f` to 0
 ///   2. Calls `f` (discarding its return value)
 ///   3. Returns the counter as a soroban I64Small: `(count << 8) | 6`
@@ -224,7 +224,7 @@ impl WasmInstrumenter {
     /// Return the wrapper function name for a given exported function name.
     /// The wrapper calls the original function and returns the counter as I64Small.
     pub fn wrapper_name(fn_name: &str) -> String {
-        format!("soroscope_profile_{fn_name}")
+        format!("Perigee_profile_{fn_name}")
     }
 
     /// Return the export map (export name → absolute function index).
@@ -236,7 +236,7 @@ impl WasmInstrumenter {
     ///
     /// For each defined function at index `i`, adds:
     ///   - A mutable i64 global (counter, init 0)
-    ///   - A wrapper export `soroscope_count_{i}() -> i64` that calls the
+    ///   - A wrapper export `Perigee_count_{i}() -> i64` that calls the
     ///     original function (dropping its return values), reads the counter,
     ///     and returns it as a soroban I64Small `(count << 8) | 6`.
     ///
@@ -473,7 +473,7 @@ impl WasmInstrumenter {
                         })?;
                     // Append N accessor function exports
                     for i in 0..n {
-                        let name = format!("soroscope_count_{i}");
+                        let name = format!("Perigee_count_{i}");
                         exports.export(&name, ExportKind::Func, total_func_count + i);
                     }
                     module.section(&exports);
@@ -541,7 +541,7 @@ impl WasmInstrumenter {
                         saw_export_section = true;
                         let mut exports = ExportSection::new();
                         for i in 0..n {
-                            let name = format!("soroscope_count_{i}");
+                            let name = format!("Perigee_count_{i}");
                             exports.export(&name, ExportKind::Func, total_func_count + i);
                         }
                         module.section(&exports);
@@ -665,7 +665,7 @@ impl WasmInstrumenter {
                     if !saw_export_section && n > 0 {
                         let mut exports = ExportSection::new();
                         for i in 0..n {
-                            let name = format!("soroscope_count_{i}");
+                            let name = format!("Perigee_count_{i}");
                             exports.export(&name, ExportKind::Func, total_func_count + i);
                         }
                         module.section(&exports);
@@ -3234,13 +3234,13 @@ pub fn profile_contract_with_flamegraph(
     }
 
     // ── Invoke via wrapper (instrumented) or original (budget fallback) ───────
-    // The wrapper `soroscope_count_{i}` calls the original function and returns
+    // The wrapper `Perigee_count_{i}` calls the original function and returns
     // the counter as a soroban I64Small in one invocation, so globals stay alive.
     let (invoke_sym, use_wrapper) = if !use_budget_fallback {
         // Find the defined-function index for the requested function name
         let wrapper_idx = func_names.iter().position(|n| n == &function_name);
         if let Some(idx) = wrapper_idx {
-            let wrapper_name = format!("soroscope_count_{idx}");
+            let wrapper_name = format!("Perigee_count_{idx}");
             (Symbol::new(&env, &wrapper_name), true)
         } else {
             // function_name not in defined functions — try calling it directly
@@ -4225,20 +4225,20 @@ mod tests {
         let instr = WasmInstrumenter::new(&wasm).unwrap();
         let instrumented = instr.instrument(&wasm).unwrap();
 
-        // The instrumented binary should export soroscope_count_0
+        // The instrumented binary should export Perigee_count_0
         use wasmparser::{ExternalKind, Parser, Payload};
         let mut found = false;
         for payload in Parser::new(0).parse_all(&instrumented) {
             if let Ok(Payload::ExportSection(reader)) = payload {
                 for export in reader {
                     let export = export.unwrap();
-                    if export.kind == ExternalKind::Func && export.name == "soroscope_count_0" {
+                    if export.kind == ExternalKind::Func && export.name == "Perigee_count_0" {
                         found = true;
                     }
                 }
             }
         }
-        assert!(found, "accessor export soroscope_count_0 not found");
+        assert!(found, "accessor export Perigee_count_0 not found");
     }
 
     // ── FlamegraphBuilder unit tests ──────────────────────────────────────────
@@ -4417,8 +4417,8 @@ mod tests {
         env.mock_all_auths();
         let contract_id = env.register(&*instrumented, ());
 
-        // Call the wrapper soroscope_count_0 which calls add and returns the counter
-        let wrapper_sym = Symbol::new(&env, "soroscope_count_0");
+        // Call the wrapper Perigee_count_0 which calls add and returns the counter
+        let wrapper_sym = Symbol::new(&env, "Perigee_count_0");
         let empty_args: soroban_sdk::Vec<Val> = soroban_sdk::Vec::new(&env);
         env.cost_estimate().budget().reset_unlimited();
 

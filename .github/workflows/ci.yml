@@ -1,4 +1,4 @@
-name: SoroScope CI
+name: Perigee CI
 
 on:
   push:

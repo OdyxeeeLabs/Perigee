@@ -1,24 +1,24 @@
 /**
- * SoroScope API client.
+ * Perigee API client.
  *
  * Uses the browser-native Fetch API so the frontend does not need an extra
  * Axios dependency. Set NEXT_PUBLIC_API_URL in production to point at the Rust
  * simulation engine backend; local development defaults to localhost.
  */
 
-import type { AnalyzeResponse } from './sorobantypes';
+import type { AnalyzeResponse } from "./sorobantypes";
 
-const DEFAULT_DEV_API_URL = 'http://localhost:8080';
+const DEFAULT_DEV_API_URL = "http://localhost:8080";
 
 export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, '') ?? DEFAULT_DEV_API_URL;
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") ?? DEFAULT_DEV_API_URL;
 
 export const apiConfig = {
   baseUrl: API_URL,
-  environment: process.env.NODE_ENV ?? 'development',
+  environment: process.env.NODE_ENV ?? "development",
 };
 
-export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
+export interface ApiRequestOptions extends Omit<RequestInit, "body"> {
   params?: Record<string, string | number | boolean | null | undefined>;
   token?: string;
   body?: BodyInit | object | null;
@@ -31,23 +31,26 @@ export class ApiError extends Error {
 
   constructor(status: number, statusText: string, body: unknown) {
     const message =
-      typeof body === 'object' &&
+      typeof body === "object" &&
       body !== null &&
-      'message' in body &&
-      typeof body.message === 'string'
+      "message" in body &&
+      typeof body.message === "string"
         ? body.message
         : statusText;
 
     super(`API Error ${status}: ${message}`);
-    this.name = 'ApiError';
+    this.name = "ApiError";
     this.status = status;
     this.statusText = statusText;
     this.body = body;
   }
 }
 
-export function apiUrl(path: string, params?: ApiRequestOptions['params']): string {
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+export function apiUrl(
+  path: string,
+  params?: ApiRequestOptions["params"],
+): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   const url = new URL(`${API_URL}${normalizedPath}`);
 
   if (params) {
@@ -61,20 +64,22 @@ export function apiUrl(path: string, params?: ApiRequestOptions['params']): stri
   return url.toString();
 }
 
-function isJsonBody(body: ApiRequestOptions['body']): body is object {
+function isJsonBody(body: ApiRequestOptions["body"]): body is object {
   return (
     body !== null &&
     body !== undefined &&
-    typeof body === 'object' &&
-    !(typeof Blob !== 'undefined' && body instanceof Blob) &&
-    !(typeof FormData !== 'undefined' && body instanceof FormData) &&
-    !(typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) &&
+    typeof body === "object" &&
+    !(typeof Blob !== "undefined" && body instanceof Blob) &&
+    !(typeof FormData !== "undefined" && body instanceof FormData) &&
+    !(
+      typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams
+    ) &&
     !(body instanceof ArrayBuffer) &&
     !ArrayBuffer.isView(body)
   );
 }
 
-function buildBody(body: ApiRequestOptions['body']): BodyInit | undefined {
+function buildBody(body: ApiRequestOptions["body"]): BodyInit | undefined {
   if (body === null || body === undefined) {
     return undefined;
   }
@@ -87,24 +92,29 @@ async function parseResponse(response: Response): Promise<unknown> {
     return null;
   }
 
-  const contentType = response.headers.get('content-type') ?? '';
-  return contentType.includes('application/json') ? response.json() : response.text();
+  const contentType = response.headers.get("content-type") ?? "";
+  return contentType.includes("application/json")
+    ? response.json()
+    : response.text();
 }
 
-async function request<T>(endpoint: string, options: ApiRequestOptions = {}): Promise<T> {
+async function request<T>(
+  endpoint: string,
+  options: ApiRequestOptions = {},
+): Promise<T> {
   const { params, token, headers, body, ...requestInit } = options;
   const requestHeaders = new Headers(headers);
 
-  if (!requestHeaders.has('Accept')) {
-    requestHeaders.set('Accept', 'application/json');
+  if (!requestHeaders.has("Accept")) {
+    requestHeaders.set("Accept", "application/json");
   }
 
-  if (token && !requestHeaders.has('Authorization')) {
-    requestHeaders.set('Authorization', `Bearer ${token}`);
+  if (token && !requestHeaders.has("Authorization")) {
+    requestHeaders.set("Authorization", `Bearer ${token}`);
   }
 
-  if (isJsonBody(body) && !requestHeaders.has('Content-Type')) {
-    requestHeaders.set('Content-Type', 'application/json');
+  if (isJsonBody(body) && !requestHeaders.has("Content-Type")) {
+    requestHeaders.set("Content-Type", "application/json");
   }
 
   const response = await fetch(apiUrl(endpoint, params), {
@@ -126,23 +136,35 @@ export const apiClient = {
   request,
 
   get<T>(endpoint: string, options?: ApiRequestOptions): Promise<T> {
-    return request<T>(endpoint, { ...options, method: 'GET' });
+    return request<T>(endpoint, { ...options, method: "GET" });
   },
 
-  post<T>(endpoint: string, body?: ApiRequestOptions['body'], options?: ApiRequestOptions): Promise<T> {
-    return request<T>(endpoint, { ...options, method: 'POST', body });
+  post<T>(
+    endpoint: string,
+    body?: ApiRequestOptions["body"],
+    options?: ApiRequestOptions,
+  ): Promise<T> {
+    return request<T>(endpoint, { ...options, method: "POST", body });
   },
 
-  put<T>(endpoint: string, body?: ApiRequestOptions['body'], options?: ApiRequestOptions): Promise<T> {
-    return request<T>(endpoint, { ...options, method: 'PUT', body });
+  put<T>(
+    endpoint: string,
+    body?: ApiRequestOptions["body"],
+    options?: ApiRequestOptions,
+  ): Promise<T> {
+    return request<T>(endpoint, { ...options, method: "PUT", body });
   },
 
-  patch<T>(endpoint: string, body?: ApiRequestOptions['body'], options?: ApiRequestOptions): Promise<T> {
-    return request<T>(endpoint, { ...options, method: 'PATCH', body });
+  patch<T>(
+    endpoint: string,
+    body?: ApiRequestOptions["body"],
+    options?: ApiRequestOptions,
+  ): Promise<T> {
+    return request<T>(endpoint, { ...options, method: "PATCH", body });
   },
 
   delete<T>(endpoint: string, options?: ApiRequestOptions): Promise<T> {
-    return request<T>(endpoint, { ...options, method: 'DELETE' });
+    return request<T>(endpoint, { ...options, method: "DELETE" });
   },
 };
 
@@ -165,10 +187,13 @@ export interface AnalyzeWasmRequest {
 
 export const analyzeService = {
   analyze(req: AnalyzeRequest, token?: string): Promise<AnalyzeResponse> {
-    return apiClient.post<AnalyzeResponse>('/analyze', req, { token });
+    return apiClient.post<AnalyzeResponse>("/analyze", req, { token });
   },
 
-  analyzeWasm(req: AnalyzeWasmRequest, token?: string): Promise<AnalyzeResponse> {
-    return apiClient.post<AnalyzeResponse>('/analyze/wasm', req, { token });
+  analyzeWasm(
+    req: AnalyzeWasmRequest,
+    token?: string,
+  ): Promise<AnalyzeResponse> {
+    return apiClient.post<AnalyzeResponse>("/analyze/wasm", req, { token });
   },
 };

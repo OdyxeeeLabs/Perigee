@@ -3156,8 +3156,8 @@ version = "0.1.0"
 dependencies = [
  "emergency_guard",
  "soroban-sdk",
- "soroscope-error-codes",
- "soroscope-math",
+ "Perigee-error-codes",
+ "Perigee-math",
 ]
 
 [[package]]
@@ -3189,7 +3189,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "soroscope-core"
+name = "Perigee-core"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -3235,18 +3235,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "soroscope-error-codes"
+name = "Perigee-error-codes"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
 ]
 
 [[package]]
-name = "soroscope-math"
+name = "Perigee-math"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
- "soroscope-error-codes",
+ "Perigee-error-codes",
 ]
 
 [[package]]
@@ -5854,8 +5854,8 @@ version = "0.1.0"
 dependencies = [
  "emergency_guard",
  "soroban-sdk",
- "soroscope-error-codes",
- "soroscope-math",
+ "Perigee-error-codes",
+ "Perigee-math",
 ]
 
 [[package]]
@@ -5887,7 +5887,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "soroscope-core"
+name = "Perigee-core"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -5933,18 +5933,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "soroscope-error-codes"
+name = "Perigee-error-codes"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
 ]
 
 [[package]]
-name = "soroscope-math"
+name = "Perigee-math"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
- "soroscope-error-codes",
+ "Perigee-error-codes",
 ]
 
 [[package]]
@@ -7200,8 +7200,8 @@ version = "0.1.0"
 dependencies = [
  "emergency_guard",
  "soroban-sdk",
- "soroscope-error-codes",
- "soroscope-math",
+ "Perigee-error-codes",
+ "Perigee-math",
 ]
 
 [[package]]
@@ -7218,18 +7218,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "soroscope-error-codes"
+name = "Perigee-error-codes"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
 ]
 
 [[package]]
-name = "soroscope-math"
+name = "Perigee-math"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
- "soroscope-error-codes",
+ "Perigee-error-codes",
 ]
 
 [[package]]
