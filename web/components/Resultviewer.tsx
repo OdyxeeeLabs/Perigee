@@ -187,7 +187,7 @@ export function ResultViewer({ result }: ResultViewerProps) {
           </div>
         </div>
       ) : (
-        result.result && (
+        Boolean(result.result) && (
           <div
             style={{
               backgroundColor: "#0d1117",

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
+import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 
 interface WalletContextType {
   connect: (moduleId: string) => Promise<void>;
@@ -32,7 +33,7 @@ export const WalletProvider = ({ children }: { children: React.ReactNode }) => {
   const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [kit, setKit] = useState<any>(null);
+  const [kit, setKit] = useState<StellarWalletsKit | null>(null);
 
   useEffect(() => {
     const initKit = async () => {
@@ -88,8 +89,8 @@ export const WalletProvider = ({ children }: { children: React.ReactNode }) => {
       localStorage.setItem("inheritx_wallet_address", walletAddress);
       localStorage.setItem("inheritx_wallet_id", moduleId);
       setIsModalOpen(false);
-    } catch (err: any) {
-      const errorMessage = err?.message || "Connection failed";
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Connection failed";
       setError(errorMessage);
       console.error("Wallet connection failed:", err);
     } finally {
