@@ -123,7 +123,6 @@ impl MerkleTree {
 
         for level in 0..self.nodes.len() - 1 {
             let level_nodes = &self.nodes[level];
-            let sibling_index = if path_index.is_multiple_of(2) {
             let is_left = path_index.is_multiple_of(2);
             let sibling_index = if is_left {
                 path_index + 1
@@ -139,7 +138,6 @@ impl MerkleTree {
 
             proof.push(ProofNode {
                 hash: sibling_hash,
-                is_left: path_index.is_multiple_of(2),
                 is_left,
             });
 
@@ -610,4 +608,5 @@ mod fuzz_tests {
             }
         }
     }
+}
 }

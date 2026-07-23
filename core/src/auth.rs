@@ -146,12 +146,12 @@ pub struct EmergencyPauseResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    sub: String,
-    iss: String,
-    exp: u64,
-    iat: u64,
-    scopes: Vec<String>,
+pub(crate) struct Claims {
+    pub(crate) sub: String,
+    pub(crate) iss: String,
+    pub(crate) exp: u64,
+    pub(crate) iat: u64,
+    pub(crate) scopes: Vec<String>,
 }
 
 fn now_secs() -> u64 {
@@ -161,11 +161,11 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-fn network_id(passphrase: &str) -> [u8; 32] {
+pub(crate) fn network_id(passphrase: &str) -> [u8; 32] {
     Sha256::digest(passphrase.as_bytes()).into()
 }
 
-fn tx_hash(tx: &Transaction, net_id: &[u8; 32]) -> Result<[u8; 32], AppError> {
+pub(crate) fn tx_hash(tx: &Transaction, net_id: &[u8; 32]) -> Result<[u8; 32], AppError> {
     let tx_xdr = tx
         .to_xdr(Limits::none())
         .map_err(|e| AppError::Internal(format!("XDR encode error: {e}")))?;
@@ -176,7 +176,7 @@ fn tx_hash(tx: &Transaction, net_id: &[u8; 32]) -> Result<[u8; 32], AppError> {
     Ok(h.finalize().into())
 }
 
-fn build_challenge_envelope(
+pub(crate) fn build_challenge_envelope(
     state: &AuthState,
     client_pubkey: &[u8; 32],
 ) -> Result<String, AppError> {
@@ -248,7 +248,7 @@ fn build_challenge_envelope(
     Ok(BASE64.encode(&xdr))
 }
 
-fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str) -> Result<String, AppError> {
+pub(crate) fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str) -> Result<String, AppError> {
     let raw = BASE64
         .decode(signed_xdr_b64)
         .map_err(|_| AppError::BadRequest("Invalid base64".into()))?;
@@ -545,4 +545,106 @@ pub async fn jwks_handler(
             use_: "sig".to_string(),
         }],
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
+
+    #[test]
+    fn test_auth_state_new() {
+        let state = AuthState::new(
+            None,
+            Some([1u8; 32]),
+            "Test SDF Network ; September 2015".to_string(),
+            false,
+        );
+        assert!(!state.is_verification_paused());
+    }
+
+    #[test]
+    fn test_emergency_pause() {
+        let state = AuthState::new(
+            None,
+            Some([1u8; 32]),
+            "Test SDF Network ; September 2015".to_string(),
+            false,
+        );
+        assert!(!state.is_verification_paused());
+        state.set_verification_paused(true);
+        assert!(state.is_verification_paused());
+        state.set_verification_paused(false);
+        assert!(!state.is_verification_paused());
+    }
+
+    #[test]
+    fn test_challenge_and_verify() {
+        // Create test state
+        let state = AuthState::new(
+            None,
+            Some([1u8; 32]),
+            "Test SDF Network ; September 2015".to_string(),
+            false,
+        );
+
+        // Create test client key
+        let mut rng = OsRng;
+        let client_signing_key = SigningKey::generate(&mut rng);
+        let client_verifying_key = client_signing_key.verifying_key();
+
+        // Get challenge
+        let challenge_xdr = build_challenge_envelope(&state, &client_verifying_key.to_bytes()).unwrap();
+
+        // Decode and sign challenge
+        let raw = BASE64.decode(&challenge_xdr).unwrap();
+        let mut envelope = TransactionEnvelope::from_xdr(&raw, Limits::none()).unwrap();
+        let TransactionEnvelope::Tx(ref mut inner) = envelope else {
+            panic!("Expected TransactionV1 envelope");
+        };
+        let net_id = network_id(&state.network_passphrase);
+        let hash = tx_hash(&inner.tx, &net_id).unwrap();
+        let client_sig = client_signing_key.sign(&hash);
+        let client_hint: [u8; 4] = client_verifying_key.to_bytes()[28..32].try_into().unwrap();
+        let decorated = DecoratedSignature {
+            hint: SignatureHint(client_hint),
+            signature: client_sig.to_bytes().to_vec().try_into().unwrap(),
+        };
+        inner.signatures.push(decorated).unwrap();
+
+        // Encode back
+        let signed_xdr = BASE64.encode(&envelope.to_xdr(Limits::none()).unwrap());
+
+        // Verify and get JWT
+        let jwt = verify_challenge_envelope(&state, &signed_xdr).unwrap();
+        assert!(!jwt.is_empty());
+
+        // Validate JWT
+        let validation = Validation::new(Algorithm::RS256);
+        let token_data = decode::<Claims>(&jwt, &state.decoding_key, &validation).unwrap();
+        let expected_sub = Strkey::PublicKeyEd25519(stellar_strkey::ed25519::PublicKey(client_verifying_key.to_bytes())).to_string();
+        assert_eq!(token_data.claims.sub, expected_sub);
+        assert_eq!(token_data.claims.iss, WEB_AUTH_DOMAIN.to_string());
+        assert!(token_data.claims.scopes.contains(&"simulate".to_string()));
+    }
+
+    #[test]
+    fn test_jwks() {
+        let state = AuthState::new(
+            None,
+            Some([1u8; 32]),
+            "Test SDF Network ; September 2015".to_string(),
+            false,
+        );
+        // Just check that we can create a jwk response (we don't need to test the handler, just the structure)
+        let _ = JwkResponse {
+            kty: "RSA".to_string(),
+            alg: "RS256".to_string(),
+            kid: "1".to_string(),
+            n: state.jwk_n.clone(),
+            e: state.jwk_e.clone(),
+            use_: "sig".to_string(),
+        };
+    }
 }
