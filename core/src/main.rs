@@ -1589,16 +1589,55 @@ async fn registry_gossip(
     Json(state.provider_registry.registry_snapshot().await)
 }
 
+/// Resolves SIGINT / SIGTERM so the HTTP server can drain in-flight
+/// requests before exiting (Closes API-30: No graceful shutdown).
+///
+/// On Unix this listens for both signals. On non-Unix targets only
+/// Ctrl-C is wired up.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("SIGINT received, draining in-flight requests before shutdown"),
+        _ = terminate => tracing::info!("SIGTERM received, draining in-flight requests before shutdown"),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     if env::var("RUST_LOG").is_err() {
         env::set_var("RUST_LOG", "info");
     }
 
-    tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // Structured logging: `LOG_FORMAT=json` emits line-delimited JSON for
+    // log aggregators; otherwise the default pretty text format is used
+    // (Closes API-29: No structured logging library).
+    if env::var("LOG_FORMAT").as_deref() == Ok("json") {
+        tracing_subscriber::registry()
+            .with(EnvFilter::from_default_env())
+            .with(tracing_subscriber::fmt::layer().json())
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(EnvFilter::from_default_env())
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
 
     tracing::info!("Perigee Starting...");
 
@@ -2111,6 +2150,7 @@ async fn main() {
     );
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("Server failed to start");
 }

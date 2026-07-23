@@ -27,7 +27,7 @@ config = "0.14"
 axum = { version = "0.7", features = ["multipart", "ws"] }
 tempfile = "3"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 prometheus = "0.14"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
