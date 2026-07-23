@@ -19,7 +19,8 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-dropzone": "^15.0.0",
-    "tailwind-merge": "^3.4.0"
+    "tailwind-merge": "^3.4.0",
+    "helmet": "^8.0.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.3",
