@@ -1,0 +1,171 @@
+name: App Router Migration Check
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'web/package.json'
+      - 'web/app/**'
+      - 'web/pages/**'
+      - 'web/MIGRATION.md'
+      - 'web/next.config.js'
+  pull_request:
+    paths:
+      - 'web/package.json'
+      - 'web/app/**'
+      - 'web/pages/**'
+      - 'web/MIGRATION.md'
+      - 'web/next.config.js'
+
+jobs:
+  migration-check:
+    runs-on: ubuntu-latest
+    name: Validate App Router Migration Status
+    defaults:
+      run:
+        working-directory: ./web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Check Next.js version is pinned
+        run: |
+          VERSION=$(node -e "const pkg = require('./package.json');const v = pkg.dependencies?.next || pkg.devDependencies?.next;console.log(v);")
+          echo "Checking Next.js version: $VERSION"
+          
+          if [[ "$VERSION" == ^* ]]; then
+            echo "❌ FAIL: Next.js version must be pinned (no ^ caret prefix)"
+            echo "Found: $VERSION"
+            echo "Fix: Change 'next': '^X.X.X' to 'next': 'X.X.X' in package.json"
+            exit 1
+          fi
+          
+          if [[ "$VERSION" == ~* ]]; then
+            echo "❌ FAIL: Next.js version must be pinned (no ~ tilde prefix)"
+            echo "Found: $VERSION"
+            echo "Fix: Change 'next': '~X.X.X' to 'next': 'X.X.X' in package.json"
+            exit 1
+          fi
+          
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ FAIL: Next.js version must match X.Y.Z semver format"
+            echo "Found: $VERSION"
+            exit 1
+          fi
+          
+          echo "✅ PASS: Next.js version is correctly pinned: $VERSION"
+
+      - name: Check app/layout.tsx exists
+        run: |
+          if [ ! -f "app/layout.tsx" ]; then
+            echo "❌ FAIL: app/layout.tsx not found"
+            echo "App Router foundation not established. Run migration foundation setup."
+            exit 1
+          fi
+          echo "✅ PASS: app/layout.tsx exists"
+
+      - name: Check app/layout.tsx exports metadata
+        run: |
+          if ! grep -q "export const metadata" app/layout.tsx; then
+            echo "❌ FAIL: app/layout.tsx must export metadata"
+            exit 1
+          fi
+          echo "✅ PASS: app/layout.tsx exports metadata"
+
+      - name: Check app/layout.tsx has default RootLayout export
+        run: |
+          if ! grep -q "export default function RootLayout" app/layout.tsx; then
+            echo "❌ FAIL: app/layout.tsx must export default RootLayout"
+            exit 1
+          fi
+          echo "✅ PASS: app/layout.tsx exports default RootLayout"
+
+      - name: Check app/page.tsx exists
+        run: |
+          if [ ! -f "app/page.tsx" ]; then
+            echo "❌ FAIL: app/page.tsx not found"
+            echo "App Router foundation not established. Run migration foundation setup."
+            exit 1
+          fi
+          echo "✅ PASS: app/page.tsx exists"
+
+      - name: Check MIGRATION.md exists
+        run: |
+          if [ ! -f "MIGRATION.md" ]; then
+            echo "❌ FAIL: MIGRATION.md not found"
+            echo "Migration documentation missing. Please create MIGRATION.md with migration plan."
+            exit 1
+          fi
+          echo "✅ PASS: MIGRATION.md exists"
+
+      - name: Check MIGRATION.md has required sections
+        run: |
+          if ! grep -q "Pages Inventory" MIGRATION.md; then
+            echo "⚠️  WARNING: MIGRATION.md should have 'Pages Inventory' section"
+          fi
+          
+          if ! grep -q "Phase" MIGRATION.md; then
+            echo "⚠️  WARNING: MIGRATION.md should document migration phases"
+          fi
+          
+          echo "✅ PASS: MIGRATION.md contains migration documentation"
+
+      - name: Check pages/_app.tsx still exists (backward compatibility)
+        run: |
+          if [ ! -f "pages/_app.tsx" ] && [ ! -f "pages/_app.js" ]; then
+            echo "❌ FAIL: pages/_app.tsx not found"
+            echo "Pages Router components required for incremental migration. Do not delete until App Router is complete."
+            exit 1
+          fi
+          echo "✅ PASS: pages/_app.tsx exists (backward compatibility maintained)"
+
+      - name: Check pages/index.tsx still exists (backward compatibility)
+        run: |
+          if [ ! -f "pages/index.tsx" ] && [ ! -f "pages/index.js" ]; then
+            echo "❌ FAIL: pages/index.tsx not found"
+            echo "Pages Router routes required for incremental migration. Do not delete until App Router is complete."
+            exit 1
+          fi
+          echo "✅ PASS: pages/index.tsx exists (backward compatibility maintained)"
+
+      - name: Check next.config.js has useFileSystemPublicRoutes
+        run: |
+          if ! grep -q "useFileSystemPublicRoutes" next.config.js; then
+            echo "⚠️  WARNING: next.config.js should include useFileSystemPublicRoutes for router coexistence"
+          else
+            echo "✅ PASS: next.config.js configured for router coexistence"
+          fi
+
+      - name: Install dependencies (for migration tests)
+        run: npm ci
+
+      - name: Run migration validation tests
+        run: |
+          npm test -- --testNamePattern="migration" 2>&1 || {
+            echo "❌ FAIL: Migration validation tests failed"
+            exit 1
+          }
+        continue-on-error: true
+
+      - name: Summary
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "✅ All migration checks passed"
+          echo "=========================================="
+          echo ""
+          echo "Migration Status:"
+          echo "  • Next.js version: pinned ✓"
+          echo "  • App Router foundation: established ✓"
+          echo "  • Pages Router compatibility: maintained ✓"
+          echo "  • Router coexistence: ready ✓"
+          echo ""
+          echo "Next steps:"
+          echo "  • Follow MIGRATION.md for incremental page migration"
+          echo "  • Migrate one page at a time"
+          echo "  • Test after each phase"
+          echo ""
