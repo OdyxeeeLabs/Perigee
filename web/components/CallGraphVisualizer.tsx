@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useEffect, useRef } from 'react';
-import mermaid from 'mermaid';
 
 interface CallGraphVisualizerProps {
   mermaidDefinition: string;
@@ -11,33 +10,45 @@ export function CallGraphVisualizer({ mermaidDefinition }: CallGraphVisualizerPr
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'dark',
-      securityLevel: 'loose',
-      flowchart: {
-        useMaxWidth: true,
-        htmlLabels: true,
-        curve: 'basis',
-      },
-    });
-  }, []);
+    let isMounted = true;
 
-  useEffect(() => {
     const renderMermaid = async () => {
       if (containerRef.current && mermaidDefinition) {
         try {
+          const mermaidModule = await import('mermaid');
+          const mermaid = mermaidModule.default || mermaidModule;
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: 'dark',
+            securityLevel: 'loose',
+            flowchart: {
+              useMaxWidth: true,
+              htmlLabels: true,
+              curve: 'basis',
+            },
+          });
+
+          if (!isMounted || !containerRef.current) return;
           containerRef.current.innerHTML = '';
-          const { svg } = await mermaid.render('mermaid-graph-' + Date.now(), mermaidDefinition);
-          containerRef.current.innerHTML = svg;
+          const id = `mermaid-graph-${Math.random().toString(36).substring(2, 9)}`;
+          const { svg } = await mermaid.render(id, mermaidDefinition);
+          if (isMounted && containerRef.current) {
+            containerRef.current.innerHTML = svg;
+          }
         } catch (error) {
           console.error('Mermaid rendering failed:', error);
-          containerRef.current.innerHTML = `<p style="color: #fb8500;">Failed to render call graph: ${error}</p>`;
+          if (isMounted && containerRef.current) {
+            containerRef.current.innerHTML = `<p style="color: #fb8500;">Failed to render call graph: ${String(error)}</p>`;
+          }
         }
       }
     };
 
     renderMermaid();
+
+    return () => {
+      isMounted = false;
+    };
   }, [mermaidDefinition]);
 
   return (
@@ -59,3 +70,4 @@ export function CallGraphVisualizer({ mermaidDefinition }: CallGraphVisualizerPr
     </div>
   );
 }
+
