@@ -3,6 +3,8 @@
 import { useWalletStore } from "../context/WalletContext";
 import { shallow } from "../lib/createStore";
 import { motion, AnimatePresence } from "framer-motion";
+import { useWallet } from "../context/WalletContext";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useState, useRef, useEffect } from "react";
 import { LogOut } from "lucide-react";
 
@@ -30,6 +32,7 @@ export function ConnectButton() {
   const isConnected = !!address;
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const shouldReduceMotion = useReducedMotion();
 
   const formatAddress = (addr: string) => {
     if (!addr) return "";
@@ -79,10 +82,10 @@ export function ConnectButton() {
         <AnimatePresence>
           {dropdownOpen && (
             <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              transition={{ duration: 0.15 }}
+              initial={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 }}
+              animate={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 1, y: 0 }}
+              exit={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 }}
+              transition={{ duration: shouldReduceMotion ? 0 : 0.15 }}
               className="absolute top-full right-0 mt-2 w-full min-w-[180px] bg-[#0F1621] border border-[#1e293b] rounded-xl shadow-xl overflow-hidden z-50"
             >
               <button
@@ -101,8 +104,8 @@ export function ConnectButton() {
 
   return (
     <motion.button
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
+      whileHover={shouldReduceMotion ? undefined : { scale: 1.02 }}
+      whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
       onClick={openModal}
       className="flex items-center gap-4"
     >
