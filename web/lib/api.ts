@@ -117,6 +117,53 @@ async function parseResponse(response: Response): Promise<unknown> {
     : response.text();
 }
 
+// --- Retry/backoff for transient RPC failures (Stellar testnet timeouts, 5xx, 429) ---
+
+const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
+const MAX_RETRY_ATTEMPTS = 4;
+const BASE_RETRY_DELAY_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableStatus(status: number): boolean {
+  return RETRYABLE_STATUS_CODES.has(status);
+}
+
+function isRetryableNetworkError(error: unknown): boolean {
+  // fetch() throws TypeError on network-level failures (timeout, DNS, connection reset, etc.)
+  return error instanceof TypeError;
+}
+
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      const isRetryableApiError =
+        error instanceof ApiError && isRetryableStatus(error.status);
+      const isRetryableNetwork = isRetryableNetworkError(error);
+      const isLastAttempt = attempt === MAX_RETRY_ATTEMPTS - 1;
+
+      if ((!isRetryableApiError && !isRetryableNetwork) || isLastAttempt) {
+        throw error;
+      }
+
+      const delayMs = BASE_RETRY_DELAY_MS * 2 ** attempt;
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError;
+}
+
+// --- end retry/backoff ---
+
 async function request<T>(
   endpoint: string,
   options: ApiRequestOptions = {},
@@ -136,19 +183,21 @@ async function request<T>(
     requestHeaders.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(apiUrl(endpoint, params), {
-    ...requestInit,
-    headers: requestHeaders,
-    body: buildBody(body),
+  return withRetry(async () => {
+    const response = await fetch(apiUrl(endpoint, params), {
+      ...requestInit,
+      headers: requestHeaders,
+      body: buildBody(body),
+    });
+
+    const responseBody = await parseResponse(response);
+
+    if (!response.ok) {
+      throw new ApiError(response.status, response.statusText, responseBody);
+    }
+
+    return responseBody as T;
   });
-
-  const responseBody = await parseResponse(response);
-
-  if (!response.ok) {
-    throw new ApiError(response.status, response.statusText, responseBody);
-  }
-
-  return responseBody as T;
 }
 
 export const apiClient = {
