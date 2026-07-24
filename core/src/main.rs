@@ -19,6 +19,7 @@ pub mod rpc_provider;
 mod runner;
 mod simulation;
 mod simulation_service;
+mod stellar_service;
 mod wasm_branch_analysis;
 mod ws;
 
@@ -52,6 +53,7 @@ use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
 use crate::merkle_tree::MerkleTree;
 use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
 use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
+use crate::stellar_service::{StellarService, StellarServiceConfig};
 use crate::ws::SimulationBus;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -307,6 +309,8 @@ fn build_registry_config(config: &AppConfig) -> RegistryConfig {
 pub struct AppState {
     engine: SimulationEngine,
     provider_registry: Arc<ProviderRegistry>,
+    /// Process-wide Stellar RPC transport (pooled client, retry, circuit-breaker).
+    stellar_service: Arc<StellarService>,
     cache: Arc<SimulationCache>,
     insights_engine: InsightsEngine,
     gas_golfing_analyzer: GasGolfingAnalyzer,
@@ -1947,6 +1951,15 @@ async fn main() {
     );
     tracing::info!(mode = ?simulation_mode, "Simulation mode configured");
 
+    // ── Process-wide Stellar RPC service ────────────────────────────────
+    // One shared reqwest::Client (connection pool) and one retry policy for
+    // the entire process.  Every subsystem receives an Arc clone of this.
+    let stellar_service = Arc::new(StellarService::new(
+        Arc::clone(&registry),
+        StellarServiceConfig::default().with_timeout(simulation_timeout),
+    ));
+    tracing::info!("StellarService initialized (pooled client, retry, circuit-breaker)");
+
     // ── Fee Market Setup ────────────────────────────────────────────────
     let database_url = &config.database_url;
     tracing::info!(database_url = %database_url, "Initializing database");
@@ -1988,7 +2001,8 @@ async fn main() {
             Arc::clone(&registry),
             simulation_timeout,
             simulation_mode,
-        ),
+        )
+        .with_stellar_service(Arc::clone(&stellar_service)),
         InsightsEngine::new(),
         job_queue_config,
     )
@@ -2015,7 +2029,8 @@ async fn main() {
     // Spawn worker
     let worker = JobWorker::new(
         job_queue.clone(),
-        SimulationEngine::with_registry_and_timeout(Arc::clone(&registry), simulation_timeout),
+        SimulationEngine::with_registry_and_timeout(Arc::clone(&registry), simulation_timeout)
+            .with_stellar_service(Arc::clone(&stellar_service)),
         InsightsEngine::new(),
         job_config,
     );
@@ -2077,8 +2092,10 @@ async fn main() {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
             Arc::clone(&contract_cache),
-        ),
+        )
+        .with_stellar_service(Arc::clone(&stellar_service)),
         provider_registry: Arc::clone(&registry),
+        stellar_service: Arc::clone(&stellar_service),
         cache: simulation_cache,
         insights_engine: InsightsEngine::new(),
         gas_golfing_analyzer: GasGolfingAnalyzer::new(),

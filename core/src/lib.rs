@@ -11,8 +11,10 @@ pub mod merkle_tree;
 pub mod parser;
 pub mod routing;
 pub mod rpc_provider;
+pub mod routing;
 pub mod runner;
 pub mod simulation;
+pub mod stellar_service;
 pub mod simulation_service;
 pub mod wasm_branch_analysis;
 
