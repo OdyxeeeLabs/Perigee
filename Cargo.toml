@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "core",
     "contracts/error_codes",
     "contracts/math",
     "contracts/staking_rewards",

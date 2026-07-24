@@ -10,6 +10,7 @@ pub mod fee_analytics;
 pub mod fee_collector;
 pub mod fee_store;
 mod gas_golfing;
+mod middleware;
 pub mod insights;
 mod jobs;
 mod merkle_tree;
@@ -2143,6 +2144,7 @@ async fn main() {
         .merge(protected)
         .layer(Extension(auth_state))
         .layer(cors)
+        .layer(crate::middleware::correlation_id_middleware)
         .layer(TraceLayer::new_for_http())
         .with_state(app_state); // ← thread AppState through all handlers
 
