@@ -1,5 +1,8 @@
 "use client";
 
+import { useWalletStore } from "../context/WalletContext";
+import { shallow } from "../lib/createStore";
+import { motion, AnimatePresence } from "framer-motion";
 import { useWallet } from "../context/WalletContext";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useState, useRef, useEffect } from "react";
@@ -22,7 +25,11 @@ const ArrowDownIcon = () => (
 );
 
 export function ConnectButton() {
-  const { isConnected, address, openModal, disconnect } = useWallet();
+  const { address, openModal, disconnect } = useWalletStore(
+    (s) => ({ address: s.address, openModal: s.openModal, disconnect: s.disconnect }),
+    shallow,
+  );
+  const isConnected = !!address;
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const shouldReduceMotion = useReducedMotion();
