@@ -1,21 +1,19 @@
 "use client";
 import Image from "next/image";
 
-import { useWallet } from "../context/WalletContext";
+import { useWalletStore } from "../context/WalletContext";
 import { motion, AnimatePresence } from "framer-motion";
 import { Wallet, Check, AlertCircle } from "lucide-react";
 import React from "react";
 import UserIcon from "./userIcon";
 
 export function WalletModal() {
-  const {
-    isModalOpen,
-    closeModal,
-    supportedWallets,
-    connect,
-    isConnecting,
-    error,
-  } = useWallet();
+  const isModalOpen = useWalletStore((s) => s.isModalOpen);
+  const closeModal = useWalletStore((s) => s.closeModal);
+  const supportedWallets = useWalletStore((s) => s.supportedWallets);
+  const connect = useWalletStore((s) => s.connect);
+  const isConnecting = useWalletStore((s) => s.isConnecting);
+  const error = useWalletStore((s) => s.error);
 
   const [activeSelection, setActiveSelection] = React.useState<string | null>(
     null,
