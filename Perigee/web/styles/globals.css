@@ -5,3 +5,10 @@
 body {
   @apply bg-slate-950 text-slate-100;
 }
+
+/* Shimmer sweep used by Skeleton primitive */
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
