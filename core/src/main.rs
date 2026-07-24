@@ -15,6 +15,7 @@ pub mod insights;
 mod jobs;
 mod merkle_tree;
 mod parser;
+pub mod reconciliation;
 mod routing;
 pub mod rpc_provider;
 mod runner;
@@ -52,6 +53,7 @@ use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
 use crate::insights::InsightsEngine;
 use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
 use crate::merkle_tree::MerkleTree;
+use crate::reconciliation::FeeReconciler;
 use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
 use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
 use crate::stellar_service::{StellarService, StellarServiceConfig};
@@ -331,6 +333,11 @@ pub struct AppState {
     metrics: Arc<AppMetrics>,
     /// WebSocket event bus for simulation jobs.
     simulation_bus: Arc<SimulationBus>,
+    /// Fee reconciler for async reconciliation jobs
+    #[allow(dead_code)]
+    reconciler: Arc<FeeReconciler>,
+    /// SQLite pool for reconciliation queries
+    reconciler_pool: sqlx::SqlitePool,
 }
 
 #[derive(Clone)]
@@ -1979,6 +1986,7 @@ async fn main() {
 
     let fee_store = Arc::new(FeeStore::new(db_pool.clone()));
     let fee_analytics_engine = FeeAnalyticsEngine::new();
+    let reconciler = Arc::new(FeeReconciler::new(Arc::clone(&fee_store), db_pool.clone()));
     // API-28: business-logic service owns fee / billing math; wired into
     // AppState so the HTTP handlers stay thin.
     let fee_service = billing_service::FeeService::new(
@@ -2007,7 +2015,8 @@ async fn main() {
         InsightsEngine::new(),
         job_queue_config,
     )
-    .with_bus(Arc::clone(&simulation_bus));
+    .with_bus(Arc::clone(&simulation_bus))
+    .with_reconciler(Arc::clone(&reconciler));
 
     tokio::spawn(async move {
         job_worker.run().await;
@@ -2107,6 +2116,8 @@ async fn main() {
         fee_service,
         metrics: Arc::new(AppMetrics::new().expect("Failed to initialize Prometheus metrics")),
         simulation_bus,
+        reconciler,
+        reconciler_pool: db_pool.clone(),
     });
 
     let cors = CorsLayer::new().allow_origin(Any);
@@ -2138,6 +2149,16 @@ async fn main() {
         .route("/fees/recommend", get(fee_recommend))
         .route("/fees/history", get(fee_history))
         .route("/fees/analytics", get(fee_analytics))
+        // Reconciliation routes (async via job queue)
+        .route("/reconcile", post(reconciliation::reconcile_handler))
+        .route(
+            "/reconcile/reports",
+            get(reconciliation::list_reports_handler),
+        )
+        .route(
+            "/reconcile/:job_id",
+            get(reconciliation::get_reconcile_job_handler),
+        )
         // WebSocket streaming (Issue #105) — no auth required on the upgrade;
         // the client passes the job_id in the path.
         .route("/ws/jobs/:job_id", get(ws::ws_handler))
