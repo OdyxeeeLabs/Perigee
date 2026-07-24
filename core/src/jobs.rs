@@ -6,6 +6,7 @@
 )]
 
 use crate::insights::InsightsEngine;
+use crate::reconciliation::{FeeReconciler, ReconciliationReport};
 use crate::simulation::{SimulationEngine, SimulationResult, SorobanResources};
 use crate::ws::SimulationBus;
 use crate::AppError;
@@ -108,6 +109,7 @@ pub enum JobType {
     Analyze,
     Compare,
     OptimizeLimits,
+    Reconcile,
 }
 
 /// Payload for different job types
@@ -134,6 +136,11 @@ pub enum JobPayload {
         args: Vec<String>,
         safety_margin: f64,
     },
+    Reconcile {
+        from_ledger: i64,
+        to_ledger: i64,
+        tolerance_pct: f64,
+    },
 }
 
 /// Progress information for a job
@@ -157,6 +164,8 @@ pub enum JobResult {
         optimization: Option<Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         comparison: Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reconciliation: Option<ReconciliationReport>,
     },
     Failed {
         error: String,
@@ -846,6 +855,8 @@ pub struct JobWorker {
     /// Optional pub/sub bus for real-time WebSocket streaming.
     /// When `None` the worker runs in polling-only mode (backwards-compatible).
     bus: Option<Arc<SimulationBus>>,
+    /// Optional fee reconciler for Reconcile jobs.
+    reconciler: Option<Arc<FeeReconciler>>,
 }
 
 impl JobWorker {
@@ -862,12 +873,19 @@ impl JobWorker {
             config,
             http_client: Client::new(),
             bus: None,
+            reconciler: None,
         }
     }
 
     /// Attach a [`SimulationBus`] so the worker publishes real-time events.
     pub fn with_bus(mut self, bus: Arc<SimulationBus>) -> Self {
         self.bus = Some(bus);
+        self
+    }
+
+    /// Attach a [`FeeReconciler`] so the worker can process Reconcile jobs.
+    pub fn with_reconciler(mut self, reconciler: Arc<FeeReconciler>) -> Self {
+        self.reconciler = Some(reconciler);
         self
     }
 
@@ -935,6 +953,7 @@ impl JobWorker {
                     let config = self.config.clone();
                     let http_client = self.http_client.clone();
                     let bus = self.bus.clone();
+                    let reconciler = self.reconciler.clone();
                     let id_str_clone = id_str.clone();
 
                     tokio::spawn(async move {
@@ -948,6 +967,7 @@ impl JobWorker {
                             config,
                             http_client,
                             bus,
+                            reconciler,
                         )
                         .await
                         {
@@ -981,6 +1001,7 @@ impl JobWorker {
         config: JobQueueConfig,
         http_client: Client,
         bus: Option<Arc<SimulationBus>>,
+        reconciler: Option<Arc<FeeReconciler>>,
     ) -> Result<(), JobError> {
         let job = queue
             .get(&job_id)
@@ -998,7 +1019,7 @@ impl JobWorker {
         let timeout = Duration::from_secs(job.timeout_secs as u64);
         let result = tokio::time::timeout(
             timeout,
-            Self::execute_job(&job, &engine, &insights_engine, queue, bus.clone()),
+            Self::execute_job(&job, &engine, &insights_engine, queue, bus.clone(), reconciler),
         )
         .await;
 
@@ -1101,6 +1122,7 @@ impl JobWorker {
         insights_engine: &InsightsEngine,
         queue: &JobQueue,
         bus: Option<Arc<SimulationBus>>,
+        reconciler: Option<Arc<FeeReconciler>>,
     ) -> Result<JobResult, Box<dyn std::error::Error + Send + Sync>> {
         let payload = job.get_payload().ok_or("Invalid payload")?;
 
@@ -1174,6 +1196,7 @@ impl JobWorker {
                     simulation_result: Some(sim_result),
                     optimization: None,
                     comparison: None,
+                    reconciliation: None,
                 })
             }
             JobPayload::OptimizeLimits {
@@ -1195,6 +1218,52 @@ impl JobWorker {
                     simulation_result: None,
                     optimization: Some(serde_json::to_value(report)?),
                     comparison: None,
+                    reconciliation: None,
+                })
+            }
+            JobPayload::Reconcile {
+                from_ledger,
+                to_ledger,
+                tolerance_pct,
+            } => {
+                let reconciler = reconciler.ok_or("Reconciler not configured")?;
+
+                progress!(15, "Starting fee reconciliation");
+
+                let queue_for_cb = queue.clone();
+                let bus_for_cb = bus.clone();
+                let job_id_for_cb = job.id;
+
+                let report = reconciler
+                    .run(
+                        from_ledger,
+                        to_ledger,
+                        tolerance_pct,
+                        Some(Box::new(move |percent, msg| {
+                            let q = queue_for_cb.clone();
+                            let b = bus_for_cb.clone();
+                            let jid = job_id_for_cb;
+                            let msg = msg.to_string();
+                            tokio::spawn(async move {
+                                let _ = q.update_progress(&jid, percent, &msg).await;
+                                if let Some(ref bus) = b {
+                                    bus.publish(crate::ws::SimulationBus::progress(
+                                        &jid, percent, &msg,
+                                    ));
+                                }
+                            });
+                        })),
+                    )
+                    .await?;
+
+                progress!(100, "Reconciliation complete");
+
+                Ok(JobResult::Success {
+                    resources: None,
+                    simulation_result: None,
+                    optimization: None,
+                    comparison: None,
+                    reconciliation: Some(report),
                 })
             }
             _ => Ok(JobResult::Success {
@@ -1202,6 +1271,7 @@ impl JobWorker {
                 simulation_result: None,
                 optimization: None,
                 comparison: Some(serde_json::json!({"status": "Not fully implemented"})),
+                reconciliation: None,
             }),
         }
     }

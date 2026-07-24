@@ -5,6 +5,7 @@ pub mod gas_golfing;
 pub mod insights;
 pub mod merkle_tree;
 pub mod parser;
+pub mod reconciliation;
 pub mod routing;
 pub mod merkle_tree;
 pub mod rpc_provider;
