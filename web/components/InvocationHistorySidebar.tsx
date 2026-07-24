@@ -137,7 +137,7 @@ export function InvocationHistorySidebar({ onSelectResult }: InvocationHistorySi
               </div>
             ) : (
               history.map((item, index) => {
-                const report = item.analysisReport ?? (item as any).resourceCost;
+                const report = item.analysisReport ?? item.resourceCost;
 
                 return (
                   <button

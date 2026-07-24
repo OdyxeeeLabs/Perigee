@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState } from "react";
+import type { StellarWalletsKit } from "@creit.tech/stellar-wallets-kit";
 
 interface WalletContextType {
   connect: (moduleId: string) => Promise<void>;
@@ -32,26 +33,37 @@ export const WalletProvider = ({ children }: { children: React.ReactNode }) => {
   const [selectedWalletId, setSelectedWalletId] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [kit, setKit] = useState<any>(null);
+  const [kit, setKit] = useState<StellarWalletsKit | null>(null);
 
   useEffect(() => {
     const initKit = async () => {
       try {
         const walletKitModule = await import("@creit.tech/stellar-wallets-kit");
 
+        const savedAddress = localStorage.getItem("inheritx_wallet_address");
+        const savedWalletId = localStorage.getItem("inheritx_wallet_id");
+
         const kitInstance = new walletKitModule.StellarWalletsKit({
           network: walletKitModule.WalletNetwork.TESTNET,
-          selectedWalletId: walletKitModule.FREIGHTER_ID,
+          selectedWalletId: savedWalletId || walletKitModule.FREIGHTER_ID,
           modules: walletKitModule.allowAllModules(),
         });
 
         setKit(kitInstance);
 
-        const savedAddress = localStorage.getItem("inheritx_wallet_address");
-        const savedWalletId = localStorage.getItem("inheritx_wallet_id");
         if (savedAddress && savedWalletId) {
-          setAddress(savedAddress);
-          setSelectedWalletId(savedWalletId);
+          try {
+            kitInstance.setWallet(savedWalletId);
+            const { address: walletAddress } = await kitInstance.getAddress();
+            setAddress(walletAddress);
+            setSelectedWalletId(savedWalletId);
+            sessionStorage.setItem("perigee_wallet_id", savedWalletId);
+          } catch (err) {
+            console.error("Auto-reconnect failed:", err);
+            localStorage.removeItem("inheritx_wallet_address");
+            localStorage.removeItem("inheritx_wallet_id");
+            sessionStorage.removeItem("perigee_wallet_id");
+          }
         }
       } catch (err) {
         console.error("Failed to initialize wallet kit:", err);
@@ -87,9 +99,10 @@ export const WalletProvider = ({ children }: { children: React.ReactNode }) => {
       setSelectedWalletId(moduleId);
       localStorage.setItem("inheritx_wallet_address", walletAddress);
       localStorage.setItem("inheritx_wallet_id", moduleId);
+      sessionStorage.setItem("perigee_wallet_id", moduleId);
       setIsModalOpen(false);
-    } catch (err: any) {
-      const errorMessage = err?.message || "Connection failed";
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Connection failed";
       setError(errorMessage);
       console.error("Wallet connection failed:", err);
     } finally {
@@ -110,6 +123,7 @@ export const WalletProvider = ({ children }: { children: React.ReactNode }) => {
     setError(null);
     localStorage.removeItem("inheritx_wallet_address");
     localStorage.removeItem("inheritx_wallet_id");
+    sessionStorage.removeItem("perigee_wallet_id");
   };
 
   const openModal = () => {

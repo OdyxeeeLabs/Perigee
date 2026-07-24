@@ -2,6 +2,7 @@
 
 mod auth;
 mod benchmarks;
+mod billing_service;
 mod cache;
 mod comparison;
 mod errors;
@@ -9,6 +10,7 @@ pub mod fee_analytics;
 pub mod fee_collector;
 pub mod fee_store;
 mod gas_golfing;
+mod middleware;
 pub mod insights;
 mod jobs;
 mod merkle_tree;
@@ -19,6 +21,7 @@ pub mod rpc_provider;
 mod runner;
 mod simulation;
 mod simulation_service;
+mod stellar_service;
 mod wasm_branch_analysis;
 mod ws;
 
@@ -53,6 +56,7 @@ use crate::merkle_tree::MerkleTree;
 use crate::reconciliation::FeeReconciler;
 use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
 use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
+use crate::stellar_service::{StellarService, StellarServiceConfig};
 use crate::ws::SimulationBus;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -308,6 +312,8 @@ fn build_registry_config(config: &AppConfig) -> RegistryConfig {
 pub struct AppState {
     engine: SimulationEngine,
     provider_registry: Arc<ProviderRegistry>,
+    /// Process-wide Stellar RPC transport (pooled client, retry, circuit-breaker).
+    stellar_service: Arc<StellarService>,
     cache: Arc<SimulationCache>,
     insights_engine: InsightsEngine,
     gas_golfing_analyzer: GasGolfingAnalyzer,
@@ -316,10 +322,13 @@ pub struct AppState {
     /// Job queue for background task processing
     #[allow(dead_code)]
     job_queue: JobQueue,
-    /// Fee market analytics engine
+    /// Fee market analytics engine (integer-only math).
     fee_analytics_engine: FeeAnalyticsEngine,
     /// Fee data store
     fee_store: Arc<FeeStore>,
+    /// Fee business-logic service. API-28: all fee/billing business logic
+    /// lives here — handlers in this file are now thin transports.
+    fee_service: billing_service::FeeService,
     /// Prometheus metrics collectors.
     metrics: Arc<AppMetrics>,
     /// WebSocket event bus for simulation jobs.
@@ -522,12 +531,15 @@ pub struct OptimizeLimitsRequest {
     pub args: Vec<String>,
     #[schema(example = 0.05)]
     #[serde(default = "default_safety_margin")]
-    pub safety_margin: f64,
+    pub    safety_margin: f64,
 }
 
 fn default_safety_margin() -> f64 {
     0.05
 }
+
+// Keep the legacy f64 `safety_margin` request field for backward compatibility;
+// the service converts it to integer basis points before any arithmetic.
 
 #[derive(Serialize, ToSchema)]
 pub struct OptimizeLimitsResponse {
@@ -560,8 +572,9 @@ pub struct FeeRecommendationResponse {
     pub resource_fee_estimate: u64,
     /// Total estimated cost
     pub total_estimated_cost: u64,
-    /// Confidence in inclusion (0.0-1.0)
-    pub inclusion_confidence: f64,
+    /// Confidence in inclusion, in basis points (`0..=10_000`). The legacy
+    /// `0.0-1.0` ratio was promoted to integer bps to close API-26.
+    pub inclusion_confidence_bps: u32,
     /// Expected number of ledgers for inclusion
     pub expected_inclusion_ledgers: u32,
     /// Current market conditions
@@ -1410,41 +1423,29 @@ async fn analyze_gas_golfing(
 )]
 async fn fee_recommend(
     State(state): State<Arc<AppState>>,
+    Query(req): Query<FeeRecommendationRequest>,
 ) -> Result<Json<FeeRecommendationResponse>, AppError> {
     tracing::info!("Generating fee recommendation");
 
-    // Get recent samples for analysis
-    let samples = state
-        .fee_store
-        .get_recent_samples(100)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch fee data: {}", e)))?;
-
-    // Get current ledger from latest sample or use 0
-    let current_ledger = samples
-        .first()
-        .map(|s| s.ledger_sequence as u64)
-        .unwrap_or(0);
-
-    // Generate prediction
-    let prediction = state.fee_analytics_engine.predict(&samples, current_ledger);
-    let market_conditions = state
-        .fee_analytics_engine
-        .get_market_conditions(&samples, current_ledger);
-    let model_breakdown = state.fee_analytics_engine.get_model_breakdown(&samples);
-
-    // Determine recommended bid based on prediction
-    let (recommended_bid, expected_ledgers) = (prediction.priority_bid, 1);
-
+    let inclusion_speed = billing_service::InclusionSpeed::parse(req.inclusion_speed.as_deref());
+    let safety_margin_bps = match req.safety_margin {
+        Some(m) => billing_service::FeeService::safety_margin_to_bps(m)?,
+        None => billing_service::DEFAULT_SAFETY_MARGIN_BPS,
+    };
+    let inputs = billing_service::FeeRecommendationInputs {
+        inclusion_speed,
+        safety_margin_bps,
+    };
+    let result = state.fee_service.recommend(inputs).await?;
     Ok(Json(FeeRecommendationResponse {
-        recommended_bid,
-        resource_fee_estimate: 0, // Will be calculated based on transaction resources
-        total_estimated_cost: recommended_bid,
-        inclusion_confidence: prediction.confidence_score,
-        expected_inclusion_ledgers: expected_ledgers,
-        market_conditions,
-        model_breakdown,
-        timestamp: chrono::Utc::now(),
+        recommended_bid: result.recommended_bid,
+        resource_fee_estimate: result.resource_fee_estimate,
+        total_estimated_cost: result.total_estimated_cost,
+        inclusion_confidence_bps: result.inclusion_confidence_bps,
+        expected_inclusion_ledgers: result.expected_inclusion_ledgers,
+        market_conditions: result.market_conditions,
+        model_breakdown: result.model_breakdown,
+        timestamp: result.timestamp,
     }))
 }
 
@@ -1464,25 +1465,21 @@ async fn fee_recommend(
 )]
 async fn fee_history(
     State(state): State<Arc<AppState>>,
+    Query(req): Query<FeeHistoryRequest>,
 ) -> Result<Json<FeeHistoryResponse>, AppError> {
     tracing::info!("Fetching fee history");
 
-    let limit = 50; // Default limit
-    let samples = state
-        .fee_store
-        .get_recent_samples(limit)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch fee history: {}", e)))?;
-
-    let total_count = state
-        .fee_store
-        .get_sample_count()
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to get sample count: {}", e)))?;
-
+    let result = state
+        .fee_service
+        .history(billing_service::FeeHistoryQuery {
+            limit: req.limit,
+            from_ledger: req.from_ledger,
+            to_ledger: req.to_ledger,
+        })
+        .await?;
     Ok(Json(FeeHistoryResponse {
-        samples,
-        total_count,
+        samples: result.samples,
+        total_count: result.total_count,
     }))
 }
 
@@ -1497,37 +1494,31 @@ async fn fee_history(
 )]
 async fn fee_analytics(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<FeeAnalyticsEnvelope>, AppError> {
     tracing::info!("Fetching fee analytics");
 
-    // Get recent samples for analysis
-    let samples = state
-        .fee_store
-        .get_recent_samples(200)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch fee data: {}", e)))?;
+    let result = state.fee_service.analytics().await?;
+    Ok(Json(FeeAnalyticsEnvelope {
+        current_ledger: result.current_ledger,
+        prediction: result.prediction,
+        market_conditions: result.market_conditions,
+        model_breakdown: result.model_breakdown,
+        sample_count: result.sample_count,
+        timestamp: result.timestamp,
+    }))
+}
 
-    let current_ledger = samples
-        .first()
-        .map(|s| s.ledger_sequence as u64)
-        .unwrap_or(0);
-
-    let prediction = state.fee_analytics_engine.predict(&samples, current_ledger);
-    let market_conditions = state
-        .fee_analytics_engine
-        .get_market_conditions(&samples, current_ledger);
-    let model_breakdown = state.fee_analytics_engine.get_model_breakdown(&samples);
-
-    let response = serde_json::json!({
-        "current_ledger": current_ledger,
-        "prediction": prediction,
-        "market_conditions": market_conditions,
-        "model_breakdown": model_breakdown,
-        "sample_count": samples.len(),
-        "timestamp": chrono::Utc::now(),
-    });
-
-    Ok(Json(response))
+/// Envelope returned by `GET /fees/analytics`. Mirrors
+/// `billing_service::FeeAnalyticsResult` but is exposed in the OpenAPI
+/// schema as a single named object.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FeeAnalyticsEnvelope {
+    pub current_ledger: u64,
+    pub prediction: crate::fee_analytics::FeePrediction,
+    pub market_conditions: crate::fee_analytics::MarketConditions,
+    pub model_breakdown: crate::fee_analytics::ModelBreakdown,
+    pub sample_count: usize,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(OpenApi)]
@@ -1556,7 +1547,8 @@ async fn fee_analytics(
         crate::fee_store::LedgerFeeSample,
         crate::fee_analytics::MarketConditions,
         crate::fee_analytics::ModelBreakdown,
-        crate::fee_analytics::TrendDirection
+        crate::fee_analytics::TrendDirection,
+        FeeAnalyticsEnvelope
     )),
     tags(
         (name = "Analysis", description = "Soroban contract resource analysis endpoints"),
@@ -1967,6 +1959,15 @@ async fn main() {
     );
     tracing::info!(mode = ?simulation_mode, "Simulation mode configured");
 
+    // ── Process-wide Stellar RPC service ────────────────────────────────
+    // One shared reqwest::Client (connection pool) and one retry policy for
+    // the entire process.  Every subsystem receives an Arc clone of this.
+    let stellar_service = Arc::new(StellarService::new(
+        Arc::clone(&registry),
+        StellarServiceConfig::default().with_timeout(simulation_timeout),
+    ));
+    tracing::info!("StellarService initialized (pooled client, retry, circuit-breaker)");
+
     // ── Fee Market Setup ────────────────────────────────────────────────
     let database_url = &config.database_url;
     tracing::info!(database_url = %database_url, "Initializing database");
@@ -1986,6 +1987,12 @@ async fn main() {
     let fee_store = Arc::new(FeeStore::new(db_pool.clone()));
     let fee_analytics_engine = FeeAnalyticsEngine::new();
     let reconciler = Arc::new(FeeReconciler::new(Arc::clone(&fee_store), db_pool.clone()));
+    // API-28: business-logic service owns fee / billing math; wired into
+    // AppState so the HTTP handlers stay thin.
+    let fee_service = billing_service::FeeService::new(
+        Arc::clone(&fee_store),
+        fee_analytics_engine.clone(),
+    );
     let job_queue_config = JobQueueConfig {
         job_timeout_secs: config.job_timeout_secs,
         max_concurrent_jobs: config.max_concurrent_jobs,
@@ -2003,7 +2010,8 @@ async fn main() {
             Arc::clone(&registry),
             simulation_timeout,
             simulation_mode,
-        ),
+        )
+        .with_stellar_service(Arc::clone(&stellar_service)),
         InsightsEngine::new(),
         job_queue_config,
     )
@@ -2031,7 +2039,8 @@ async fn main() {
     // Spawn worker
     let worker = JobWorker::new(
         job_queue.clone(),
-        SimulationEngine::with_registry_and_timeout(Arc::clone(&registry), simulation_timeout),
+        SimulationEngine::with_registry_and_timeout(Arc::clone(&registry), simulation_timeout)
+            .with_stellar_service(Arc::clone(&stellar_service)),
         InsightsEngine::new(),
         job_config,
     );
@@ -2093,8 +2102,10 @@ async fn main() {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
             Arc::clone(&contract_cache),
-        ),
+        )
+        .with_stellar_service(Arc::clone(&stellar_service)),
         provider_registry: Arc::clone(&registry),
+        stellar_service: Arc::clone(&stellar_service),
         cache: simulation_cache,
         insights_engine: InsightsEngine::new(),
         gas_golfing_analyzer: GasGolfingAnalyzer::new(),
@@ -2102,6 +2113,7 @@ async fn main() {
         job_queue,
         fee_analytics_engine,
         fee_store,
+        fee_service,
         metrics: Arc::new(AppMetrics::new().expect("Failed to initialize Prometheus metrics")),
         simulation_bus,
         reconciler,
@@ -2153,6 +2165,7 @@ async fn main() {
         .merge(protected)
         .layer(Extension(auth_state))
         .layer(cors)
+        .layer(crate::middleware::correlation_id_middleware)
         .layer(TraceLayer::new_for_http())
         .with_state(app_state); // ← thread AppState through all handlers
 

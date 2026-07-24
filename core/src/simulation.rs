@@ -1,8 +1,8 @@
 use crate::parser::ArgParser;
 use crate::rpc_provider::ProviderRegistry;
+use crate::stellar_service::{StellarService, StellarServiceConfig, StellarServiceError};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ed25519_dalek::Signer as Ed25519Signer;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use soroban_sdk::xdr::{
@@ -1032,7 +1032,7 @@ struct LedgerEntryWithMeta {
 pub struct SimulationEngine {
     /// Kept for single-provider backward compatibility; empty when using registry.
     rpc_url: String,
-    client: Client,
+    stellar_service: Arc<StellarService>,
     request_timeout: std::time::Duration,
     /// When set, the engine will iterate healthy providers and failover automatically.
     registry: Option<Arc<ProviderRegistry>>,
@@ -1071,13 +1071,32 @@ impl SimulationEngine {
     const TTL_TARGET_LEDGERS_AHEAD: i64 = 360_000;
 
     /// Create an engine backed by a single RPC URL (backward-compatible).
+    ///
+    /// A minimal [`StellarService`] is created internally using the default
+    /// config.  Callers that need fine-grained control should use
+    /// [`Self::with_registry`] or [`Self::with_stellar_service`] instead.
     #[allow(dead_code)]
     pub fn new(rpc_url: String) -> Self {
+        // Build a throwaway registry with just the one URL so the service has
+        // something to report success/failure against.
+        use crate::rpc_provider::RpcProvider;
+        let provider = RpcProvider {
+            name: "default".to_string(),
+            url: rpc_url.clone(),
+            auth_header: None,
+            auth_value: None,
+            advertise: None,
+        };
+        let registry = ProviderRegistry::new(vec![provider]);
+        let svc = Arc::new(StellarService::new(
+            Arc::clone(&registry),
+            StellarServiceConfig::default(),
+        ));
         Self {
             rpc_url,
-            client: Client::new(),
+            stellar_service: svc,
             request_timeout: std::time::Duration::from_secs(30),
-            registry: None,
+            registry: Some(registry),
             contract_cache: None,
             mode: SimulationMode::Failover,
             local_runner: None,
@@ -1091,9 +1110,13 @@ impl SimulationEngine {
 
     /// Create an engine backed by a `ProviderRegistry` using the provided mode.
     pub fn with_registry_and_mode(registry: Arc<ProviderRegistry>, mode: SimulationMode) -> Self {
+        let svc = Arc::new(StellarService::new(
+            Arc::clone(&registry),
+            StellarServiceConfig::default(),
+        ));
         Self {
             rpc_url: String::new(),
-            client: Client::new(),
+            stellar_service: svc,
             request_timeout: std::time::Duration::from_secs(30),
             registry: Some(registry),
             contract_cache: None,
@@ -1107,9 +1130,13 @@ impl SimulationEngine {
         registry: Arc<ProviderRegistry>,
         cache: Arc<crate::cache::ContractCache>,
     ) -> Self {
+        let svc = Arc::new(StellarService::new(
+            Arc::clone(&registry),
+            StellarServiceConfig::default(),
+        ));
         Self {
             rpc_url: String::new(),
-            client: Client::new(),
+            stellar_service: svc,
             request_timeout: std::time::Duration::from_secs(30),
             registry: Some(registry),
             contract_cache: Some(cache),
@@ -1132,15 +1159,24 @@ impl SimulationEngine {
         timeout: std::time::Duration,
         mode: SimulationMode,
     ) -> Self {
+        let config = StellarServiceConfig::default().with_timeout(timeout);
+        let svc = Arc::new(StellarService::new(Arc::clone(&registry), config));
         Self {
             rpc_url: String::new(),
-            client: Client::new(),
+            stellar_service: svc,
             request_timeout: timeout,
             registry: Some(registry),
             contract_cache: None,
             mode,
             local_runner: None,
         }
+    }
+
+    /// Inject a pre-built [`StellarService`] (useful when the process-wide
+    /// singleton is already constructed and handed in from `AppState`).
+    pub fn with_stellar_service(mut self, svc: Arc<StellarService>) -> Self {
+        self.stellar_service = svc;
+        self
     }
 
     /// Attach a [`crate::runner::LocalRunner`] so that `simulate_from_contract_id`
@@ -1196,40 +1232,36 @@ impl SimulationEngine {
                 .map_err(|e| SimulationError::XdrError(e.to_string()))?,
         );
 
-        // We need a provider URL to fetch from.
-        let (url, auth_header, auth_value) = match &self.registry {
-            Some(reg) => {
-                let p = reg
-                    .healthy_providers()
-                    .await
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        SimulationError::RpcRequestFailed("No healthy providers".to_string())
-                    })?;
-                (p.url.clone(), p.auth_header.clone(), p.auth_value.clone())
-            }
-            None => (self.rpc_url.clone(), None, None),
-        };
-
-        let req = GetLedgerEntriesRequest {
-            jsonrpc: "2.0".to_string(),
-            id: 1,
-            method: "getLedgerEntries".to_string(),
-            params: GetLedgerEntriesParams {
-                keys: vec![key_xdr],
+        // We need a provider to fetch from.
+        let provider = match &self.registry {
+            Some(reg) => reg
+                .healthy_providers()
+                .await
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    SimulationError::RpcRequestFailed("No healthy providers".to_string())
+                })?,
+            None => crate::rpc_provider::RpcProvider {
+                name: "default".to_string(),
+                url: self.rpc_url.clone(),
+                auth_header: None,
+                auth_value: None,
+                advertise: None,
             },
         };
 
-        let mut req_builder = self.client.post(&url).json(&req);
-        if let (Some(header), Some(value)) = (auth_header.as_deref(), auth_value.as_deref()) {
-            req_builder = req_builder.header(header, value);
-        }
-        let response: GetLedgerEntriesResponse = req_builder
-            .send()
-            .await?
-            .json()
+        let raw1 = self
+            .stellar_service
+            .call_rpc(
+                &provider,
+                "getLedgerEntries",
+                serde_json::json!({ "keys": [key_xdr] }),
+            )
             .await
+            .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
+
+        let response: GetLedgerEntriesResponse = serde_json::from_value(raw1)
             .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
         let entries = match response.result {
             LedgerEntriesResponseResult::Success { result } => result.entries,
@@ -1281,23 +1313,17 @@ impl SimulationEngine {
                 .map_err(|e| SimulationError::XdrError(e.to_string()))?,
         );
 
-        let req2 = GetLedgerEntriesRequest {
-            jsonrpc: "2.0".to_string(),
-            id: 2,
-            method: "getLedgerEntries".to_string(),
-            params: GetLedgerEntriesParams {
-                keys: vec![wasm_key_xdr],
-            },
-        };
-
-        let response2: GetLedgerEntriesResponse = self
-            .client
-            .post(&url)
-            .json(&req2)
-            .send()
-            .await?
-            .json()
+        let raw2 = self
+            .stellar_service
+            .call_rpc(
+                &provider,
+                "getLedgerEntries",
+                serde_json::json!({ "keys": [wasm_key_xdr] }),
+            )
             .await
+            .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
+
+        let response2: GetLedgerEntriesResponse = serde_json::from_value(raw2)
             .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
         let entries2 = match response2.result {
             LedgerEntriesResponseResult::Success { result } => result.entries,
@@ -2162,47 +2188,41 @@ impl SimulationEngine {
         auth_value: Option<&str>,
         transaction_xdr: &str,
     ) -> Result<SimulationResult, SimulationError> {
-        let request = SimulateTransactionRequest {
-            jsonrpc: "2.0".to_string(),
-            id: 1,
-            method: "simulateTransaction".to_string(),
-            params: SimulateTransactionParams {
-                transaction: transaction_xdr.to_string(),
-            },
-        };
-
         tracing::debug!("Sending simulateTransaction request to {}", url);
 
-        let mut req_builder = self.client.post(url).json(&request);
+        // Build a minimal provider record so StellarService can attach the
+        // auth headers and report circuit-breaker outcomes against the right URL.
+        let provider = crate::rpc_provider::RpcProvider {
+            name: "rpc".to_string(),
+            url: url.to_string(),
+            auth_header: auth_header.map(str::to_string),
+            auth_value: auth_value.map(str::to_string),
+            advertise: None,
+        };
 
-        // Attach provider-specific auth header if present.
-        if let (Some(header), Some(value)) = (auth_header, auth_value) {
-            req_builder = req_builder.header(header, value);
-        }
-
-        let response = tokio::time::timeout(self.request_timeout, req_builder.send())
+        let raw = self
+            .stellar_service
+            .call_rpc(
+                &provider,
+                "simulateTransaction",
+                serde_json::json!({ "transaction": transaction_xdr }),
+            )
             .await
-            .map_err(|_| SimulationError::NodeTimeout)?
-            .map_err(|e| {
-                if e.is_timeout() {
-                    SimulationError::NodeTimeout
-                } else if e.is_connect() {
-                    SimulationError::NetworkError(e)
-                } else {
-                    SimulationError::RpcRequestFailed(format!("Network error: {}", e))
+            .map_err(|e| match e {
+                StellarServiceError::Timeout { .. } => SimulationError::NodeTimeout,
+                StellarServiceError::Network { source, .. } => {
+                    SimulationError::NetworkError(source)
                 }
+                StellarServiceError::HttpError { status, url } => {
+                    SimulationError::RpcRequestFailed(format!("HTTP error: {status} from {url}"))
+                }
+                other => SimulationError::RpcRequestFailed(other.to_string()),
             })?;
 
-        if !response.status().is_success() {
-            return Err(SimulationError::RpcRequestFailed(format!(
-                "HTTP error: {}",
-                response.status()
-            )));
-        }
-
-        let rpc_response: SimulateTransactionResponse = response.json().await.map_err(|e| {
-            SimulationError::RpcRequestFailed(format!("Failed to parse response: {}", e))
-        })?;
+        let rpc_response: SimulateTransactionResponse = serde_json::from_value(raw)
+            .map_err(|e| {
+                SimulationError::RpcRequestFailed(format!("Failed to parse response: {e}"))
+            })?;
 
         match rpc_response.result {
             ResponseResult::Error { error } => {
@@ -2425,35 +2445,26 @@ impl SimulationEngine {
             });
         }
 
-        let req = GetLedgerEntriesRequest {
-            jsonrpc: "2.0".to_string(),
-            id: 1,
-            method: "getLedgerEntries".to_string(),
-            params: GetLedgerEntriesParams {
-                keys: missing_keys.clone(),
-            },
+        let provider = crate::rpc_provider::RpcProvider {
+            name: "rpc".to_string(),
+            url: url.to_string(),
+            auth_header: auth_header.map(str::to_string),
+            auth_value: auth_value.map(str::to_string),
+            advertise: None,
         };
 
-        let mut req_builder = self.client.post(url).json(&req);
-        if let (Some(header), Some(value)) = (auth_header, auth_value) {
-            req_builder = req_builder.header(header, value);
-        }
-
-        let response = tokio::time::timeout(self.request_timeout, req_builder.send())
+        let raw = self
+            .stellar_service
+            .call_rpc(
+                &provider,
+                "getLedgerEntries",
+                serde_json::json!({ "keys": missing_keys }),
+            )
             .await
-            .map_err(|_| SimulationError::NodeTimeout)?
-            .map_err(|e| SimulationError::RpcRequestFailed(format!("Network error: {}", e)))?;
+            .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
 
-        if !response.status().is_success() {
-            return Err(SimulationError::RpcRequestFailed(format!(
-                "HTTP error: {}",
-                response.status()
-            )));
-        }
-
-        let rpc_response: GetLedgerEntriesResponse = response.json().await.map_err(|e| {
-            SimulationError::RpcRequestFailed(format!("Failed to parse response: {}", e))
-        })?;
+        let rpc_response: GetLedgerEntriesResponse = serde_json::from_value(raw)
+            .map_err(|e| SimulationError::RpcRequestFailed(format!("Failed to parse response: {e}")))?;
 
         let fetched_entries = match rpc_response.result {
             LedgerEntriesResponseResult::Success { result } => result.entries,

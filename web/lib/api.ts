@@ -8,7 +8,26 @@
 
 import type { AnalyzeResponse } from "./sorobantypes";
 
+import {
+  AnalyzeRequestDto,
+  AnalyzeWasmRequestDto,
+  ValidationError as DtoValidationError,
+  validateDto,
+} from "./dtos";
+
 const DEFAULT_DEV_API_URL = "http://localhost:8080";
+
+export class ValidationError extends DtoValidationError {}
+
+export async function validateAnalyzeRequest(req: AnalyzeRequest): Promise<AnalyzeRequest> {
+  return validateDto(AnalyzeRequestDto, req);
+}
+
+export async function validateAnalyzeWasmRequest(
+  req: AnalyzeWasmRequest,
+): Promise<AnalyzeWasmRequest> {
+  return validateDto(AnalyzeWasmRequestDto, req);
+}
 
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") ?? DEFAULT_DEV_API_URL;
@@ -186,14 +205,16 @@ export interface AnalyzeWasmRequest {
 }
 
 export const analyzeService = {
-  analyze(req: AnalyzeRequest, token?: string): Promise<AnalyzeResponse> {
-    return apiClient.post<AnalyzeResponse>("/analyze", req, { token });
+  async analyze(req: AnalyzeRequest, token?: string): Promise<AnalyzeResponse> {
+    const validatedRequest = await validateAnalyzeRequest(req);
+    return apiClient.post<AnalyzeResponse>("/analyze", validatedRequest, { token });
   },
 
-  analyzeWasm(
+  async analyzeWasm(
     req: AnalyzeWasmRequest,
     token?: string,
   ): Promise<AnalyzeResponse> {
-    return apiClient.post<AnalyzeResponse>("/analyze/wasm", req, { token });
+    const validatedRequest = await validateAnalyzeWasmRequest(req);
+    return apiClient.post<AnalyzeResponse>("/analyze/wasm", validatedRequest, { token });
   },
 };
