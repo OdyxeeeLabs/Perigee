@@ -8,6 +8,7 @@
 use crate::insights::InsightsEngine;
 use crate::reconciliation::{FeeReconciler, ReconciliationReport};
 use crate::simulation::{SimulationEngine, SimulationResult, SorobanResources};
+use crate::validation::ValidatedJson;
 use crate::ws::SimulationBus;
 use crate::AppError;
 use axum::{
@@ -29,6 +30,7 @@ use std::time::Duration;
 use tokio::time::interval;
 use utoipa::ToSchema;
 use uuid::Uuid;
+use validator::Validate;
 
 /// Database pool type - supports both PostgreSQL and SQLite
 #[derive(Clone)]
@@ -743,7 +745,8 @@ impl Clone for JobQueue {
 }
 
 /// Request to submit a new job
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct SubmitJobRequest {
     pub job_type: JobType,
     pub payload: JobPayload,
@@ -773,7 +776,7 @@ pub struct SubmitJobResponse {
 )]
 pub async fn submit_job_handler(
     State(state): State<Arc<crate::AppState>>,
-    Json(payload): Json<SubmitJobRequest>,
+    ValidatedJson(payload): ValidatedJson<SubmitJobRequest>,
 ) -> Result<(StatusCode, Json<SubmitJobResponse>), AppError> {
     let job_id = state
         .job_queue

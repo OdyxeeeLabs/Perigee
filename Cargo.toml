@@ -6,3 +6,8 @@ members = [
     "contracts/math",
     "contracts/staking_rewards",
 ]
+
+# ed25519-dalek 3.0 broke soroban-env-host's testutils (rand 0.8 ChaCha20Rng
+# no longer satisfies CryptoRng). Force the 2.x line that soroban expects.
+[patch.crates-io]
+ed25519-dalek = { git = "https://github.com/dalek-cryptography/curve25519-dalek", tag = "ed25519-2.2.0", package = "ed25519-dalek" }
