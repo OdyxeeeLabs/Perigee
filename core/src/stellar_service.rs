@@ -394,7 +394,7 @@ impl StellarService {
     fn backoff_delay(config: &StellarServiceConfig, attempt: u32) -> Duration {
         let exponent = attempt.saturating_sub(2);
         let base_ms = config.base_delay.as_millis() as u64;
-        let raw_ms = base_ms.saturating_mul(1u64.saturating_shl(exponent));
+        let raw_ms = base_ms.saturating_mul(1u64.checked_shl(exponent).unwrap_or(u64::MAX));
         let capped_ms = raw_ms.min(MAX_BACKOFF.as_millis() as u64);
 
         // Simple jitter: use subsecond nanoseconds of the current time as a

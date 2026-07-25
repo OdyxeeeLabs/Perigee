@@ -87,6 +87,7 @@ pub struct MarketConditions {
 
 /// Analytics engine. All arithmetic is integer — no `f64` is multiplied
 /// against a stroop amount anywhere.
+#[derive(Clone)]
 pub struct FeeAnalyticsEngine {
     /// SMA window for short-term (default: 10).
     sma_short_window: usize,
