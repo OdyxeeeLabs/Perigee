@@ -1,4 +1,5 @@
 use crate::errors::AppError;
+use crate::validation::ValidatedJson;
 use axum::{extract::Request, http::header, middleware::Next, response::Response, Extension, Json};
 use base64::{
     engine::general_purpose::STANDARD as BASE64,
@@ -21,15 +22,12 @@ use soroban_sdk::xdr::{
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use stellar_strkey::Strkey;
 use utoipa::ToSchema;
 use uuid::Uuid;
+use validator::Validate;
 
 const CHALLENGE_EXPIRY_SECS: u64 = 300;
 /// Short-lived access JWT lifetime (15 minutes).
@@ -52,6 +50,8 @@ enum RefreshTokenRecord {
         family_id: String,
         expires_at: u64,
     },
+}
+
 const RATE_LIMIT_CAPACITY: f64 = 60.0;
 const RATE_LIMIT_REFILL_RATE: f64 = 1.0; // Refills 1 token per second (60 requests/minute)
 
@@ -173,9 +173,11 @@ impl AuthState {
     }
 }
 
-#[derive(Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct ChallengeRequest {
     #[schema(example = "GABC...XYZ")]
+    #[validate(length(min = 1, message = "account must not be empty"))]
     pub account: String,
 }
 
@@ -185,8 +187,10 @@ pub struct ChallengeResponse {
     pub network_passphrase: String,
 }
 
-#[derive(Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct VerifyRequest {
+    #[validate(length(min = 1, message = "transaction must not be empty"))]
     pub transaction: String,
 }
 
@@ -204,13 +208,16 @@ pub struct VerifyResponse {
     pub token: String,
 }
 
-#[derive(Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct RefreshRequest {
+    #[validate(length(min = 1, message = "refresh_token must not be empty"))]
     pub refresh_token: String,
 }
 
 /// Emergency pause toggle request (admin-only).
-#[derive(Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct EmergencyPauseRequest {
     /// If true, verification is paused. If false, verification resumes.
     pub paused: bool,
@@ -626,7 +633,7 @@ pub(crate) fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str)
 )]
 pub async fn challenge_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<ChallengeRequest>,
+    ValidatedJson(payload): ValidatedJson<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, AppError> {
     if state.is_verification_paused() {
         return Err(AppError::Internal(
@@ -663,7 +670,7 @@ pub async fn challenge_handler(
 )]
 pub async fn verify_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<VerifyRequest>,
+    ValidatedJson(payload): ValidatedJson<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
     if state.is_verification_paused() {
         return Err(AppError::Internal(
@@ -689,7 +696,7 @@ pub async fn verify_handler(
 )]
 pub async fn refresh_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<RefreshRequest>,
+    ValidatedJson(payload): ValidatedJson<RefreshRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
     if state.is_verification_paused() {
         return Err(AppError::Internal(
@@ -718,7 +725,7 @@ pub struct RevokeResponse {
 )]
 pub async fn revoke_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<RefreshRequest>,
+    ValidatedJson(payload): ValidatedJson<RefreshRequest>,
 ) -> Result<Json<RevokeResponse>, AppError> {
     if state.is_verification_paused() {
         return Err(AppError::Internal(
@@ -744,7 +751,7 @@ pub async fn revoke_handler(
 )]
 pub async fn emergency_pause_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<EmergencyPauseRequest>,
+    ValidatedJson(payload): ValidatedJson<EmergencyPauseRequest>,
 ) -> Result<Json<EmergencyPauseResponse>, AppError> {
     state.set_verification_paused(payload.paused);
 

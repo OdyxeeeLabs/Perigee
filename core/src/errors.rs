@@ -26,14 +26,18 @@ pub enum AppError {
 
     #[error("Too many requests: {0}")]
     TooManyRequests(String),
+
+    /// DTO / field validation failure (NestJS ValidationPipe analogue).
+    #[error("Validation error: {0}")]
+    Validation(String),
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct ErrorResponse {
-    /// Error type identifier (e.g., "NOT_FOUND", "BAD_REQUEST")
-    error: String,
+    /// Error type identifier (e.g., "NOT_FOUND", "BAD_REQUEST", "VALIDATION_ERROR")
+    pub error: String,
     /// Human-readable error message
-    message: String,
+    pub message: String,
 }
 
 impl AppError {
@@ -44,6 +48,7 @@ impl AppError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
+            Self::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
         }
     }
 
@@ -54,6 +59,7 @@ impl AppError {
             Self::BadRequest(_) => "BAD_REQUEST",
             Self::Unauthorized(_) => "UNAUTHORIZED",
             Self::TooManyRequests(_) => "TOO_MANY_REQUESTS",
+            Self::Validation(_) => "VALIDATION_ERROR",
         }
     }
 }

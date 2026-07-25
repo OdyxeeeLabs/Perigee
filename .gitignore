@@ -9,5 +9,4 @@ test_snapshots/
 
 # Misc
 .DS_Store
-.env
-.env.local
+config.bat
