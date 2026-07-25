@@ -5,6 +5,7 @@ mod benchmarks;
 mod billing_service;
 mod cache;
 mod comparison;
+mod error_handler;
 mod errors;
 pub mod fee_analytics;
 pub mod fee_collector;
@@ -14,6 +15,7 @@ mod middleware;
 pub mod insights;
 mod jobs;
 mod merkle_tree;
+mod metrics;
 mod parser;
 pub mod reconciliation;
 mod routing;
@@ -22,6 +24,7 @@ mod runner;
 mod simulation;
 mod simulation_service;
 mod stellar_service;
+mod validation;
 mod wasm_branch_analysis;
 mod ws;
 
@@ -29,10 +32,11 @@ use crate::cache::{ContractCache, SimulationCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
 use crate::errors::AppError;
 use crate::merkle_tree::MerkleTree;
+use crate::validation::{ValidatedJson, ValidatedQuery};
 use axum::{
     extract::{Json, Multipart, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
-    middleware,
+    middleware as axum_middleware,
     response::IntoResponse,
     routing::{get, post},
     Extension, Router,
@@ -52,17 +56,18 @@ use crate::fee_store::FeeStore;
 use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
 use crate::insights::InsightsEngine;
 use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
-use crate::merkle_tree::MerkleTree;
 use crate::reconciliation::FeeReconciler;
 use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
 use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
 use crate::stellar_service::{StellarService, StellarServiceConfig};
 use crate::ws::SimulationBus;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
+use validator::Validate;
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -397,11 +402,14 @@ impl AppMetrics {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct AnalyzeRequest {
     #[schema(example = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC")]
+    #[validate(length(min = 1, message = "contract_id must not be empty"))]
     pub contract_id: String,
     #[schema(example = "hello")]
+    #[validate(length(min = 1, message = "function_name must not be empty"))]
     pub function_name: String,
     #[schema(example = "[]")]
     pub args: Option<Vec<String>>,
@@ -520,11 +528,14 @@ pub struct StateDependencyReport {
     pub source: String,
 }
 
-#[derive(Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct OptimizeLimitsRequest {
     #[schema(example = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC")]
+    #[validate(length(min = 1, message = "contract_id must not be empty"))]
     pub contract_id: String,
     #[schema(example = "hello")]
+    #[validate(length(min = 1, message = "function_name must not be empty"))]
     pub function_name: String,
     #[schema(example = "[]")]
     #[serde(default)]
@@ -553,7 +564,7 @@ pub struct OptimizeLimitsResponse {
 // ── Fee Market Types ─────────────────────────────────────────────────────
 
 /// Request body for fee recommendation endpoint
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, Validate)]
 pub struct FeeRecommendationRequest {
     /// Desired inclusion speed: "next_ledger", "next_3_ledgers", "economy", "standard", "priority"
     #[schema(example = "priority")]
@@ -586,10 +597,11 @@ pub struct FeeRecommendationResponse {
 }
 
 /// Request for historical fee data
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, Validate)]
 pub struct FeeHistoryRequest {
     /// Number of recent ledgers to retrieve (default 50)
     #[schema(example = 50)]
+    #[validate(range(min = 1, message = "limit must be at least 1"))]
     pub limit: Option<i64>,
     /// Starting ledger sequence (optional)
     #[schema(example = 1000)]
@@ -609,13 +621,16 @@ pub struct FeeHistoryResponse {
 }
 
 /// Request body for the WASM-bytes analysis endpoint.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct AnalyzeWasmRequest {
     /// Base64-encoded WASM binary.
     #[schema(example = "<base64-encoded .wasm bytes>")]
+    #[validate(length(min = 1, message = "wasm_bytes must not be empty"))]
     pub wasm_bytes: String,
     /// Name of the exported function to invoke.
     #[schema(example = "hello")]
+    #[validate(length(min = 1, message = "function_name must not be empty"))]
     pub function_name: String,
     /// Optional function arguments (void | true | false | integers | symbols).
     #[schema(example = "[]")]
@@ -627,11 +642,14 @@ pub struct AnalyzeWasmRequest {
 }
 
 /// Request body for the WASM profiling endpoint.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileWasmRequest {
     /// Base64-encoded WASM binary.
+    #[validate(length(min = 1, message = "wasm_bytes must not be empty"))]
     pub wasm_bytes: String,
     /// Name of the exported function to invoke.
+    #[validate(length(min = 1, message = "function_name must not be empty"))]
     pub function_name: String,
     /// Optional function arguments.
     #[serde(default)]
@@ -648,13 +666,16 @@ pub struct ProfileResponse {
 }
 
 /// Request body for the WASM execution-branch analysis endpoint (Issue #101).
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct AnalyzeWasmBranchesRequest {
     /// Base64-encoded WASM binary to analyse.
     #[schema(example = "<base64-encoded .wasm bytes>")]
+    #[validate(length(min = 1, message = "wasm_bytes must not be empty"))]
     pub wasm_bytes: String,
     /// Exported function whose execution branches should be enumerated.
     #[schema(example = "transfer")]
+    #[validate(length(min = 1, message = "function_name must not be empty"))]
     pub function_name: String,
     /// Baseline argument vector used for the first (reference) simulation run.
     /// Additional permutations are generated automatically.
@@ -785,7 +806,7 @@ fn to_report(
 )]
 async fn analyze(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<AnalyzeRequest>,
+    ValidatedJson(payload): ValidatedJson<AnalyzeRequest>,
 ) -> Result<(HeaderMap, Json<ResourceReport>), AppError> {
     // Create a tracing span with structured fields for this request
     let span = tracing::info_span!(
@@ -950,7 +971,7 @@ async fn analyze(
 )]
 async fn analyze_wasm(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<AnalyzeWasmRequest>,
+    ValidatedJson(payload): ValidatedJson<AnalyzeWasmRequest>,
 ) -> Result<Json<ResourceReport>, AppError> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
@@ -1047,7 +1068,7 @@ async fn metrics_handler(
 
 async fn analyze_wasm_profile(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<ProfileWasmRequest>,
+    ValidatedJson(payload): ValidatedJson<ProfileWasmRequest>,
 ) -> Result<Json<ProfileResponse>, AppError> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
@@ -1103,7 +1124,7 @@ async fn analyze_wasm_profile(
 )]
 async fn analyze_wasm_branches(
     State(_state): State<Arc<AppState>>,
-    Json(payload): Json<AnalyzeWasmBranchesRequest>,
+    ValidatedJson(payload): ValidatedJson<AnalyzeWasmBranchesRequest>,
 ) -> Result<Json<WasmBranchAnalysisResponse>, AppError> {
     use crate::wasm_branch_analysis::analyze_wasm_branches as run_analysis;
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -1163,7 +1184,7 @@ async fn analyze_wasm_branches(
 )]
 async fn optimize_limits(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<OptimizeLimitsRequest>,
+    ValidatedJson(payload): ValidatedJson<OptimizeLimitsRequest>,
 ) -> Result<Json<OptimizeLimitsResponse>, AppError> {
     tracing::info!(
         "Optimizing limits for contract: {}, function: {}",
@@ -1350,13 +1371,16 @@ fn write_temp_wasm(bytes: &[u8]) -> Result<std::path::PathBuf, AppError> {
 
 // ── Gas Golfing Types ─────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct GasGolfingRequest {
     /// Base64-encoded WASM bytecode
     #[schema(example = "AGFzbQEAAAABBgFgAX8BfwMCAQAFAwMADAEAAQgBAUcBAQABAQgBAUcBAQACAgcABAEGCw==")]
+    #[validate(length(min = 1, message = "wasm_bytes must not be empty"))]
     pub wasm_bytes: String,
     /// Contract name for identification
     #[schema(example = "my_contract")]
+    #[validate(length(min = 1, message = "contract_name must not be empty"))]
     pub contract_name: String,
 }
 
@@ -1380,7 +1404,7 @@ pub struct GasGolfingResponse {
 )]
 async fn analyze_gas_golfing(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<GasGolfingRequest>,
+    ValidatedJson(payload): ValidatedJson<GasGolfingRequest>,
 ) -> Result<Json<GasGolfingResponse>, AppError> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
@@ -1423,7 +1447,7 @@ async fn analyze_gas_golfing(
 )]
 async fn fee_recommend(
     State(state): State<Arc<AppState>>,
-    Query(req): Query<FeeRecommendationRequest>,
+    ValidatedQuery(req): ValidatedQuery<FeeRecommendationRequest>,
 ) -> Result<Json<FeeRecommendationResponse>, AppError> {
     tracing::info!("Generating fee recommendation");
 
@@ -1465,7 +1489,7 @@ async fn fee_recommend(
 )]
 async fn fee_history(
     State(state): State<Arc<AppState>>,
-    Query(req): Query<FeeHistoryRequest>,
+    ValidatedQuery(req): ValidatedQuery<FeeHistoryRequest>,
 ) -> Result<Json<FeeHistoryResponse>, AppError> {
     tracing::info!("Fetching fee history");
 
@@ -1550,7 +1574,8 @@ pub struct FeeAnalyticsEnvelope {
         crate::fee_analytics::MarketConditions,
         crate::fee_analytics::ModelBreakdown,
         crate::fee_analytics::TrendDirection,
-        FeeAnalyticsEnvelope
+        FeeAnalyticsEnvelope,
+        crate::errors::ErrorResponse
     )),
     tags(
         (name = "Analysis", description = "Soroban contract resource analysis endpoints"),
@@ -2131,7 +2156,7 @@ async fn main() {
         .route("/analyze/optimize-limits", post(optimize_limits))
         .route("/analyze/compare", post(compare_handler))
         .route("/analyze/gas-golfing", post(analyze_gas_golfing))
-        .route_layer(middleware::from_fn(auth::auth_middleware));
+        .route_layer(axum_middleware::from_fn(auth::auth_middleware));
 
     let app = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
@@ -2169,8 +2194,12 @@ async fn main() {
         .merge(protected)
         .layer(Extension(auth_state))
         .layer(cors)
-        .layer(crate::middleware::correlation_id_middleware)
+        .layer(axum_middleware::from_fn(
+            crate::middleware::correlation_id_middleware,
+        ))
         .layer(TraceLayer::new_for_http())
+        .layer(CatchPanicLayer::custom(error_handler::handle_panic))
+        .fallback(error_handler::fallback_handler)
         .with_state(app_state); // ← thread AppState through all handlers
 
     let bind_addr = format!("0.0.0.0:{}", config.server_port);
@@ -2365,7 +2394,7 @@ mod tests {
         ));
         let protected = Router::new()
             .route("/analyze/wasm/profile", post(analyze_wasm_profile))
-            .route_layer(middleware::from_fn(auth::auth_middleware));
+            .route_layer(axum_middleware::from_fn(auth::auth_middleware));
         Router::new()
             .merge(protected)
             .layer(Extension(auth_state))

@@ -3,6 +3,7 @@
 use crate::fee_analytics::FeeAnalyticsEngine;
 use crate::fee_store::FeeStore;
 use crate::jobs::{JobId, JobQueue};
+use crate::validation::ValidatedJson;
 use crate::AppError;
 use axum::{
     extract::{Path, Query, State},
@@ -12,8 +13,10 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::str::FromStr;
 use std::sync::Arc;
 use utoipa::ToSchema;
+use validator::Validate;
 
 /// Severity of a fee discrepancy
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq)]
@@ -66,7 +69,8 @@ pub struct ReconciliationReport {
 }
 
 /// Request to start a reconciliation job
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct ReconcileRequest {
     pub from_ledger: i64,
     pub to_ledger: i64,
@@ -254,7 +258,7 @@ impl FeeReconciler {
             .count() as i64;
 
         let summary = ReconciliationSummary {
-            mean_delta_pct,
+            mean_delta_pct: avg_delta_pct,
             median_delta_pct,
             std_dev_delta_pct,
             ledgers_with_critical,
@@ -382,7 +386,7 @@ impl From<ReconciliationError> for AppError {
 )]
 pub async fn reconcile_handler(
     State(state): State<Arc<crate::AppState>>,
-    Json(req): Json<ReconcileRequest>,
+    ValidatedJson(req): ValidatedJson<ReconcileRequest>,
 ) -> Result<(StatusCode, Json<ReconcileResponse>), AppError> {
     if req.from_ledger >= req.to_ledger {
         return Err(AppError::BadRequest(

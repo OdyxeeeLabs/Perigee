@@ -298,6 +298,7 @@ impl ProviderRegistry {
             instance_id: config.instance_id,
             public_base_url: config.public_base_url.map(|url| normalize_base_url(&url)),
             latency_cursor: AtomicUsize::new(0),
+            metrics: None,
         })
     }
 
