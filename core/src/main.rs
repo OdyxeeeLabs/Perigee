@@ -30,8 +30,9 @@ use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceD
 use crate::errors::AppError;
 use crate::merkle_tree::MerkleTree;
 use axum::{
+    body::Body,
     extract::{Json, Multipart, State},
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, Request, StatusCode, Uri},
     middleware,
     response::IntoResponse,
     routing::{get, post},
@@ -52,7 +53,6 @@ use crate::fee_store::FeeStore;
 use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
 use crate::insights::InsightsEngine;
 use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
-use crate::merkle_tree::MerkleTree;
 use crate::reconciliation::FeeReconciler;
 use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
 use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult};
@@ -198,6 +198,93 @@ fn default_disk_cache_path() -> String {
 
 fn default_max_ledger_age() -> u32 {
     100
+}
+
+fn versioned_path(path: &str, version: &str) -> String {
+    let trimmed_version = version.trim().trim_matches('/').to_ascii_lowercase();
+    if trimmed_version.is_empty() {
+        return path.to_string();
+    }
+
+    if path == "/" {
+        return format!("/{trimmed_version}");
+    }
+
+    let versioned_paths = [
+        "/health",
+        "/metrics",
+        "/analyze",
+        "/analyze/wasm",
+        "/analyze/wasm/branches",
+        "/analyze/optimize-limits",
+        "/analyze/compare",
+        "/analyze/gas-golfing",
+    ];
+
+    if path.starts_with(&format!("/{trimmed_version}")) || path.starts_with("/v") {
+        return path.to_string();
+    }
+
+    if versioned_paths.contains(&path) {
+        return format!("/{trimmed_version}{path}");
+    }
+
+    path.to_string()
+}
+
+async fn versioning_middleware(
+    req: Request<Body>,
+    next: axum::middleware::Next,
+) -> Result<impl IntoResponse, StatusCode> {
+    let version_header = req
+        .headers()
+        .get("x-api-version")
+        .or_else(|| req.headers().get("api-version"))
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let mut request = req;
+    if let Some(version) = version_header {
+        let current_path = request.uri().path();
+        let rewritten_path = versioned_path(current_path, version);
+        if rewritten_path != current_path {
+            let mut builder = Uri::builder();
+            if let Some(query) = request.uri().query() {
+                builder = builder.path_and_query(format!("{rewritten_path}?{query}"));
+            } else {
+                builder = builder.path_and_query(rewritten_path);
+            }
+            *request.uri_mut() = builder.build().unwrap_or_else(|_| request.uri().clone());
+        }
+    }
+
+    Ok(next.run(request).await)
+}
+
+fn build_protected_router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/v1/analyze", post(analyze))
+        .route("/analyze", post(analyze))
+        .route("/v1/analyze/wasm", post(analyze_wasm))
+        .route("/analyze/wasm", post(analyze_wasm))
+        .route("/v1/analyze/wasm/branches", post(analyze_wasm_branches))
+        .route("/analyze/wasm/branches", post(analyze_wasm_branches))
+        .route("/v1/analyze/optimize-limits", post(optimize_limits))
+        .route("/analyze/optimize-limits", post(optimize_limits))
+        .route("/v1/analyze/compare", post(compare_handler))
+        .route("/analyze/compare", post(compare_handler))
+        .route("/v1/analyze/gas-golfing", post(analyze_gas_golfing))
+        .route("/analyze/gas-golfing", post(analyze_gas_golfing))
+        .route_layer(middleware::from_fn(auth::auth_middleware))
+}
+
+fn build_public_router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/v1/health", get(health_check))
+        .route("/health", get(health_check))
+        .route("/v1/metrics", get(metrics_handler))
+        .route("/metrics", get(metrics_handler))
 }
 
 fn load_config() -> Result<AppConfig, ConfigError> {
@@ -2124,14 +2211,7 @@ async fn main() {
 
     let cors = CorsLayer::new().allow_origin(Any);
 
-    let protected = Router::new()
-        .route("/analyze", post(analyze))
-        .route("/analyze/wasm", post(analyze_wasm))
-        .route("/analyze/wasm/branches", post(analyze_wasm_branches))
-        .route("/analyze/optimize-limits", post(optimize_limits))
-        .route("/analyze/compare", post(compare_handler))
-        .route("/analyze/gas-golfing", post(analyze_gas_golfing))
-        .route_layer(middleware::from_fn(auth::auth_middleware));
+    let protected = build_protected_router();
 
     let app = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
@@ -2141,8 +2221,7 @@ async fn main() {
                 "Hello from Perigee! Usage: cargo run -p Perigee-core -- benchmark"
             }),
         )
-        .route("/health", get(health_check))
-        .route("/metrics", get(metrics_handler))
+        .merge(build_public_router())
         .route("/auth/challenge", post(auth::challenge_handler))
         .route("/auth/verify", post(auth::verify_handler))
         .route("/auth/refresh", post(auth::refresh_handler))
@@ -2167,6 +2246,7 @@ async fn main() {
         // the client passes the job_id in the path.
         .route("/ws/jobs/:job_id", get(ws::ws_handler))
         .merge(protected)
+        .layer(middleware::from_fn(versioning_middleware))
         .layer(Extension(auth_state))
         .layer(cors)
         .layer(crate::middleware::correlation_id_middleware)
@@ -2196,6 +2276,53 @@ async fn main() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Integration Tests
 // ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod versioning_tests {
+    use super::*;
+    use axum::body::Body;
+    use http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn versioned_health_route_is_available() {
+        let app = build_public_router().with_state(Arc::new(AppState {
+            engine: SimulationEngine::new("https://test.example.com".to_string()),
+            cache: SimulationCache::new(),
+            insights_engine: InsightsEngine::new(),
+            simulation_timeout: std::time::Duration::from_secs(30),
+        }));
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/v1/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn health_route_accepts_api_version_header() {
+        let app = build_public_router().with_state(Arc::new(AppState {
+            engine: SimulationEngine::new("https://test.example.com".to_string()),
+            cache: SimulationCache::new(),
+            insights_engine: InsightsEngine::new(),
+            simulation_timeout: std::time::Duration::from_secs(30),
+        }));
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/health")
+            .header("x-api-version", "v1")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}
 
 #[cfg(any())]
 mod tests {

@@ -8,6 +8,10 @@
 
 import type { AnalyzeResponse } from "./sorobantypes";
 
+declare const process: {
+  env: Record<string, string | undefined>;
+};
+
 import {
   AnalyzeRequestDto,
   AnalyzeWasmRequestDto,
@@ -16,21 +20,58 @@ import {
 } from "./dtos";
 
 const DEFAULT_DEV_API_URL = "http://localhost:8080";
+const DEFAULT_API_VERSION = "v1";
 
 export class ValidationError extends DtoValidationError {}
 
+export interface AnalyzeRequest {
+  contract_id: string;
+  function_name: string;
+  args?: string[];
+  ledger_overrides?: Record<string, string>;
+  protocol_version?: number;
+  enable_experimental?: boolean;
+}
+
+export interface AnalyzeWasmRequest {
+  wasm_bytes: string;
+  function_name: string;
+  args?: string[];
+  protocol_version?: number;
+  enable_experimental?: boolean;
+}
+
 export async function validateAnalyzeRequest(req: AnalyzeRequest): Promise<AnalyzeRequest> {
-  return validateDto(AnalyzeRequestDto, req);
+  const dto = await validateDto(AnalyzeRequestDto, req);
+  return {
+    contract_id: dto.contract_id!,
+    function_name: dto.function_name!,
+    args: dto.args,
+    ledger_overrides: dto.ledger_overrides,
+    protocol_version: dto.protocol_version,
+    enable_experimental: dto.enable_experimental,
+  };
 }
 
 export async function validateAnalyzeWasmRequest(
   req: AnalyzeWasmRequest,
 ): Promise<AnalyzeWasmRequest> {
-  return validateDto(AnalyzeWasmRequestDto, req);
+  const dto = await validateDto(AnalyzeWasmRequestDto, req);
+  return {
+    wasm_bytes: dto.wasm_bytes!,
+    function_name: dto.function_name!,
+    args: dto.args,
+    protocol_version: dto.protocol_version,
+    enable_experimental: dto.enable_experimental,
+  };
 }
 
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") ?? DEFAULT_DEV_API_URL;
+
+export const API_VERSION = (
+  process.env.NEXT_PUBLIC_API_VERSION?.replace(/^\/+|\/+$/g, "") ?? DEFAULT_API_VERSION
+).toLowerCase();
 
 export const apiConfig = {
   baseUrl: API_URL,
@@ -65,11 +106,26 @@ export class ApiError extends Error {
   }
 }
 
+function withApiVersion(path: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const versionPrefix = `/${API_VERSION}`;
+
+  if (
+    normalizedPath === "/" ||
+    normalizedPath === versionPrefix ||
+    normalizedPath.startsWith(`${versionPrefix}/`)
+  ) {
+    return normalizedPath;
+  }
+
+  return `${versionPrefix}${normalizedPath}`;
+}
+
 export function apiUrl(
   path: string,
   params?: ApiRequestOptions["params"],
 ): string {
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const normalizedPath = withApiVersion(path);
   const url = new URL(`${API_URL}${normalizedPath}`);
 
   if (params) {
@@ -117,8 +173,6 @@ async function parseResponse(response: Response): Promise<unknown> {
     : response.text();
 }
 
-// --- Retry/backoff for transient RPC failures (Stellar testnet timeouts, 5xx, 429) ---
-
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_RETRY_ATTEMPTS = 4;
 const BASE_RETRY_DELAY_MS = 500;
@@ -132,7 +186,6 @@ function isRetryableStatus(status: number): boolean {
 }
 
 function isRetryableNetworkError(error: unknown): boolean {
-  // fetch() throws TypeError on network-level failures (timeout, DNS, connection reset, etc.)
   return error instanceof TypeError;
 }
 
@@ -162,8 +215,6 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw lastError;
 }
 
-// --- end retry/backoff ---
-
 async function request<T>(
   endpoint: string,
   options: ApiRequestOptions = {},
@@ -173,6 +224,10 @@ async function request<T>(
 
   if (!requestHeaders.has("Accept")) {
     requestHeaders.set("Accept", "application/json");
+  }
+
+  if (!requestHeaders.has("X-API-Version")) {
+    requestHeaders.set("X-API-Version", API_VERSION);
   }
 
   if (token && !requestHeaders.has("Authorization")) {
@@ -235,23 +290,6 @@ export const apiClient = {
     return request<T>(endpoint, { ...options, method: "DELETE" });
   },
 };
-
-export interface AnalyzeRequest {
-  contract_id: string;
-  function_name: string;
-  args?: string[];
-  ledger_overrides?: Record<string, string>;
-  protocol_version?: number;
-  enable_experimental?: boolean;
-}
-
-export interface AnalyzeWasmRequest {
-  wasm_bytes: string;
-  function_name: string;
-  args?: string[];
-  protocol_version?: number;
-  enable_experimental?: boolean;
-}
 
 export const analyzeService = {
   async analyze(req: AnalyzeRequest, token?: string): Promise<AnalyzeResponse> {
