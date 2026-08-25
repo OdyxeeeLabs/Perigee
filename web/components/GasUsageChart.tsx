@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { BarChart3, Cpu, Database, HardDrive, Activity, DollarSign } from 'lucide-react';
 import type { TestnetAverages } from '../lib/sorobantypes';
 
@@ -40,7 +40,7 @@ const formatStroops = (stroops: number) => {
   return `${xlm.toFixed(7)} XLM`;
 };
 
-export const GasUsageChart: React.FC<GasUsageChartProps> = ({
+const GasUsageChart = React.memo(({
   cpu_instructions,
   ram_bytes,
   ledger_read_bytes,
@@ -48,10 +48,10 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
   transaction_size_bytes,
   cost_stroops,
   testnetAverages,
-}) => {
+}: GasUsageChartProps) => {
   const avg = testnetAverages ?? DEFAULT_TESTNET_AVERAGES;
 
-  const metrics: GasMetric[] = [
+  const metrics = useMemo<GasMetric[]>(() => [
     {
       key: 'cpu',
       label: 'CPU Instructions',
@@ -97,12 +97,12 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
       color: '#a371f7',
       icon: Activity,
     },
-  ];
+  ], [cpu_instructions, ram_bytes, ledger_read_bytes, ledger_write_bytes, transaction_size_bytes, avg]);
 
-  const maxValue = Math.max(
+  const maxValue = useMemo(() => Math.max(
     ...metrics.map((m) => Math.max(m.simulated, m.average)),
     1,
-  );
+  ), [metrics]);
 
   return (
     <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-6 font-mono">
@@ -116,7 +116,6 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
         <span className="text-xs text-[#8b949e]">Per Transaction</span>
       </div>
 
-      {/* Legend */}
       <div className="flex gap-6 mb-6 text-xs">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#00d9ff' }} />
@@ -135,7 +134,6 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
 
           return (
             <div key={metric.key}>
-              {/* Label Row */}
               <div className="flex justify-between items-center mb-1">
                 <div className="flex items-center gap-2 text-[#c9d1d9]">
                   <metric.icon size={14} className="text-[#8b949e]" />
@@ -153,7 +151,6 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
                 </div>
               </div>
 
-              {/* Simulated bar */}
               <div className="h-3 w-full bg-[#0d1117] rounded-sm overflow-hidden border border-[#30363d] mb-0.5">
                 <div
                   className="h-full rounded-sm transition-all duration-500 ease-out"
@@ -165,7 +162,6 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
                 />
               </div>
 
-              {/* Testnet average bar */}
               <div className="h-2 w-full bg-[#0d1117] rounded-sm overflow-hidden border border-[#30363d]">
                 <div
                   className="h-full rounded-sm transition-all duration-500 ease-out"
@@ -183,7 +179,6 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
         })}
       </div>
 
-      {/* Cost Summary */}
       {cost_stroops !== undefined && (
         <div className="mt-6 pt-4 border-t-[4px] border-[#30363d]">
           <div className="flex items-center justify-between">
@@ -210,4 +205,9 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
       </div>
     </div>
   );
-};
+});
+
+GasUsageChart.displayName = 'GasUsageChart';
+
+export { GasUsageChart };
+export default GasUsageChart;
