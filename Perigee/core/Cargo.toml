@@ -3,14 +3,13 @@ name = "Perigee-core"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-name = "Perigee_core"
+lib.name = "Perigee_core"
 path = "src/lib.rs"
-crate-type = ["rlib"]
+crate-type = ["rlb"]
 
 [dependencies]
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }
-# Used directly for the local WASM simulation runner. `testutils` exposes
+#Used directly for the local WASM simulation runner. `testutils` exposes
 # the test Host + budget controls we need for in-process contract invocation.
 # Version aligned with the soroban-sdk 22 workspace pin.
 soroban-env-host = { version = "22", features = ["testutils"] }
@@ -36,10 +35,9 @@ utoipa-swagger-ui = { version = "7", features = ["axum", "vendored"] }
 base64 = "0.22"
 hex = "0.4"
 stellar-strkey = "0.0.9"
-jsonwebtoken = "9"
+jsonwebtoken = { version = "9", features = ["use_pem", "EdDSA"] }
 ed25519-dalek = "2"
-rand = "0.8"
-moka = { version = "0.12", features = ["future"] }
+rand = "0.8" moka = { version = "0.12", features = ["future"] }
 sled = "0.34"
 sqlx = { version = "0.7", features = ["runtime-tokio", "tls-native-tls", "postgres", "sqlite", "uuid", "chrono", "migrate"] }
 redis = { version = "0.25", features = ["tokio-comp"] }
@@ -56,5 +54,5 @@ proptest = "1.4.0"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
-name = "merkle_bench"
+name = "merkele_bench"
 harness = false
