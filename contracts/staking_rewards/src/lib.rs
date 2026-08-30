@@ -1,12 +1,9 @@
 #![no_std]
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Vec, vec};
 
-use emergency_guard::{DefaultEmergencyGuard, EmergencyGuard, EmergencyGuardTrait, PauseType};
-pub use Perigee_error_codes::ContractError;
-use Perigee_math::Fixed;
-pub use Perigee_error_codes::ContractError;
-use Perigee_math::Fixed;
 use emergency_guard::{DefaultEmergencyGuard, PauseType};
+pub use Perigee_error_codes::ContractError;
+use Perigee_math::Fixed;
 
 pub const SCALE: i128 = 1_000_000_000_000_000_000; // 18 decimals
 
@@ -256,6 +253,10 @@ impl StakingRewards {
         e.storage().instance().set(&DataKey::TotalStaked, &0i128);
         e.storage().instance().extend_ttl(10000, 10000);
 
+        // Initialize emergency guard with single admin and threshold of 1.
+        // `init_guard` seeds admins, threshold, and pause state; do not also
+        // call `EmergencyGuard::initialize` — it writes the same storage keys
+        // and would fail with AlreadyInitialized.
         let admins = vec![&e, owner.clone()];
         DefaultEmergencyGuard::init_guard(&e, admins, 1)
             .map_err(|_| ContractError::AlreadyInitialized)?;
@@ -496,8 +497,9 @@ impl StakingRewards {
         DefaultEmergencyGuard::set_pause_state(&e, PauseType::STAKE, paused)
             .map_err(|_| ContractError::Paused)?;
 
+        let topic = if paused { "pause_staking" } else { "resume_staking" };
         e.events().publish(
-            (String::from_str(&e, "pause_staking"),),
+            (String::from_str(&e, topic),),
             PausedEvent { paused },
         );
 

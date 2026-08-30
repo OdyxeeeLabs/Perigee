@@ -424,7 +424,6 @@ impl EmergencyGuard {
     ) -> Result<(), GuardError> {
         Self::check_multi_sig(&env, &approvers)?;
         let admins = Self::get_admins(env.clone());
-        let threshold = Self::get_threshold(env.clone());
         let mut new_admins = Vec::new(&env);
         let mut found = false;
         for a in admins.iter() {
@@ -443,6 +442,7 @@ impl EmergencyGuard {
 
         new_admins.push_back(new_admin.clone());
 
+        let threshold = Self::get_threshold(env.clone());
         if (new_admins.len() as u32) < threshold {
             return Err(GuardError::InvalidThreshold);
         }
@@ -488,8 +488,10 @@ impl EmergencyGuard {
     pub fn validate_multi_sig(env: Env, approvers: Vec<Address>) -> Result<(), GuardError> {
         Self::check_multi_sig(&env, &approvers)
     }
+}
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
+impl EmergencyGuard {
+    // ── Internal helpers (not contract exports — signatures use references) ──
 
     fn is_admin_internal(env: &Env, addr: &Address) -> bool {
         let admins: Vec<Address> = env
