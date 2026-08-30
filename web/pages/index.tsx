@@ -10,6 +10,7 @@ import { ResultViewer } from "../components/Resultviewer";
 import { SEO } from "../components/SEO";
 import { UploadZone } from "../components/upload-zone";
 import { analyzeService } from "../lib/api";
+import { trackTelemetryEvent } from "../lib/telemetry";
 import { contractIds } from "../lib/contracts.config";
 import { sanitizeUserInput } from "../lib/sanitize";
 import {
@@ -75,6 +76,14 @@ export default function Home() {
           timestamp: Date.now(),
           success: true,
         };
+
+        trackTelemetryEvent({
+          name: "contract_analyze",
+          properties: {
+            mode: activeWasmData ? "wasm" : "contract_id",
+            fn: selectedFunction.name,
+          },
+        });
 
         setCurrentResult(result);
       } catch (error) {
