@@ -309,6 +309,16 @@ impl GovernanceContract {
             .get(&DataKey::Receipt(proposal_id, voter))
     }
 
+    /// Casts or adds quadratic votes to a proposal.
+    ///
+    /// # Voting Rules:
+    /// - Caller must be registered as a voter with sufficient voting units.
+    /// - Proposal must be open and the current ledger sequence must not exceed `voting_ends_at`.
+    /// - `credits_to_spend` must be strictly positive (> 0).
+    /// - Cumulative credits spent across multiple votes on the same proposal cannot exceed `voting_units_snapshot`.
+    /// - Direction consistency: A voter cannot accumulate votes on both sides of the same proposal.
+    ///   Once a voter casts their initial vote (either `support = true` or `support = false`), any subsequent
+    ///   vote on that proposal must specify the same `support` side, otherwise `Error::VoteSideMismatch` is returned.
     pub fn cast_vote(
         env: Env,
         proposal_id: u32,
