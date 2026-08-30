@@ -22,8 +22,15 @@ export interface FormattedError {
 export async function extractErrorDetails(response: Response): Promise<BackendErrorResponse> {
   try {
     const data = await response.json();
+    let error = data.error || 'UNKNOWN_ERROR';
+    if (error === 'UNAUTHORIZED' || error === 'UNKNOWN_ERROR') {
+      const message = (data.message || '').toLowerCase();
+      if (message.includes('expired')) error = 'TOKEN_EXPIRED';
+      else if (message.includes('revoked')) error = 'TOKEN_REVOKED';
+      else if (message.includes('key rotation') || message.includes('key has rotated')) error = 'KEY_ROTATION';
+    }
     return {
-      error: data.error || 'UNKNOWN_ERROR',
+      error,
       message: data.message || response.statusText || 'An error occurred',
       statusCode: response.status,
     };
@@ -115,6 +122,9 @@ export function createUserFriendlyMessage(errorResponse: BackendErrorResponse): 
   const errorMessages: Record<string, string> = {
     BAD_REQUEST: 'Invalid request. Please check your inputs and try again.',
     UNAUTHORIZED: 'You are not authorized to perform this action.',
+    TOKEN_EXPIRED: 'Your session has expired. Please log in again.',
+    TOKEN_REVOKED: 'Your session has been revoked. Please log in again.',
+    KEY_ROTATION: 'Your session requires re-authentication due to key rotation.',
     NOT_FOUND: 'The requested resource was not found.',
     INTERNAL_SERVER_ERROR: 'Server error. Please try again later.',
     SERVICE_UNAVAILABLE: 'The service is currently unavailable. Please try again later.',
