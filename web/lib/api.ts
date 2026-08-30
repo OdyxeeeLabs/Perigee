@@ -8,6 +8,7 @@
  */
 
 import type { AnalyzeResponse } from "./sorobantypes";
+import { trackTelemetryEvent } from "./telemetry";
 
 import {
   AnalyzeRequestDto,
@@ -358,7 +359,9 @@ export const vaultService = {
   },
 
   async create(req: CreateVaultRequest, token?: string): Promise<VaultRecord> {
-    return apiClient.post<VaultRecord>("/vaults", req, { token });
+    const vault = await apiClient.post<VaultRecord>("/vaults", req, { token });
+    trackTelemetryEvent({ name: "vault_create" });
+    return vault;
   },
 
   async update(id: string, req: UpdateVaultRequest, token?: string): Promise<VaultRecord> {

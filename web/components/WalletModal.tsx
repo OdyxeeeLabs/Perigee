@@ -7,6 +7,7 @@ import { Wallet, Check, AlertCircle } from "lucide-react";
 import React from "react";
 import UserIcon from "./userIcon";
 import { logger } from "../lib/logger";
+import { trackTelemetryEvent } from "../lib/telemetry";
 import { useTranslations } from "next-intl";
 
 export function WalletModal() {
@@ -32,6 +33,10 @@ export function WalletModal() {
     if (activeSelection) {
       try {
         await connect(activeSelection);
+        trackTelemetryEvent({
+          name: "wallet_connect",
+          properties: { wallet_id: activeSelection },
+        });
       } catch (err) {
         // Error is handled in context
         logger.error("Connection error:", err);
