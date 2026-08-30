@@ -26,7 +26,7 @@ use stellar_strkey::Strkey;
 use utoipa::ToSchema;
 
 const CHALLENGE_EXPIRY_SECS: u64 = 300;
-const JWT_EXPIRY_SECS: u64 = 86400;
+const JWT_EXPIRY_SECS: u64 = 300;
 const WEB_AUTH_DOMAIN: &str = "Perigee";
 
 pub struct AuthState {
