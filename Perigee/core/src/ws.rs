@@ -46,7 +46,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-use crate::auth::Claims;
 use crate::jobs::JobId;
 
 // ── Channel capacity ─────────────────────────────────────────────────────────
@@ -279,12 +278,57 @@ pub struct WsQueryParams {
     token: Option<String>,
 }
 
+/// Claims required for WebSocket JWT validation. Includes `jti` so revoked
+/// tokens can be rejected before the upgrade.
+#[derive(Debug, Deserialize)]
+struct WsClaims {
+    scopes: Vec<String>,
+    #[serde(default)]
+    jti: Option<String>,
+}
+
 // ── Axum extractor alias ─────────────────────────────────────────────────────
 
 /// Shared state slice required by the WebSocket handler.
 /// The handler accesses the bus through the main [`AppState`](crate::AppState).
 pub struct WsState {
     pub bus: Arc<SimulationBus>,
+}
+
+/// Tries all active/previous signing keys and rejects revoked tokens.
+async fn verify_jwt(
+    state: &crate::AppState,
+    token: &str,
+) -> Result<WsClaims, String> {
+    let validation = Validation::new(Algorithm::RS256);
+
+    let mut last_error = None;
+    let keys = if state.auth.decoding_keys.is_empty() {
+        std::slice::from_ref(&state.auth.decoding_key)
+    } else {
+        state.auth.decoding_keys.as_slice()
+    };
+
+    for key in keys {
+        match decode::<WsClaims>(token, key, &validation) {
+            Ok(token_data) => {
+                let revoked_tokens = state.auth.revoked_tokens.read().await;
+                if revoked_tokens.contains(token)
+                    || token_data
+                        .claims
+                        .jti
+                        .as_ref()
+                        .map_or(false, |jti| revoked_tokens.contains(jti))
+                {
+                    return Err("token revoked".to_string());
+                }
+                return Ok(token_data.claims);
+            }
+            Err(e) => last_error = Some(e.to_string()),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "no verification key".to_string()))
 }
 
 // ── WebSocket handler ─────────────────────────────────────────────────────────
@@ -308,21 +352,20 @@ pub async fn ws_handler(
         }
     };
 
-    let validation = Validation::new(Algorithm::RS256);
-    match decode::<Claims>(&token, &state.auth.decoding_key, &validation) {
-        Ok(token_data) => {
-            // Check that the token has at least read permissions (we can expand this later if needed)
-            if !token_data.claims.scopes.contains(&"simulate".to_string()) {
-                return (axum::http::StatusCode::UNAUTHORIZED, "Insufficient permissions").into_response();
-            }
-            // If valid, proceed with upgrade
-            ws.on_upgrade(move |socket| handle_socket(socket, job_id, state))
-        },
+    let claims = match verify_jwt(&state, &token).await {
+        Ok(claims) => claims,
         Err(e) => {
             tracing::warn!("Invalid WebSocket token: {}", e);
-            (axum::http::StatusCode::UNAUTHORIZED, "Invalid token").into_response()
+            return (axum::http::StatusCode::UNAUTHORIZED, "Invalid token").into_response();
         }
+    };
+
+    // Check that the token has at least read permissions (we can expand this later if needed)
+    if !claims.scopes.contains(&"simulate".to_string()) {
+        return (axum::http::StatusCode::UNAUTHORIZED, "Insufficient permissions").into_response();
     }
+    // If valid, proceed with upgrade
+    ws.on_upgrade(move |socket| handle_socket(socket, job_id, state))
 }
 
 async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::AppState>) {
