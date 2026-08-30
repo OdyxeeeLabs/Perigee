@@ -308,7 +308,9 @@ pub async fn ws_handler(
         }
     };
 
-    let validation = Validation::new(Algorithm::RS256);
+    let mut validation = Validation::new(Algorithm::RS256);
+    // Enforce short-lived access tokens for agent authentication by requiring `exp`.
+    validation.required_spec_claims = Some(vec!["exp".to_string()]);
     match decode::<Claims>(&token, &state.auth.decoding_key, &validation) {
         Ok(token_data) => {
             // Check that the token has at least read permissions (we can expand this later if needed)
