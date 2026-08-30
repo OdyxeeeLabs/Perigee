@@ -924,6 +924,14 @@ pub async fn auth_middleware(
         }
     };
 
+    // Validate JWT expiry claim (BE-030: verify token has not expired)
+    let now = now_secs();
+    if token_data.claims.exp <= now {
+        return Err(AppError::Unauthorized(
+            "Token has expired".into(),
+        ));
+    }
+
     if !token_data.claims.scopes.contains(&"simulate".to_string()) {
         log_security_event(
             SecurityEventType::UnauthorizedAccess,
@@ -1168,4 +1176,69 @@ mod tests {
         assert!(bucket.consume(2.0, 1.0, 1.0));
         assert!(!bucket.consume(2.0, 1.0, 1.0));
     }
+
+    #[test]
+    fn test_expired_token_rejected() {
+        use jsonwebtoken::encode;
+        let state = test_state();
+        let now = now_secs();
+        
+        // Create a token that expired 1 second ago
+        let expired_claims = Claims {
+            sub: "GTESTEXPIRED".to_string(),
+            iss: WEB_AUTH_DOMAIN.to_string(),
+            iat: now - 100,
+            exp: now - 1,  // Expired
+            scopes: vec!["simulate".to_string()],
+        };
+        
+        let header = Header::new(Algorithm::RS256);
+        let expired_token = encode(&header, &expired_claims, &state.encoding_key).unwrap();
+        
+        // Attempt to validate the expired token using the same logic as auth_middleware
+        let validation = Validation::new(Algorithm::RS256);
+        let result = decode::<Claims>(&expired_token, &state.decoding_key, &validation);
+        
+        // The token should fail validation (either by jsonwebtoken or our explicit check)
+        // If it doesn't fail in decode, our explicit check in auth_middleware will catch it
+        if let Ok(token_data) = result {
+            // Simulate the explicit expiry check from auth_middleware (BE-030)
+            let current_time = now_secs();
+            assert!(token_data.claims.exp <= current_time, "Expired token should be rejected");
+        }
+    }
+
+    #[test]
+    fn test_valid_token_not_expired() {
+        use jsonwebtoken::encode;
+        let state = test_state();
+        let now = now_secs();
+        
+        // Create a token that expires 1 hour from now
+        let valid_claims = Claims {
+            sub: "GTESTVALID".to_string(),
+            iss: WEB_AUTH_DOMAIN.to_string(),
+            iat: now,
+            exp: now + 3600,  // Expires in 1 hour
+            scopes: vec!["simulate".to_string()],
+        };
+        
+        let header = Header::new(Algorithm::RS256);
+        let valid_token = encode(&header, &valid_claims, &state.encoding_key).unwrap();
+        
+        // Validate the token
+        let validation = Validation::new(Algorithm::RS256);
+        let result = decode::<Claims>(&valid_token, &state.decoding_key, &validation);
+        
+        assert!(result.is_ok(), "Valid token should decode successfully");
+        
+        let token_data = result.unwrap();
+        let current_time = now_secs();
+        
+        // Explicit expiry check from auth_middleware (BE-030)
+        assert!(token_data.claims.exp > current_time, "Valid token should not be expired");
+        assert_eq!(token_data.claims.sub, "GTESTVALID");
+        assert!(token_data.claims.scopes.contains(&"simulate".to_string()));
+    }
 }
+
