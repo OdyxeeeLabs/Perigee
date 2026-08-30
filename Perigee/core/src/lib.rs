@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod cache;
 pub mod comparison;
 pub mod errors;
