@@ -1622,6 +1622,9 @@ async fn fee_analytics(
         crate::fee_analytics::MarketConditions,
         crate::fee_analytics::ModelBreakdown,
         crate::fee_analytics::TrendDirection
+    ),
+    security_schemes(
+        ("jwt" = (type = "http", scheme = "bearer", bearer_format = "JWT"))
     )),
     tags(
         (name = "Analysis", description = "Soroban contract resource analysis endpoints"),
@@ -2181,6 +2184,9 @@ async fn main() {
         .route("/analyze/optimize-limits", post(optimize_limits))
         .route("/analyze/compare", post(compare_handler))
         .route("/analyze/gas-golfing", post(analyze_gas_golfing))
+        .route("/registry/providers", get(registry_providers))
+        .route("/registry/peers", get(registry_peers))
+        .route("/registry/gossip", post(registry_gossip))
         .route_layer(middleware::from_fn(auth::auth_middleware));
 
     let app = Router::new()

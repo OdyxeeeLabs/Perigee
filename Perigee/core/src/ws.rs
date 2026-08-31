@@ -352,6 +352,18 @@ pub async fn ws_handler(
         }
     };
 
+    let mut validation = Validation::new(Algorithm::RS256);
+    // Enforce short-lived access tokens for agent authentication by requiring `exp`.
+    validation.required_spec_claims = Some(vec!["exp".to_string()]);
+    match decode::<Claims>(&token, &state.auth.decoding_key, &validation) {
+        Ok(token_data) => {
+            // Check that the token has at least read permissions (we can expand this later if needed)
+            if !token_data.claims.scopes.contains(&"simulate".to_string()) {
+                return (axum::http::StatusCode::UNAUTHORIZED, "Insufficient permissions").into_response();
+            }
+            // If valid, proceed with upgrade
+            ws.on_upgrade(move |socket| handle_socket(socket, job_id, state))
+        },
     let claims = match verify_jwt(&state, &token).await {
         Ok(claims) => claims,
         Err(e) => {

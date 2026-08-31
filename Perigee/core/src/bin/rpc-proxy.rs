@@ -1,5 +1,6 @@
-use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
+use axum::{extract::State, http::HeaderMap, response::IntoResponse, routing::post, Json, Router};
 use clap::Parser;
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -10,6 +11,8 @@ struct Args {
     port: u16,
     #[arg(short, long)]
     rpc_url: String,
+    #[arg(short, long)]
+    jwt_secret: String,
 }
 
 #[derive(Clone)]
@@ -18,6 +21,7 @@ struct Config {
     max_gas_limit: u64,
     min_gas_price: u64,
     blocked_addresses: HashSet<String>,
+    jwt_secret: String,
 }
 
 impl Default for Config {
@@ -26,6 +30,7 @@ impl Default for Config {
             max_gas_limit: 30_000_000,
             min_gas_price: 100,
             blocked_addresses: HashSet::new(),
+            jwt_secret: String::new(),
         }
     }
 }
@@ -69,6 +74,23 @@ struct AppState {
     config: Config,
 }
 
+fn validate_jwt(token: &str, secret: &str) -> bool {
+    let decoding_key = DecodingKey::from_secret(secret.as_bytes());
+    decode::<serde_json::Value>(token, &decoding_key, &Validation::new(Algorithm::HS256)).is_ok()
+}
+
+fn unauthorized_response(id: serde_json::Value) -> Json<RpcResponse> {
+    Json(RpcResponse {
+        jsonrpc: "2.0".to_string(),
+        result: None,
+        error: Some(RpcError {
+            code: 401,
+            message: "Unauthorized".to_string(),
+        }),
+        id,
+    })
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -76,7 +98,12 @@ async fn main() {
     let state = Arc::new(AppState {
         rpc_url: args.rpc_url,
         client: reqwest::Client::new(),
-        config: Config::default(),
+        config: Config {
+            max_gas_limit: 30_000_000,
+            min_gas_price: 100,
+            blocked_addresses: HashSet::new(),
+            jwt_secret: args.jwt_secret,
+        },
     });
 
     let app = Router::new().route("/", post(handle_rpc)).with_state(state);
@@ -91,8 +118,20 @@ async fn main() {
 
 async fn handle_rpc(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<RpcRequest>,
 ) -> impl IntoResponse {
+    let auth_header = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+
+    match auth_header {
+        Some(token) if validate_jwt(&token, &state.config.jwt_secret) => {}
+        _ => return unauthorized_response(req.id.clone()),
+    }
+
     if req.method == "eth_sendTransaction" {
         println!("Intercepting sendTransaction");
 

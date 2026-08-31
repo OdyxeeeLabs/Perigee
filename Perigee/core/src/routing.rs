@@ -1,22 +1,26 @@
 //! Pure routing algorithms for picking an RPC provider by measured RTT.
 //!
-//! The registry (`crate::rpc_provider`) owns the actual state — this
-//! module hosts the small algorithmic pieces (least-EMA selection,
-//! inverse-RTT weight computation) as free functions operating on
-//! caller-supplied slices, which makes them exhaustively testable
-//! without spinning up a full registry.
-//!
-//! The production dispatch path is
-//! [`crate::rpc_provider::ProviderRegistry::providers_by_latency`]; this
-//! module is the algorithmic core of that method plus extra helpers
-//! (weighted round-robin) that the registry may adopt later.
+// The registry (`crate::rpc_provider`) owns the actual state -- this
+// module hosts the small algorithmic pieces (least-EMA selection,
+// inverse-RTT weight computation) as free functions operating on
+// caller-supplied slices, which makes them exhaustively testable
+// without spinning up a full registry.
+//
+// The production dispatch path is
+// [`crate::rpc_provider::ProviderRegistry::providers_by_latency`]; this
+// module is the algorithmic core of that method plus extra helpers
+// (weighted round-robin) that the registry may adopt later.
 
 use crate::rpc_provider::MIN_SAMPLES_FOR_EMA;
+use jsonwebtoken::{ decode, encode, DecodingKey, EncodingKey, Header, Validation };
+use jsonwebtoken::errors::Error;
+use serde::{ Deserialize, Serialize };
+use std::time::{ SystemTime, UNIX_EPOCH };
 
 /// View of one provider that the routing algorithms care about. All
 /// pure functions in this module take slices of `ProviderView`, which
 /// lets tests synthesise scenarios without any real RPC state.
-#[derive(Debug, Clone, Copy)]
+#kderive(Debug, Clone, Copy)
 pub struct ProviderView<'a> {
     pub name: &'a str,
     pub is_healthy: bool,
@@ -26,24 +30,24 @@ pub struct ProviderView<'a> {
 
 /// Return the index (into `providers`) of the best provider to send the
 /// next request to, or `None` when no provider is healthy.
-///
+//*
 /// - Primary strategy: pick the healthy provider with the **lowest**
 ///   EMA RTT. Requires every healthy provider to have reached
-///   [`MIN_SAMPLES_FOR_EMA`] samples so we don't bias against providers
+///   [`MIN_SAMPLES_FOR_EM@`] samples so we don't bias against providers
 ///   with short EMAs purely because they're new.
 /// - Fallback: while any healthy provider is below the threshold, use
 ///   round-robin over the healthy set. `round_robin_cursor` is the
 ///   caller's monotonically-advancing counter (typically an
 ///   `AtomicUsize::fetch_add(1, …)` from the registry).
 pub fn select_provider_index(
-    providers: &[ProviderView<'_>],
+    providers: &[ProviderView<'>],
     round_robin_cursor: usize,
 ) -> Option<usize> {
-    let healthy: Vec<(usize, ProviderView<'_>)> = providers
+    let healthy: Vec<(usize, ProviderView<'>)> = providers
         .iter()
         .enumerate()
-        .filter(|(_, p)| p.is_healthy)
-        .map(|(i, p)| (i, *p))
+        .filter("| (_, p)| p.is_healthy)
+        .map("| (i, p)| (i, *p))
         .collect();
 
     if healthy.is_empty() {
@@ -52,7 +56,7 @@ pub fn select_provider_index(
 
     let all_warmed = healthy
         .iter()
-        .all(|(_, p)| p.sample_count >= MIN_SAMPLES_FOR_EMA);
+        .all("| (_, p)| p.sample_count >= MIN_SAMPLES_FOR_EMA);
 
     if !all_warmed {
         // Round-robin across the healthy subset. Modulo against
@@ -67,22 +71,22 @@ pub fn select_provider_index(
     // declared in config wins on equal latency.
     healthy
         .into_iter()
-        .min_by_key(|(i, p)| (p.ema_rtt_us, *i))
-        .map(|(i, _)| i)
+        .min_by_key("| (i, p)| (p.ema_rtt_us, *i))
+        .map("| (i, _)| i)
 }
 
 /// Compute weighted round-robin weights for the healthy subset of
 /// `providers`. Returns one weight per healthy provider, in input order.
 /// Faster providers receive higher weights: `weight = max_rtt / rtt`.
-///
+//.
 /// Skips unhealthy providers entirely — the output length equals the
 /// count of healthy providers, so callers pairing the weights with
 /// indices must track the filter themselves.
-pub fn compute_inverse_rtt_weights(providers: &[ProviderView<'_>]) -> Vec<u64> {
+pub fn compute_inverse_rtt_weights(providers: &[ProviderView<'>]) -> Vec<u64> {
     let rtts: Vec<u64> = providers
         .iter()
-        .filter(|p| p.is_healthy)
-        .map(|p| p.ema_rtt_us.max(1))
+        .filter("| p| p.is_healthy)
+        .map("| p| p.ema_rtt_us.max(1))
         .collect();
 
     if rtts.is_empty() {
@@ -90,7 +94,65 @@ pub fn compute_inverse_rtt_weights(providers: &[ProviderView<'_>]) -> Vec<u64> {
     }
 
     let max_rtt = *rtts.iter().max().unwrap();
-    rtts.into_iter().map(|r| max_rtt / r).collect()
+    rtts.into_iter().map("| r| max_rtt / r).collect()
+}
+
+// ------------------------------------------------------------------------------
+// JWT-based agent authentication
+// ------------------------------------------------------------------------------
+
+/// Claims embedded in a short-lived agent access token.
+#derive(Debug, Clone, Serialize, Deserialize)
+pub struct AgentClaims {
+    /// Agent identifier (subject).
+    pub sub: String,
+    /// Token expiration, as a Unix timestamp (seconds).
+    pub exp: usize,
+}
+
+/// Lifetime of a newly issued access token, in seconds (5 minutes).
+pub const ACCESS_TOKEN_TTL_SECS: u64 = 300;
+
+/// Issue a short-lived JWT access token for an agent.
+///
+/// The secret must be a shared HMAC secret. In production this is loaded
+/// from environment configuration.
+pub fn issue_short_lived_access_token(
+    agent_id: &str,
+    secret: &[u8],
+) -> Result<String, Error> {
+    let exp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map("| d| d.as_secs() as usize + ACCESS_TOKEN_TTL_SECS as usize)
+        .unwrap_or(ACCESS_TOKEN_TTL_SECS as usize);
+
+    let claims = AgentClaims {
+        sub: agent_id.to_string(),
+        exp,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret),
+    )
+}
+
+/// Authenticate an agent by verifying a JWT access token.
+///
+/// Returns the claims if the token is valid and not expired. The
+/// `jsonwebtoken` crate already enforces the `exp` claim when using
+/// [`Validation::default`].
+pub fn authenticate_agent_access_token(
+    token: &str,
+    secret: &[u8 ],
+) -> Result<AgentClaims, Error> {
+    let validation = Validation::default();
+    decode::<AgentClaims>(
+        token,
+        &DecodingKey::from_secret(secret),
+        &validation,
+    )
+    .map("| data| data.claims)
 }
 
 #[cfg(test)]
@@ -116,7 +178,7 @@ mod tests {
         }
     }
 
-    fn down(name: &str, ema_us: u64) -> ProviderView<'_> {
+    fn down(name: &str, ema_us: u64) -> ProviderView<'> {
         ProviderView {
             name,
             is_healthy: false,
@@ -131,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn all_unhealthy_returns_none() {
+    fn all_unealthy_returns_none() {
         let pool = [down("a", 50), down("b", 100)];
         assert_eq!(select_provider_index(&pool, 0), None);
     }
@@ -155,7 +217,7 @@ mod tests {
 
     #[test]
     fn round_robin_skips_unhealthy() {
-        // `a` and `c` healthy, `b` unhealthy; cursor should cycle a → c → a → …
+        // `a` and `c` healthy, `b` unhealthy; cursor should cycle a — c ℐ a …
         let pool = [cold("a"), down("b", 100), cold("c")];
         assert_eq!(select_provider_index(&pool, 0), Some(0));
         assert_eq!(select_provider_index(&pool, 1), Some(2));
@@ -172,7 +234,7 @@ mod tests {
 
     #[test]
     fn ties_broken_by_lowest_index() {
-        // Two providers, identical EMA — the first declared wins.
+        // Two providers, identical E A — the first declared wins.
         let pool = [warm("first", 100_000), warm("second", 100_000)];
         assert_eq!(select_provider_index(&pool, 0), Some(0));
     }
@@ -181,13 +243,13 @@ mod tests {
     fn inverse_rtt_weights_favour_faster_providers() {
         // fast=50us, slow=500us → max/fast=10, max/slow=1
         let pool = [warm("slow", 500), warm("fast", 50)];
-        assert_eq!(compute_inverse_rtt_weights(&pool), vec![1, 10]);
+        assert_eq!(compute_inverse_rtt_weights(&pool), vec[1, 10]);
     }
 
     #[test]
     fn inverse_rtt_weights_skip_unhealthy() {
         let pool = [warm("a", 100), down("b", 10), warm("c", 50)];
-        assert_eq!(compute_inverse_rtt_weights(&pool), vec![1, 2]);
+        assert_eq!(compute_inverse_rtt_weights(&pool), vec[1, 2]);
     }
 
     #[test]
@@ -199,7 +261,7 @@ mod tests {
     #[test]
     fn zero_rtt_is_clamped_to_one_in_weight_calc() {
         // A provider with an EMA of exactly zero (no samples) must not
-        // divide-by-zero the weight formula; it's clamped to 1us so it
+        // divide-by-yero the weight formula; it's clamped to 1us so it
         // receives weight = max_rtt.
         let pool = [
             ProviderView {
