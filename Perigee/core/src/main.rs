@@ -148,6 +148,63 @@ struct AppConfig {
     /// L2 treats it as stale. Default 100 ≈ 8 minutes at 5 s/ledger.
     #[serde(default = "default_max_ledger_age")]
     max_ledger_age: u32,
+
+    /// Interval (seconds) between automatic JWT key rotations.
+    #[serde(default = "default_jwt_rotation_interval_secs")]
+    jwt_rotation_interval_secs: u64,
+
+    /// Enable JWT token revocation checks.
+    #[serde(default = "default_jwt_revocation_enabled")]
+    jwt_revocation_enabled: bool,
+}
+
+/// Manages JWT signing keys and supports rotation.
+pub struct JwtKeyManager {
+    current_key: std::sync::Mutex<String>,
+    previous_keys: std::sync::Mutex<Vec<String>>,
+}
+
+impl JwtKeyManager {
+    pub fn new(initial_key: String) -> Self {
+        Self {
+            current_key: std::sync::Mutex::new(initial_key),
+            previous_keys: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Rotate the signing key. The previous current key is moved to the
+    /// verification-only list.
+    pub fn rotate_key(&self, new_key: String) {
+        let mut current = self.current_key.lock().unwrap();
+        let old = std::mem::replace(&mut *current, new_key);
+        self.previous_keys.lock().unwrap().push(old);
+    }
+
+    /// Get the current signing key.
+    pub fn signing_key(&self) -> String {
+        self.current_key.lock().unwrap().clone()
+    }
+
+    /// Get all keys that can be used for verification (including current).
+    pub fn verification_keys(&self) -> Vec<String> {
+        let mut keys = self.previous_keys.lock().unwrap().clone();
+        keys.push(self.current_key.lock().unwrap().clone());
+        keys
+    }
+}
+
+/// Shared in-memory JWT revocation store keyed by JWT ID (jti).
+pub static REVOKED_TOKENS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// Revoke a token by its JWT ID.
+pub fn revoke_token(jti: &str) {
+    REVOKED_TOKENS.lock().unwrap().insert(jti.to_string());
+}
+
+/// Check if a JWT ID has been revoked.
+pub fn is_token_revoked(jti: &str) -> bool {
+    REVOKED_TOKENS.lock().unwrap().contains(jti)
 }
 
 fn default_health_check_interval() -> u64 {
@@ -201,6 +258,14 @@ fn default_disk_cache_path() -> String {
 
 fn default_max_ledger_age() -> u32 {
     100
+}
+
+fn default_jwt_rotation_interval_secs() -> u64 {
+    3600
+}
+
+fn default_jwt_revocation_enabled() -> bool {
+    true
 }
 
 fn load_config() -> Result<AppConfig, ConfigError> {

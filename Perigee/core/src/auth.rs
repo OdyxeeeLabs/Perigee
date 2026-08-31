@@ -5,7 +5,7 @@ use base64::{
     engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL, Engine,
 };
 use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use rand::RngCore;
 use rsa::{
     pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
@@ -19,8 +19,9 @@ use soroban_sdk::xdr::{
     Preconditions, ReadXdr, SequenceNumber, SignatureHint, TimeBounds, TimePoint, Transaction,
     TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, WriteXdr,
 };
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use stellar_strkey::Strkey;
 use utoipa::ToSchema;
@@ -32,6 +33,9 @@ const WEB_AUTH_DOMAIN: &str = "Perigee";
 pub struct AuthState {
     pub encoding_key: EncodingKey,
     pub decoding_key: DecodingKey,
+    pub key_id: String,
+    pub previous_decoding_keys: HashMap<String, DecodingKey>,
+    pub revoked_tokens: Arc<Mutex<HashSet<String>>>,
     pub jwk_n: String,
     pub jwk_e: String,
     pub signing_key: SigningKey,
@@ -80,9 +84,16 @@ impl AuthState {
         let n = BASE64_URL.encode(pub_key.n().to_bytes_be());
         let e = BASE64_URL.encode(pub_key.e().to_bytes_be());
 
+        let mut key_id_bytes = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut key_id_bytes);
+        let key_id = BASE64_URL.encode(key_id_bytes);
+
         Self {
             encoding_key,
             decoding_key,
+            key_id,
+            previous_decoding_keys: HashMap::new(),
+            revoked_tokens: Arc::new(Mutex::new(HashSet::new())),
             jwk_n: n,
             jwk_e: e,
             signing_key,
@@ -103,6 +114,77 @@ impl AuthState {
 
     pub fn set_verification_paused(&self, paused: bool) {
         self.emergency_verification_paused.store(paused, Ordering::SeqCst);
+    }
+
+    pub fn rotate_key(&mut self, new_pem: Option<String>) -> Result<(), AppError> {
+        // Retire the current decoding key while keeping it available for existing tokens.
+        self.previous_decoding_keys.insert(self.key_id.clone(), self.decoding_key.clone());
+
+        let priv_key = if let Some(pem) = new_pem {
+            RsaPrivateKey::from_pkcs8_pem(&pem)
+                .map_err(|e| AppError::Internal(format!("Invalid RSA Private Key PEM: {e}")))?
+        } else {
+            let mut rng = rand::thread_rng();
+            RsaPrivateKey::new(&mut rng, 2048)
+                .map_err(|e| AppError::Internal(format!("Failed to generate RSA key: {e}")))?
+        };
+
+        let pem_str = priv_key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .map_err(|e| AppError::Internal(format!("Failed to encode private key: {e}")))?;
+        self.encoding_key = EncodingKey::from_rsa_pem(pem_str.as_bytes())
+            .map_err(|e| AppError::Internal(format!("Invalid encoding key: {e}")))?;
+
+        let pub_key = RsaPublicKey::from(&priv_key);
+        let pub_pem = pub_key
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .map_err(|e| AppError::Internal(format!("Failed to encode public key: {e}")))?;
+        self.decoding_key = DecodingKey::from_rsa_pem(pub_pem.as_bytes())
+            .map_err(|e| AppError::Internal(format!("Invalid decoding key: {e}")))?;
+
+        self.jwk_n = BASE64_URL.encode(pub_key.n().to_bytes_be());
+        self.jwk_e = BASE64_URL.encode(pub_key.e().to_bytes_be());
+
+        let mut key_id_bytes = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut key_id_bytes);
+        self.key_id = BASE64_URL.encode(key_id_bytes);
+
+        Ok(())
+    }
+
+    pub fn revoke_token(&self, jti: &str) {
+        let mut tokens = self.revoked_tokens.lock().unwrap();
+        tokens.insert(jti.to_string());
+    }
+
+    pub fn is_token_revoked(&self, jti: &str) -> bool {
+        let tokens = self.revoked_tokens.lock().unwrap();
+        tokens.contains(jti)
+    }
+
+    pub fn get_decoding_key(&self, kid: &str) -> Option<&DecodingKey> {
+        if kid == self.key_id {
+            Some(&self.decoding_key)
+        } else {
+            self.previous_decoding_keys.get(kid)
+        }
+    }
+
+    pub fn decode_token(&self, token: &str) -> Result<Claims, AppError> {
+        let header = decode_header(token)
+            .map_err(|e| AppError::Unauthorized(format!("Invalid token header: {e}")))?;
+        let kid = header.kid.ok_or_else(|| AppError::Unauthorized("Missing kid".into()))?;
+        let decoding_key = self.get_decoding_key(&kid)
+            .ok_or_else(|| AppError::Unauthorized("Unknown signing key".into()))?;
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.validate_exp = true;
+        let data = decode::<Claims>(token, decoding_key, &validation)
+            .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
+        let claims = data.claims;
+        if self.is_token_revoked(&claims.jti) {
+            return Err(AppError::Unauthorized("Token revoked".into()));
+        }
+        Ok(claims)
     }
 }
 
@@ -151,6 +233,7 @@ struct Claims {
     exp: u64,
     iat: u64,
     scopes: Vec<String>,
+    jti: String,
 }
 
 fn now_secs() -> u64 {
@@ -367,15 +450,21 @@ fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str) -> Result<
     let client_address =
         Strkey::PublicKeyEd25519(stellar_strkey::ed25519::PublicKey(client_key)).to_string();
 
+    let mut jti_bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut jti_bytes);
+    let jti = BASE64_URL.encode(jti_bytes);
+
     let claims = Claims {
         sub: client_address,
         iss: WEB_AUTH_DOMAIN.to_string(),
         iat: now,
         exp: now + JWT_EXPIRY_SECS,
         scopes: vec!["simulate".to_string()],
+        jti,
     };
 
-    let header = Header::new(Algorithm::RS256);
+    let mut header = Header::new(Algorithm::RS256);
+    header.kid = Some(state.key_id.clone());
     encode(&header, &claims, &state.encoding_key)
         .map_err(|e| AppError::Internal(format!("JWT encode error: {e}")))
 }
