@@ -97,9 +97,32 @@ fn voter_cannot_flip_sides_on_same_proposal() {
         &String::from_str(&env, "Test proposal"),
         &80,
     );
+    // Voting 'for' first, then trying 'against' on the same proposal must fail
     client.cast_vote(&proposal.id, &voter, &true, &4);
 
     let err = client.try_cast_vote(&proposal.id, &voter, &false, &5);
+    assert_eq!(err, Err(Ok(Error::VoteSideMismatch)));
+}
+
+#[test]
+fn voter_cannot_vote_against_then_for_on_same_proposal() {
+    let (env, contract_id, _admin, voter, _) = setup(true);
+    let client = GovernanceContractClient::new(&env, &contract_id);
+    client.register_voter(&voter, &16, &make_identity(&env, 3));
+
+    env.ledger().with_mut(|ledger| {
+        ledger.sequence_number = 50;
+    });
+
+    let proposal = client.create_proposal(
+        &String::from_str(&env, "Treasury reallocation"),
+        &String::from_str(&env, "Test proposal"),
+        &80,
+    );
+    // Voting 'against' first, then trying 'for' on the same proposal must fail
+    client.cast_vote(&proposal.id, &voter, &false, &4);
+
+    let err = client.try_cast_vote(&proposal.id, &voter, &true, &5);
     assert_eq!(err, Err(Ok(Error::VoteSideMismatch)));
 }
 
