@@ -383,8 +383,11 @@ impl StakingRewards {
     }
 
     /// Claims accrued rewards.
+    /// Claim operations are paused independently of staking actions. The
+    /// `STAKE` bit governs deposit/withdraw flows; `CLAIM_REWARDS` is the
+    /// dedicated gate for reward withdrawals, so a staking pause does not
+    /// implicitly freeze reward claims.
     pub fn claim(e: Env, user: Address) -> Result<i128, ContractError> {
-        Self::ensure_not_paused(&e, PauseType::STAKE)?;
         Self::ensure_not_paused(&e, PauseType::CLAIM_REWARDS)?;
 
         user.require_auth();
@@ -583,7 +586,8 @@ impl StakingRewards {
     }
 
     /// Granularly pause or unpause the claim_rewards operation (owner only).
-    /// This uses the same default guard bitmask as all other staking pause checks.
+    /// This is intentionally distinct from the `STAKE` pause bit so staking can
+    /// be halted without also freezing valid reward claims, or vice versa.
     pub fn set_claim_rewards_paused(e: Env, paused: bool) -> Result<(), ContractError> {
         let config = Self::get_config(e.clone())?;
         config.owner.require_auth();
