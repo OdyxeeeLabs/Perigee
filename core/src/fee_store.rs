@@ -1,3 +1,4 @@
+use crate::fee::validation::validate_ledger_fee_sample;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
@@ -51,9 +52,22 @@ pub struct FeeStore {
 }
 
 impl FeeStore {
+    fn validate_sample(sample: &LedgerFeeSample) -> Result<(), FeeStoreError> {
+        validate_ledger_fee_sample(sample)
+            .map_err(|error| FeeStoreError::InvalidData(error.to_string()))
+    }
+
     /// Create a new fee store with the given database pool
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    pub async fn health_check(&self) -> bool {
+        crate::db::health_check(&self.pool, std::time::Duration::from_secs(2)).await
     }
 
     /// Insert or update a ledger fee sample (upsert)
@@ -61,6 +75,7 @@ impl FeeStore {
         &self,
         sample: &LedgerFeeSample,
     ) -> Result<(), FeeStoreError> {
+        Self::validate_sample(sample)?;
         sqlx::query(
             r#"
             INSERT INTO ledger_fee_samples (
@@ -117,6 +132,85 @@ impl FeeStore {
         .execute(&self.pool)
         .await?;
 
+        Ok(())
+    }
+
+    pub async fn persist_batch(
+        &self,
+        samples: &[LedgerFeeSample],
+        records: &[TransactionFeeRecord],
+    ) -> Result<(), FeeStoreError> {
+        if samples.is_empty() && records.is_empty() {
+            return Ok(());
+        }
+        for sample in samples {
+            Self::validate_sample(sample)?;
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let result: Result<(), sqlx::Error> = async {
+            for sample in samples {
+                sqlx::query(
+                    r#"
+                    INSERT INTO ledger_fee_samples (
+                        ledger_sequence, collected_at, base_reserve, base_fee,
+                        max_fee, fee_charged, transaction_count, ledger_close_time
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    ON CONFLICT(ledger_sequence) DO UPDATE SET
+                        collected_at = excluded.collected_at,
+                        base_reserve = excluded.base_reserve,
+                        base_fee = excluded.base_fee,
+                        max_fee = excluded.max_fee,
+                        fee_charged = excluded.fee_charged,
+                        transaction_count = excluded.transaction_count,
+                        ledger_close_time = excluded.ledger_close_time
+                    "#,
+                )
+                .bind(sample.ledger_sequence)
+                .bind(sample.collected_at)
+                .bind(sample.base_reserve)
+                .bind(sample.base_fee)
+                .bind(sample.max_fee)
+                .bind(sample.fee_charged)
+                .bind(sample.transaction_count)
+                .bind(sample.ledger_close_time)
+                .execute(&mut *tx)
+                .await?;
+            }
+
+            for record in records {
+                sqlx::query(
+                    r#"
+                    INSERT INTO transaction_fee_records (
+                        id, ledger_sequence, tx_hash, fee_bid, fee_charged,
+                        resource_fee, inclusion_success, recorded_at
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    "#,
+                )
+                .bind(&record.id)
+                .bind(record.ledger_sequence)
+                .bind(&record.tx_hash)
+                .bind(record.fee_bid)
+                .bind(record.fee_charged)
+                .bind(record.resource_fee)
+                .bind(record.inclusion_success)
+                .bind(record.recorded_at)
+                .execute(&mut *tx)
+                .await?;
+            }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(error) = result {
+            let _ = tx.rollback().await;
+            return Err(error.into());
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -243,30 +337,42 @@ impl FeeStore {
         if samples.is_empty() {
             return Ok(());
         }
+        for sample in samples {
+            Self::validate_sample(sample)?;
+        }
 
         let mut tx = self.pool.begin().await?;
-
-        for sample in samples {
-            sqlx::query(
-                r#"
-                INSERT INTO ledger_fee_samples (
-                    ledger_sequence, collected_at, base_reserve, base_fee, 
-                    max_fee, fee_charged, transaction_count, ledger_close_time
+        let result: Result<(), sqlx::Error> = async {
+            for sample in samples {
+                sqlx::query(
+                    r#"
+                    INSERT INTO ledger_fee_samples (
+                        ledger_sequence, collected_at, base_reserve, base_fee,
+                        max_fee, fee_charged, transaction_count, ledger_close_time
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    ON CONFLICT(ledger_sequence) DO NOTHING
+                    "#,
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                ON CONFLICT(ledger_sequence) DO NOTHING
-                "#,
-            )
-            .bind(sample.ledger_sequence)
-            .bind(sample.collected_at)
-            .bind(sample.base_reserve)
-            .bind(sample.base_fee)
-            .bind(sample.max_fee)
-            .bind(sample.fee_charged)
-            .bind(sample.transaction_count)
-            .bind(sample.ledger_close_time)
-            .execute(&mut *tx)
-            .await?;
+                .bind(sample.ledger_sequence)
+                .bind(sample.collected_at)
+                .bind(sample.base_reserve)
+                .bind(sample.base_fee)
+                .bind(sample.max_fee)
+                .bind(sample.fee_charged)
+                .bind(sample.transaction_count)
+                .bind(sample.ledger_close_time)
+                .execute(&mut *tx)
+                .await?;
+            }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(error) = result {
+            let _ = tx.rollback().await;
+            return Err(error.into());
         }
 
         tx.commit().await?;

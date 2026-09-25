@@ -12,108 +12,22 @@
 //! are performed on fee/NAV amounts.
 
 use crate::errors::AppError;
-use crate::fee_analytics::{FeeAnalyticsEngine, FeePrediction, MarketConditions, ModelBreakdown};
-use crate::fee_store::{FeeStore, LedgerFeeSample};
+use crate::fee::analytics::FeeAnalyticsEngine;
+use crate::fee::calculation::select_bid;
+use crate::fee::persistence::FeeStore;
+use crate::fee::validation::{
+    safety_margin_to_bps as validate_safety_margin, validate_charge_request,
+    validate_safety_margin_bps as validate_margin_bps,
+};
+pub use crate::fee::calculation::{
+    FeeAnalyticsResult, FeeHistoryQuery, FeeHistoryResult, FeeRecommendationInputs,
+    FeeRecommendationResult, InclusionSpeed, DEFAULT_SAFETY_MARGIN_BPS, SAFETY_MARGIN_MAX_BPS,
+    SAFETY_MARGIN_MIN_BPS,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
-
-/// Default safety margin in basis points: 11000 bps = 110% (= 10% above
-/// the percentile-based bid).
-pub const DEFAULT_SAFETY_MARGIN_BPS: u32 = 11_000;
-
-/// Lower bound (50% = no margin) and upper bound (500% = 5x) for any
-/// caller-supplied safety margin. Generous on purpose but rejects obvious
-/// misconfigurations such as 0 or 1e9.
-pub const SAFETY_MARGIN_MIN_BPS: u32 = 5_000;
-pub const SAFETY_MARGIN_MAX_BPS: u32 = 50_000;
-
-/// How quickly a bid should land on chain.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum InclusionSpeed {
-    /// Aim to be included in the very next ledger.
-    NextLedger,
-    /// Target inclusion within 3 ledgers.
-    Next3Ledgers,
-    /// Lowest-cost bid; may take longer.
-    Economy,
-    /// Balanced choice.
-    Standard,
-    /// Fast inclusion.
-    Priority,
-}
-
-impl InclusionSpeed {
-    /// Parse the wire-format string used in query params / JSON bodies.
-    pub fn parse(s: Option<&str>) -> Self {
-        match s.unwrap_or("").to_ascii_lowercase().as_str() {
-            "next_ledger" => Self::NextLedger,
-            "next_3_ledgers" => Self::Next3Ledgers,
-            "economy" => Self::Economy,
-            "standard" => Self::Standard,
-            _ => Self::Priority,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct FeeRecommendationInputs {
-    pub inclusion_speed: InclusionSpeed,
-    /// Safety margin in basis points (5_000 = 50%, 11_000 = 110%, etc.).
-    pub safety_margin_bps: u32,
-}
-
-impl Default for FeeRecommendationInputs {
-    fn default() -> Self {
-        Self {
-            inclusion_speed: InclusionSpeed::Priority,
-            safety_margin_bps: DEFAULT_SAFETY_MARGIN_BPS,
-        }
-    }
-}
-
-/// API DTO for a fee recommendation.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct FeeRecommendationResult {
-    /// Recommended fee bid in stroops (integer minor units).
-    pub recommended_bid: u64,
-    /// Resource-fee component of the bid, also in stroops.
-    pub resource_fee_estimate: u64,
-    /// Total estimated cost in stroops (= bid + resource_fee at this time).
-    pub total_estimated_cost: u64,
-    /// Inclusion confidence in basis points (0..=10000).
-    pub inclusion_confidence_bps: u32,
-    /// Expected ledgers until on-chain inclusion.
-    pub expected_inclusion_ledgers: u32,
-    pub market_conditions: MarketConditions,
-    pub model_breakdown: ModelBreakdown,
-    pub timestamp: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
-pub struct FeeHistoryQuery {
-    pub limit: Option<i64>,
-    pub from_ledger: Option<i64>,
-    pub to_ledger: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct FeeHistoryResult {
-    pub samples: Vec<LedgerFeeSample>,
-    pub total_count: i64,
-}
-
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct FeeAnalyticsResult {
-    pub current_ledger: u64,
-    pub prediction: FeePrediction,
-    pub market_conditions: MarketConditions,
-    pub model_breakdown: ModelBreakdown,
-    pub sample_count: usize,
-    pub timestamp: DateTime<Utc>,
-}
 
 // ── BE-021: idempotent fee charges ───────────────────────────────────────────
 
@@ -336,22 +250,12 @@ impl FeeService {
         req: ChargeRequest,
         now: DateTime<Utc>,
     ) -> Result<ChargeReceipt, AppError> {
-        if req.idempotency_key.trim().is_empty() {
-            return Err(AppError::BadRequest(
-                "idempotency_key must not be empty".to_string(),
-            ));
-        }
-
-        if req.payer.trim().is_empty() {
-            return Err(AppError::BadRequest("payer must not be empty".to_string()));
-        }
-
-        if req.amount_stroops <= 0 {
-            return Err(AppError::BadRequest(format!(
-                "amount_stroops must be positive (got {})",
-                req.amount_stroops
-            )));
-        }
+        validate_charge_request(
+            &req.idempotency_key,
+            &req.payer,
+            req.amount_stroops,
+        )
+        .map_err(|error| AppError::BadRequest(error.to_string()))?;
 
         let fingerprint = charge_fingerprint(&req);
 
@@ -403,45 +307,13 @@ impl FeeService {
 
     /// Validate a basis-point safety margin against the supported range.
     pub fn validate_safety_margin_bps(bps: u32) -> Result<u32, AppError> {
-        if !(SAFETY_MARGIN_MIN_BPS..=SAFETY_MARGIN_MAX_BPS).contains(&bps) {
-            return Err(AppError::BadRequest(format!(
-                "safety_margin_bps must be in [{}, {}] (got {})",
-                SAFETY_MARGIN_MIN_BPS, SAFETY_MARGIN_MAX_BPS, bps
-            )));
-        }
-        Ok(bps)
+        validate_margin_bps(bps).map_err(|error| AppError::BadRequest(error.to_string()))
     }
 
     /// Backwards-compatible conversion from the legacy `f64` safety margin
     /// (e.g. 1.10 → 11000 bps) used in older API requests.
     pub fn safety_margin_to_bps(safety_margin: f64) -> Result<u32, AppError> {
-        if !safety_margin.is_finite() || safety_margin <= 0.0 {
-            return Err(AppError::BadRequest(format!(
-                "safety_margin must be a finite positive multiplier (got {})",
-                safety_margin
-            )));
-        }
-        // BE-025: this used `f64::round`, a third rounding strategy alongside
-        // the banker's rounding in `rounding` and the integer floor in
-        // `fee_analytics`. It now goes through the shared conversion, which
-        // floors like every other rate path in the protocol.
-        let bps = match crate::rounding::decimal_to_bps(safety_margin) {
-            Some(bps) => bps as i64,
-            None => {
-                return Err(AppError::BadRequest(format!(
-                    "safety_margin {} is out of representable range",
-                    safety_margin
-                )))
-            }
-        };
-
-        match u32::try_from(bps) {
-            Ok(v) => Self::validate_safety_margin_bps(v),
-            Err(_) => Err(AppError::BadRequest(format!(
-                "safety_margin {} bps out of range [{}, {}]",
-                bps, SAFETY_MARGIN_MIN_BPS, SAFETY_MARGIN_MAX_BPS
-            ))),
-        }
+        validate_safety_margin(safety_margin).map_err(|error| AppError::BadRequest(error.to_string()))
     }
 
     /// Build a fee recommendation from the most-recent fee samples.
@@ -449,7 +321,9 @@ impl FeeService {
         &self,
         inputs: FeeRecommendationInputs,
     ) -> Result<FeeRecommendationResult, AppError> {
-        let engine = self.engine.with_safety_margin_bps(inputs.safety_margin_bps);
+        let safety_margin_bps = validate_margin_bps(inputs.safety_margin_bps)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
+        let engine = self.engine.with_safety_margin_bps(safety_margin_bps);
         let samples = self
             .store
             .get_recent_samples(100)
@@ -464,13 +338,8 @@ impl FeeService {
         let market_conditions = engine.get_market_conditions(&samples, current_ledger);
         let model_breakdown = engine.get_model_breakdown(&samples);
 
-        let (recommended_bid, expected_inclusion_ledgers) = match inputs.inclusion_speed {
-            InclusionSpeed::NextLedger => (prediction.next_ledger_bid, 1),
-            InclusionSpeed::Next3Ledgers => (prediction.next_3_ledgers_bid, 3),
-            InclusionSpeed::Economy => (prediction.economy_bid, 10),
-            InclusionSpeed::Standard => (prediction.standard_bid, 3),
-            InclusionSpeed::Priority => (prediction.priority_bid, 1),
-        };
+        let (recommended_bid, expected_inclusion_ledgers) =
+            select_bid(&prediction, inputs.inclusion_speed);
 
         Ok(FeeRecommendationResult {
             recommended_bid,
@@ -486,6 +355,13 @@ impl FeeService {
 
     /// Recent fee samples plus the historical total in the table.
     pub async fn history(&self, query: FeeHistoryQuery) -> Result<FeeHistoryResult, AppError> {
+        if let (Some(from), Some(to)) = (query.from_ledger, query.to_ledger) {
+            if from > to {
+                return Err(AppError::BadRequest(
+                    "from_ledger must not exceed to_ledger".to_string(),
+                ));
+            }
+        }
         let limit = query.limit.unwrap_or(50).clamp(1, 1_000);
         let samples = if let (Some(from), Some(to)) = (query.from_ledger, query.to_ledger) {
             self.store

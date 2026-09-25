@@ -1,4 +1,4 @@
-use crate::fee_store::{FeeStore, LedgerFeeSample};
+use crate::fee::persistence::{FeeStore, LedgerFeeSample};
 use crate::rpc_provider::ProviderRegistry;
 use crate::stellar_service::{StellarService, StellarServiceConfig, StellarServiceError};
 use chrono::Utc;

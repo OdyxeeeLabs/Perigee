@@ -32,6 +32,7 @@ pub enum ErrorCode {
     InvalidXdr,
     PayloadTooLarge,
     UnsupportedMediaType,
+    NotAcceptable,
     ParseError,
     ValidationFailed,
 
@@ -107,6 +108,7 @@ impl ErrorCode {
             Self::InvalidXdr => "INVALID_XDR",
             Self::PayloadTooLarge => "PAYLOAD_TOO_LARGE",
             Self::UnsupportedMediaType => "UNSUPPORTED_MEDIA_TYPE",
+            Self::NotAcceptable => "NOT_ACCEPTABLE",
             Self::ParseError => "PARSE_ERROR",
             Self::ValidationFailed => "VALIDATION_FAILED",
 
@@ -193,6 +195,10 @@ impl ErrorCode {
 
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::NotAcceptable => StatusCode::NOT_ACCEPTABLE,
+
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::AlreadyExists | Self::Conflict | Self::StateMismatch => StatusCode::CONFLICT,
             Self::RequestBodyReadFailed | Self::UnsupportedApiVersion => StatusCode::BAD_REQUEST,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
 

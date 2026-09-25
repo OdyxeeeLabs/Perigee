@@ -19,6 +19,8 @@ use crate::error_codes::ErrorCode;
 use crate::input_sanitization::{SanitizedJson, SanitizedPath, SanitizedQuery};
 use crate::runner::RequestCancellation;
 use std::str::FromStr;
+use crate::fee::analytics::FeeAnalyticsEngine;
+use crate::fee::persistence::FeeStore;
 use tokio_util::sync::CancellationToken;
 use crate::fee_analytics::FeeAnalyticsEngine;
 use crate::fee_store::FeeStore;
@@ -80,6 +82,12 @@ impl FeeReconciler {
         tolerance_pct: f64,
         progress_callback: Option<Box<dyn Fn(i32, &str) + Send + Sync>>,
     ) -> Result<ReconciliationReport, ReconciliationError> {
+        if from_ledger > to_ledger {
+            return Err(ReconciliationError::InvalidRange(
+                "from_ledger must not exceed to_ledger".to_string(),
+            ));
+        }
+
         let cancellation = CancellationToken::new();
         let _guard = cancellation.clone().drop_guard();
         self.run_with_cancellation(

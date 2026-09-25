@@ -10,13 +10,30 @@ mod audit_log;
 mod auth;
 mod backpressure;
 mod benchmarks;
-mod billing_service;
 mod cache;
 mod comparison;
 mod config;
 mod db;
 mod error_codes;
 mod errors;
+mod fee;
+
+mod billing_service {
+    pub use crate::fee::service::*;
+}
+
+pub mod fee_analytics {
+    pub use crate::fee::analytics::*;
+}
+
+pub mod fee_collector {
+    pub use crate::fee::collector::*;
+}
+
+pub mod fee_store {
+    pub use crate::fee::persistence::*;
+}
+
 mod namespaced_errors;
 pub mod fee_analytics;
 pub mod fee_collector;
@@ -52,6 +69,7 @@ mod wasm_branch_analysis;
 mod ws;
 
 use crate::cache::{ContractCache, SimulationCache};
+use crate::db::DatabasePoolConfig;
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
 use crate::error_codes::{ErrorCode, ErrorResponse};
 use crate::errors::{ApiJson, AppError, Validate, ValidatedJson};
@@ -73,9 +91,9 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 // CLI Argument Handling
-use crate::fee_analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
-use crate::fee_collector::{FeeCollector, FeeCollectorConfig};
-use crate::fee_store::FeeStore;
+use crate::fee::analytics::{FeeAnalyticsEngine, MarketConditions, ModelBreakdown};
+use crate::fee::collector::{FeeCollector, FeeCollectorConfig};
+use crate::fee::persistence::FeeStore;
 use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
 use crate::insights::InsightsEngine;
 use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
@@ -162,6 +180,62 @@ struct AppConfig {
     /// Database URL for job queue (PostgreSQL or SQLite)
     #[serde(default = "default_database_url")]
     database_url: String,
+    #[serde(
+        default = "default_database_max_connections",
+        alias = "database_pool_max_connections",
+        alias = "db_max_connections",
+        alias = "db_pool_max_connections"
+    )]
+    database_max_connections: u32,
+    #[serde(
+        default = "default_database_min_connections",
+        alias = "database_pool_min_connections",
+        alias = "db_min_connections",
+        alias = "db_pool_min_connections"
+    )]
+    database_min_connections: u32,
+    #[serde(
+        default = "default_database_acquire_timeout_secs",
+        alias = "database_pool_acquire_timeout_secs",
+        alias = "db_acquire_timeout_secs",
+        alias = "db_pool_acquire_timeout_secs"
+    )]
+    database_acquire_timeout_secs: u64,
+    #[serde(
+        default = "default_database_idle_timeout_secs",
+        alias = "database_pool_idle_timeout_secs",
+        alias = "db_idle_timeout_secs",
+        alias = "db_pool_idle_timeout_secs"
+    )]
+    database_idle_timeout_secs: u64,
+    #[serde(
+        default = "default_database_max_lifetime_secs",
+        alias = "database_pool_max_lifetime_secs",
+        alias = "db_max_lifetime_secs",
+        alias = "db_pool_max_lifetime_secs"
+    )]
+    database_max_lifetime_secs: u64,
+    #[serde(
+        default = "default_database_busy_timeout_secs",
+        alias = "database_pool_busy_timeout_secs",
+        alias = "db_busy_timeout_secs",
+        alias = "db_pool_busy_timeout_secs"
+    )]
+    database_busy_timeout_secs: u64,
+    #[serde(
+        default = "default_database_health_check_timeout_secs",
+        alias = "database_pool_health_check_timeout_secs",
+        alias = "db_health_check_timeout_secs",
+        alias = "db_pool_health_check_timeout_secs"
+    )]
+    database_health_check_timeout_secs: u64,
+    #[serde(
+        default = "default_database_health_check_interval_secs",
+        alias = "database_pool_health_check_interval_secs",
+        alias = "db_health_check_interval_secs",
+        alias = "db_pool_health_check_interval_secs"
+    )]
+    database_health_check_interval_secs: u64,
     /// Job timeout in seconds (default 300).
     #[serde(default = "default_job_timeout_secs")]
     job_timeout_secs: u64,
@@ -220,6 +294,38 @@ fn default_gossip_interval_secs() -> u64 {
 
 fn default_database_url() -> String {
     "sqlite://Perigee.db".to_string()
+}
+
+fn default_database_max_connections() -> u32 {
+    10
+}
+
+fn default_database_min_connections() -> u32 {
+    0
+}
+
+fn default_database_acquire_timeout_secs() -> u64 {
+    5
+}
+
+fn default_database_idle_timeout_secs() -> u64 {
+    300
+}
+
+fn default_database_max_lifetime_secs() -> u64 {
+    1_800
+}
+
+fn default_database_busy_timeout_secs() -> u64 {
+    5
+}
+
+fn default_database_health_check_timeout_secs() -> u64 {
+    2
+}
+
+fn default_database_health_check_interval_secs() -> u64 {
+    30
 }
 
 fn default_job_timeout_secs() -> u64 {
@@ -420,6 +526,14 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("simulation_timeout_secs", 30)?
         .set_default("simulation_mode", "failover")?
         .set_default("database_url", "sqlite://Perigee.db")?
+        .set_default("database_max_connections", 10)?
+        .set_default("database_min_connections", 0)?
+        .set_default("database_acquire_timeout_secs", 5)?
+        .set_default("database_idle_timeout_secs", 300)?
+        .set_default("database_max_lifetime_secs", 1_800)?
+        .set_default("database_busy_timeout_secs", 5)?
+        .set_default("database_health_check_timeout_secs", 2)?
+        .set_default("database_health_check_interval_secs", 30)?
         .set_default("job_timeout_secs", 300)?
         .set_default("max_concurrent_jobs", 10)?
         .set_default("fee_collection_interval_secs", 5)?
@@ -432,6 +546,19 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .build()?;
 
     settings.try_deserialize()
+}
+
+fn build_database_pool_config(config: &AppConfig) -> DatabasePoolConfig {
+    DatabasePoolConfig::new(
+        config.database_max_connections,
+        config.database_min_connections,
+        config.database_acquire_timeout_secs,
+        config.database_idle_timeout_secs,
+        config.database_max_lifetime_secs,
+        config.database_busy_timeout_secs,
+        config.database_health_check_timeout_secs,
+        config.database_health_check_interval_secs,
+    )
 }
 
 /// Parse the `RPC_PROVIDERS` env var (JSON array) or fall back to wrapping the
@@ -531,7 +658,7 @@ pub struct AppState {
     fee_store: Arc<FeeStore>,
     /// Fee business-logic service. API-28: all fee/billing business logic
     /// lives here — handlers in this file are now thin transports.
-    fee_service: billing_service::FeeService,
+    fee_service: fee::service::FeeService,
     /// Prometheus metrics collectors.
     metrics: Arc<AppMetrics>,
     /// WebSocket event bus for simulation jobs.
@@ -541,6 +668,10 @@ pub struct AppState {
     reconciler: Arc<reconciliation::FeeReconciler>,
     /// Typed DB store for reconciliation queries
     reconciliation_repo: db::reconciliation::ReconciliationRepo,
+    database_health_timeout: std::time::Duration,
+    database_health: db::DatabaseHealth,
+    worker_job_database_health: db::DatabaseHealth,
+    job_database_health: db::DatabaseHealth,
     /// White-label vault records with optimistic locking (API-37).
     vault_store: Arc<vault_store::VaultStore>,
     agent_fleet: Arc<agent_fleet::DefaultAgentFleet>,
@@ -838,7 +969,7 @@ pub struct FeeHistoryRequest {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct FeeHistoryResponse {
     /// List of fee samples
-    pub samples: Vec<crate::fee_store::LedgerFeeSample>,
+    pub samples: Vec<crate::fee::persistence::LedgerFeeSample>,
     /// Total count of samples
     pub total_count: i64,
 }
@@ -1774,12 +1905,12 @@ async fn fee_recommend(
 ) -> Result<Json<FeeRecommendationResponse>, AppError> {
     tracing::info!("Generating fee recommendation");
 
-    let inclusion_speed = billing_service::InclusionSpeed::parse(req.inclusion_speed.as_deref());
+    let inclusion_speed = fee::calculation::InclusionSpeed::parse(req.inclusion_speed.as_deref());
     let safety_margin_bps = match req.safety_margin {
-        Some(m) => billing_service::FeeService::safety_margin_to_bps(m)?,
-        None => billing_service::DEFAULT_SAFETY_MARGIN_BPS,
+        Some(m) => fee::service::FeeService::safety_margin_to_bps(m)?,
+        None => fee::calculation::DEFAULT_SAFETY_MARGIN_BPS,
     };
-    let inputs = billing_service::FeeRecommendationInputs {
+    let inputs = fee::calculation::FeeRecommendationInputs {
         inclusion_speed,
         safety_margin_bps,
     };
@@ -1821,6 +1952,9 @@ async fn fee_history(
 ) -> Result<Json<FeeHistoryResponse>, AppError> {
     tracing::info!("Fetching fee history");
 
+    let result = state
+        .fee_service
+        .history(fee::calculation::FeeHistoryQuery {
     let result = cancellation
         .wait(state.fee_service.history(billing_service::FeeHistoryQuery {
             limit: req.limit,
@@ -1870,9 +2004,9 @@ async fn fee_analytics(
 #[derive(Debug, Serialize, ToSchema)]
 pub struct FeeAnalyticsEnvelope {
     pub current_ledger: u64,
-    pub prediction: crate::fee_analytics::FeePrediction,
-    pub market_conditions: crate::fee_analytics::MarketConditions,
-    pub model_breakdown: crate::fee_analytics::ModelBreakdown,
+    pub prediction: crate::fee::analytics::FeePrediction,
+    pub market_conditions: crate::fee::analytics::MarketConditions,
+    pub model_breakdown: crate::fee::analytics::ModelBreakdown,
     pub sample_count: usize,
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
@@ -1941,10 +2075,10 @@ impl utoipa::Modify for SecurityAddon {
         crate::simulation::SorobanResources,
         FeeRecommendationRequest, FeeRecommendationResponse,
         FeeHistoryRequest, FeeHistoryResponse,
-        crate::fee_store::LedgerFeeSample,
-        crate::fee_analytics::MarketConditions,
-        crate::fee_analytics::ModelBreakdown,
-        crate::fee_analytics::TrendDirection,
+        crate::fee::persistence::LedgerFeeSample,
+        crate::fee::analytics::MarketConditions,
+        crate::fee::analytics::ModelBreakdown,
+        crate::fee::analytics::TrendDirection,
         FeeAnalyticsEnvelope,
         vault_store::VaultRecord, vault_store::CreateVaultRequest,
         vault_store::UpdateVaultRequest, vault_store::ListVaultsQuery,
@@ -2053,6 +2187,18 @@ async fn ready_check(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     
+    let db_ok = state.database_health.is_healthy()
+        && state.worker_job_database_health.is_healthy()
+        && state.job_database_health.is_healthy()
+        && db::health_check(
+            state.reconciliation_repo.pool(),
+            state.database_health_timeout,
+        )
+        .await
+        && state
+            .job_queue
+            .health_check(state.database_health_timeout)
+            .await;
     let db_ok = cancellation
         .wait(sqlx::query("SELECT 1").execute(state.reconciliation_repo.pool()))
         .await
@@ -2512,6 +2658,12 @@ async fn main() {
 
     // ── CLI: migrate subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "migrate" {
+        tracing::info!(database_url = %config.database_url, "Running database migrations");
+        let pool_config = build_database_pool_config(&config);
+        db::init_pool_with_config(&config.database_url, &pool_config)
+            .await
+            .expect("Failed to connect to database and run migrations");
+        println!("Database migrations applied successfully.");
         tracing::info!(
             database_configured = !config.database_url.trim().is_empty(),
             "Running database migrations"
@@ -2653,6 +2805,22 @@ async fn main() {
 
     // ── Fee Market Setup ────────────────────────────────────────────────
     let database_url = &config.database_url;
+    let database_pool_config = build_database_pool_config(&config);
+    tracing::info!(database_url = %database_url, "Initializing database");
+
+    let db_pool = db::init_pool_with_config(database_url, &database_pool_config)
+        .await
+        .expect("Failed to connect to database");
+
+    if !db::health_check(&db_pool, database_pool_config.health_check_timeout).await {
+        panic!("Database health check failed");
+    }
+    let (database_health, _database_health_handle) = db::spawn_health_checker(
+        db_pool.clone(),
+        database_pool_config.health_check_interval,
+        database_pool_config.health_check_timeout,
+    );
+
     tracing::info!(
         database_endpoint = %crate::log_redaction::redact_endpoint(database_url),
         "Initializing database"
@@ -2683,7 +2851,7 @@ async fn main() {
     ));
     // API-28: business-logic service owns fee / billing math; wired into
     // AppState so the HTTP handlers stay thin.
-    let fee_service = billing_service::FeeService::new(
+    let fee_service = fee::service::FeeService::new(
         Arc::clone(&fee_store),
         fee_analytics_engine.clone(),
     );
@@ -2692,9 +2860,18 @@ async fn main() {
         max_concurrent_jobs: config.max_concurrent_jobs,
         ..JobQueueConfig::default()
     };
-    let job_queue = JobQueue::new(database_url, &config.redis_url, job_queue_config.clone())
-        .await
-        .expect("Failed to initialize job queue");
+    let job_queue = JobQueue::new_with_pool_config(
+        database_url,
+        &config.redis_url,
+        job_queue_config.clone(),
+        database_pool_config.clone(),
+    )
+    .await
+    .expect("Failed to initialize job queue");
+    let (worker_job_database_health, _worker_job_health_handle) = job_queue.spawn_health_checker(
+        database_pool_config.health_check_interval,
+        database_pool_config.health_check_timeout,
+    );
     // ── WebSocket event bus ─────────────────────────────────────────────
     let simulation_bus = SimulationBus::new();
     let agent_fleet = Arc::new(agent_fleet::DefaultAgentFleet::new());
@@ -2733,9 +2910,18 @@ async fn main() {
         ..Default::default()
     };
 
-    let job_queue = JobQueue::new(&config.database_url, &config.redis_url, job_config.clone())
-        .await
-        .expect("Failed to initialize JobQueue");
+    let job_queue = JobQueue::new_with_pool_config(
+        &config.database_url,
+        &config.redis_url,
+        job_config.clone(),
+        database_pool_config.clone(),
+    )
+    .await
+    .expect("Failed to initialize JobQueue");
+    let (job_database_health, _job_health_handle) = job_queue.spawn_health_checker(
+        database_pool_config.health_check_interval,
+        database_pool_config.health_check_timeout,
+    );
 
     // Spawn background cleanup task
     background_tasks.push(
@@ -2847,6 +3033,10 @@ async fn main() {
         simulation_bus,
         reconciler,
         reconciliation_repo,
+        database_health_timeout: database_pool_config.health_check_timeout,
+        database_health,
+        worker_job_database_health,
+        job_database_health,
         vault_store,
         agent_fleet,
         manager_store,
@@ -2966,6 +3156,7 @@ async fn main() {
         .layer(axum::middleware::from_fn(
             crate::middleware::method_not_allowed_middleware,
         ))
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 2)) // 2 MB limit
         .layer(axum::middleware::from_fn(
             crate::middleware::api_version_middleware,
         ))
@@ -3009,6 +3200,9 @@ async fn main() {
         .with_state(app_state);
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(
+            crate::middleware::correlation_id_middleware,
+        ))
+        .layer(cors)
             input_sanitization::sanitize_request_middleware,
         ))
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 2)) // 2 MB limit
@@ -3563,6 +3757,14 @@ mod validate_config_secrets_tests {
             simulation_timeout_secs: 30,
             simulation_mode: "failover".to_string(),
             database_url: "sqlite://Perigee.db".to_string(),
+            database_max_connections: 10,
+            database_min_connections: 0,
+            database_acquire_timeout_secs: 5,
+            database_idle_timeout_secs: 300,
+            database_max_lifetime_secs: 1_800,
+            database_busy_timeout_secs: 5,
+            database_health_check_timeout_secs: 2,
+            database_health_check_interval_secs: 30,
             job_timeout_secs: 300,
             max_concurrent_jobs: 10,
             fee_collection_interval_secs: 5,

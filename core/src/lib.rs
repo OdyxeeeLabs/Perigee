@@ -13,6 +13,25 @@ pub mod comparison;
 pub mod error_codes;
 pub mod errors;
 pub use error_codes::{ErrorCode, ErrorResponse};
+pub use errors::AppError;
+pub mod fee;
+
+pub mod billing_service {
+    pub use crate::fee::service::*;
+}
+
+pub mod fee_analytics {
+    pub use crate::fee::analytics::*;
+}
+
+pub mod fee_collector {
+    pub use crate::fee::collector::*;
+}
+
+pub mod fee_store {
+    pub use crate::fee::persistence::*;
+}
+
 pub use errors::{ApiJson, AppError};
 pub mod fee_analytics;
 pub mod fee_collector;
