@@ -487,7 +487,10 @@ mod idempotency_tests {
             .await
             .expect("in-memory sqlite");
 
-        FeeService::new(Arc::new(FeeStore::new(pool)), FeeAnalyticsEngine::new())
+        FeeService::new(
+            Arc::new(FeeStore::new(crate::db::MonitoredPool::from_inner(pool))),
+            FeeAnalyticsEngine::new(),
+        )
     }
 
     fn request(key: &str) -> ChargeRequest {

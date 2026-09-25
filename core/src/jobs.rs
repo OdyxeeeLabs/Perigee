@@ -5,6 +5,7 @@
     clippy::needless_borrows_for_generic_args
 )]
 
+use crate::db::MonitoredPool;
 use crate::error_codes::ErrorCode;
 use crate::input_sanitization::{SanitizedJson, SanitizedPath};
 use crate::insights::InsightsEngine;
@@ -29,6 +30,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::any::AnyQueryResult;
+use sqlx::PgPool;
 use sqlx::{Executor, PgPool, SqlitePool};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -70,7 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status_created_at ON jobs(status, created_at
 #[derive(Clone)]
 pub enum DbPool {
     Postgres(PgPool),
-    Sqlite(SqlitePool),
+    Sqlite(MonitoredPool),
 }
 
 impl DbPool {
@@ -84,7 +86,8 @@ impl DbPool {
                 })
             }
             DbPool::Sqlite(pool) => {
-                let result = sqlx::query(query).execute(pool).await?;
+                let mut connection = pool.acquire().await?;
+                let result = sqlx::query(query).execute(&mut *connection).await?;
                 Ok(AnyQueryResult {
                     rows_affected: result.rows_affected(),
                     last_insert_id: Some(result.last_insert_rowid()),
@@ -490,6 +493,18 @@ impl JobQueue {
         redis_url: &str,
         config: JobQueueConfig,
     ) -> Result<Self, JobError> {
+        if database_url.starts_with("postgres://") {
+            Self::from_db_pool(
+                DbPool::Postgres(PgPool::connect(database_url).await?),
+                redis_url,
+                config,
+            )
+            .await
+        } else {
+            let pool = MonitoredPool::connect(database_url, crate::db::PoolConfig::default()).await?;
+            Self::from_pool(pool, redis_url, config).await
+        }
+    }
         Self::new_with_pool_config(
             database_url,
             redis_url,
@@ -517,12 +532,24 @@ impl JobQueue {
             )
         };
 
+    pub async fn from_pool(
+        pool: MonitoredPool,
+        redis_url: &str,
+        config: JobQueueConfig,
+    ) -> Result<Self, JobError> {
+        Self::from_db_pool(DbPool::Sqlite(pool), redis_url, config).await
+    }
+
+    async fn from_db_pool(
+        pool: DbPool,
+        redis_url: &str,
+        config: JobQueueConfig,
+    ) -> Result<Self, JobError> {
         let redis = RedisClient::open(redis_url).map_err(|e| {
             JobError::ProcessingFailed(format!("Failed to connect to Redis: {}", e))
         })?;
 
         Self::run_migrations(&pool).await?;
-
         Ok(Self {
             pool,
             redis,
@@ -684,6 +711,7 @@ impl JobQueue {
                 .await?;
             }
             DbPool::Sqlite(pool) => {
+                let mut connection = pool.acquire().await?;
                 sqlx::query(
                     r#"
                     INSERT INTO jobs (id, job_type, status, payload, webhook_url, webhook_headers, webhook_secret, timeout_secs)
@@ -693,6 +721,12 @@ impl JobQueue {
                 .bind(data.id.0.to_string())
                 .bind(format!("{:?}", data.job_type))
                 .bind("QUEUED")
+                .bind(&payload_json)
+                .bind(&webhook_url)
+                .bind(&webhook_headers)
+                .bind(&webhook_secret_hash)
+                .bind(self.config.job_timeout_secs as i32)
+                .execute(&mut *connection)
                 .bind(&data.payload)
                 .bind(&data.webhook_url)
                 .bind(&data.webhook_headers)
@@ -754,9 +788,10 @@ impl JobQueue {
             }
             DbPool::Sqlite(pool) => {
                 // For SQLite, we need to manually map since sqlx::Type might not work perfectly
+                let mut connection = pool.acquire().await?;
                 let row = sqlx::query("SELECT * FROM jobs WHERE id = ?1")
                     .bind(id.0.to_string())
-                    .fetch_optional(pool)
+                    .fetch_optional(&mut *connection)
                     .await?;
 
                 row.map(|r| self.row_to_job(&r)).transpose()?
@@ -776,10 +811,11 @@ impl JobQueue {
                 .fetch_optional(pool)
                 .await?,
                 DbPool::Sqlite(pool) => {
+                    let mut connection = pool.acquire().await?;
                     let row = sqlx::query(
                     "SELECT * FROM jobs WHERE status = 'QUEUED' ORDER BY created_at ASC LIMIT 1"
                 )
-                .fetch_optional(pool)
+                .fetch_optional(&mut *connection)
                 .await?;
 
                     row.map(|r| self.row_to_job(&r)).transpose()?
@@ -801,11 +837,12 @@ impl JobQueue {
                 .await?;
             }
             DbPool::Sqlite(pool) => {
+                let mut connection = pool.acquire().await?;
                 sqlx::query(
                     "UPDATE jobs SET status = 'PROCESSING', started_at = datetime('now'), progress_percent = 10, progress_message = 'Processing started' WHERE id = ?1"
                 )
                 .bind(id.0.to_string())
-                .execute(pool)
+                .execute(&mut *connection)
                 .await?;
             }
         }
@@ -831,13 +868,14 @@ impl JobQueue {
                 .await?;
             }
             DbPool::Sqlite(pool) => {
+                let mut connection = pool.acquire().await?;
                 sqlx::query(
                     "UPDATE jobs SET progress_percent = ?1, progress_message = ?2 WHERE id = ?3",
                 )
                 .bind(percent)
                 .bind(message)
                 .bind(id.0.to_string())
-                .execute(pool)
+                .execute(&mut *connection)
                 .await?;
             }
         }
@@ -861,12 +899,13 @@ impl JobQueue {
                 .await?;
             }
             DbPool::Sqlite(pool) => {
+                let mut connection = pool.acquire().await?;
                 sqlx::query(
                     "UPDATE jobs SET status = 'COMPLETED', result = ?1, completed_at = datetime('now'), progress_percent = 100, progress_message = 'Completed' WHERE id = ?2"
                 )
                 .bind(&result_json)
                 .bind(id.0.to_string())
-                .execute(pool)
+                .execute(&mut *connection)
                 .await?;
             }
         }
@@ -896,6 +935,7 @@ impl JobQueue {
                 .await?;
             }
             DbPool::Sqlite(pool) => {
+                let mut connection = pool.acquire().await?;
                 sqlx::query(
                     "UPDATE jobs SET status = 'FAILED', result = ?1, error_message = ?2, error_type = ?3, completed_at = datetime('now'), progress_message = 'Failed' WHERE id = ?4"
                 )
@@ -903,7 +943,7 @@ impl JobQueue {
                 .bind(error)
                 .bind(error_type)
                 .bind(id.0.to_string())
-                .execute(pool)
+                .execute(&mut *connection)
                 .await?;
             }
         }
@@ -932,11 +972,12 @@ impl JobQueue {
                         .await?;
                     }
                     DbPool::Sqlite(pool) => {
+                        let mut connection = pool.acquire().await?;
                         sqlx::query(
                             "UPDATE jobs SET status = 'CANCELLED', completed_at = datetime('now'), progress_message = 'Cancelled' WHERE id = ?1"
                         )
                         .bind(id.0.to_string())
-                        .execute(pool)
+                        .execute(&mut *connection)
                         .await?;
                     }
                 }
@@ -961,11 +1002,12 @@ impl JobQueue {
                 result.rows_affected()
             }
             DbPool::Sqlite(pool) => {
+                let mut connection = pool.acquire().await?;
                 let result = sqlx::query(
                     "DELETE FROM jobs WHERE status IN ('COMPLETED', 'FAILED', 'CANCELLED') AND completed_at < datetime('now', '-' || ?1 || ' seconds')"
                 )
                 .bind(self.config.retention_secs as i64)
-                .execute(pool)
+                .execute(&mut *connection)
                 .await?;
                 result.rows_affected()
             }
@@ -1009,10 +1051,11 @@ impl JobQueue {
                     .await?;
             }
             DbPool::Sqlite(pool) => {
+                let mut connection = pool.acquire().await?;
                 sqlx::query("UPDATE jobs SET retry_count = ?1, status = 'QUEUED' WHERE id = ?2")
                     .bind(new_retry_count)
                     .bind(job.id.0.to_string())
-                    .execute(pool)
+                    .execute(&mut *connection)
                     .await?;
             }
         }

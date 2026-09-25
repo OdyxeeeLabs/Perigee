@@ -1,7 +1,8 @@
 use crate::fee::validation::validate_ledger_fee_sample;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqlitePool};
+use crate::db::MonitoredPool;
+use sqlx::FromRow;
 use thiserror::Error;
 use tracing;
 use utoipa::ToSchema;
@@ -48,7 +49,7 @@ pub struct TransactionFeeRecord {
 
 /// Thread-safe fee data store backed by SQLite/PostgreSQL
 pub struct FeeStore {
-    pool: SqlitePool,
+    pool: MonitoredPool,
 }
 
 impl FeeStore {
@@ -58,7 +59,7 @@ impl FeeStore {
     }
 
     /// Create a new fee store with the given database pool
-    pub fn new(pool: SqlitePool) -> Self {
+    pub fn new(pool: MonitoredPool) -> Self {
         Self { pool }
     }
 
@@ -75,6 +76,7 @@ impl FeeStore {
         &self,
         sample: &LedgerFeeSample,
     ) -> Result<(), FeeStoreError> {
+        let mut connection = self.pool.acquire().await?;
         Self::validate_sample(sample)?;
         sqlx::query(
             r#"
@@ -101,7 +103,7 @@ impl FeeStore {
         .bind(sample.fee_charged)
         .bind(sample.transaction_count)
         .bind(sample.ledger_close_time)
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
 
         Ok(())
@@ -112,6 +114,7 @@ impl FeeStore {
         &self,
         record: &TransactionFeeRecord,
     ) -> Result<(), FeeStoreError> {
+        let mut connection = self.pool.acquire().await?;
         sqlx::query(
             r#"
             INSERT INTO transaction_fee_records (
@@ -129,7 +132,7 @@ impl FeeStore {
         .bind(record.resource_fee)
         .bind(record.inclusion_success)
         .bind(record.recorded_at)
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
 
         Ok(())
@@ -219,6 +222,7 @@ impl FeeStore {
         &self,
         limit: i64,
     ) -> Result<Vec<LedgerFeeSample>, FeeStoreError> {
+        let mut connection = self.pool.acquire().await?;
         let samples = sqlx::query_as::<_, LedgerFeeSample>(
             r#"
             SELECT 
@@ -230,7 +234,7 @@ impl FeeStore {
             "#,
         )
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *connection)
         .await?;
 
         Ok(samples)
@@ -242,6 +246,7 @@ impl FeeStore {
         from_sequence: i64,
         to_sequence: i64,
     ) -> Result<Vec<LedgerFeeSample>, FeeStoreError> {
+        let mut connection = self.pool.acquire().await?;
         let samples = sqlx::query_as::<_, LedgerFeeSample>(
             r#"
             SELECT 
@@ -254,7 +259,7 @@ impl FeeStore {
         )
         .bind(from_sequence)
         .bind(to_sequence)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *connection)
         .await?;
 
         Ok(samples)
@@ -262,12 +267,13 @@ impl FeeStore {
 
     /// Get the latest ledger sequence in the database
     pub async fn get_latest_sequence(&self) -> Result<Option<i64>, FeeStoreError> {
+        let mut connection = self.pool.acquire().await?;
         let latest = sqlx::query_scalar::<_, Option<i64>>(
             r#"
             SELECT MAX(ledger_sequence) as latest FROM ledger_fee_samples
             "#,
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *connection)
         .await?;
 
         Ok(latest)
@@ -278,6 +284,7 @@ impl FeeStore {
         &self,
         ledger_sequence: i64,
     ) -> Result<Vec<TransactionFeeRecord>, FeeStoreError> {
+        let mut connection = self.pool.acquire().await?;
         let records = sqlx::query_as::<_, TransactionFeeRecord>(
             r#"
             SELECT 
@@ -289,7 +296,7 @@ impl FeeStore {
             "#,
         )
         .bind(ledger_sequence)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *connection)
         .await?;
 
         Ok(records)
@@ -297,6 +304,7 @@ impl FeeStore {
 
     /// Delete old samples beyond retention period
     pub async fn cleanup_old_samples(&self, retention_days: i32) -> Result<u64, FeeStoreError> {
+        let mut connection = self.pool.acquire().await?;
         let result = sqlx::query(
             r#"
             DELETE FROM ledger_fee_samples
@@ -304,7 +312,7 @@ impl FeeStore {
             "#,
         )
         .bind(format!("-{}", retention_days))
-        .execute(&self.pool)
+        .execute(&mut *connection)
         .await?;
 
         let deleted = result.rows_affected();
@@ -318,12 +326,13 @@ impl FeeStore {
 
     /// Get count of stored samples
     pub async fn get_sample_count(&self) -> Result<i64, FeeStoreError> {
+        let mut connection = self.pool.acquire().await?;
         let count = sqlx::query_scalar::<_, i64>(
             r#"
             SELECT COUNT(*) as count FROM ledger_fee_samples
             "#,
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *connection)
         .await?;
 
         Ok(count)
@@ -341,6 +350,15 @@ impl FeeStore {
             Self::validate_sample(sample)?;
         }
 
+        let mut connection = self.pool.acquire().await?;
+        let mut tx = sqlx::Connection::begin(&mut *connection).await?;
+
+        for sample in samples {
+            sqlx::query(
+                r#"
+                INSERT INTO ledger_fee_samples (
+                    ledger_sequence, collected_at, base_reserve, base_fee, 
+                    max_fee, fee_charged, transaction_count, ledger_close_time
         let mut tx = self.pool.begin().await?;
         let result: Result<(), sqlx::Error> = async {
             for sample in samples {

@@ -1,4 +1,5 @@
 use crate::audit_log::{log_audit_event, log_security_event, SecurityEventType};
+use crate::config::{SecretKeyring, SecretKeyringError, SecretVersion};
 use crate::error_codes::ErrorCode;
 use crate::errors::{ApiJson, AppError};
 use crate::errors::AppError;
@@ -9,10 +10,13 @@ use base64::{
     engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL, Engine,
 };
 use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{
+    decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation,
+};
 use rand::RngCore;
 use rsa::{
-    pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
+    pkcs1::DecodeRsaPrivateKey,
+    pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey},
     traits::PublicKeyParts,
     RsaPrivateKey, RsaPublicKey,
 };
@@ -28,12 +32,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use stellar_strkey::Strkey;
+use thiserror::Error;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 const CHALLENGE_EXPIRY_SECS: u64 = 300;
 /// Short-lived access JWT lifetime (15 minutes).
-const ACCESS_TOKEN_EXPIRY_SECS: u64 = 900;
+pub(crate) const ACCESS_TOKEN_EXPIRY_SECS: u64 = 900;
 /// Refresh token lifetime (7 days). Rotated on every `/auth/refresh`.
 const REFRESH_TOKEN_EXPIRY_SECS: u64 = 604_800;
 const WEB_AUTH_DOMAIN: &str = "Perigee";
@@ -258,11 +263,237 @@ impl TokenBucket {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum AuthKeyError {
+    #[error("invalid JWT key configuration: {0}")]
+    InvalidConfiguration(String),
+    #[error("invalid JWT key material: {0}")]
+    InvalidKeyMaterial(String),
+    #[error(transparent)]
+    KeyRing(#[from] SecretKeyringError),
+}
+
+struct JwtKeyMaterial {
+    encoding_key: Option<EncodingKey>,
+    decoding_key: DecodingKey,
+    jwk_n: String,
+    jwk_e: String,
+}
+
+impl JwtKeyMaterial {
+    fn from_private_key(private_key: &RsaPrivateKey) -> Result<Self, AuthKeyError> {
+        let public_key = RsaPublicKey::from(private_key);
+        Self::from_parts(
+            public_key,
+            Some(EncodingKey::from_rsa_pem(
+                private_key
+                    .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+                    .map_err(|error| {
+                        AuthKeyError::InvalidKeyMaterial(format!(
+                            "failed to encode RSA private key: {error}"
+                        ))
+                    })?
+                    .as_bytes(),
+            )
+            .map_err(|error| {
+                AuthKeyError::InvalidKeyMaterial(format!("invalid RSA encoding key: {error}"))
+            })?),
+        )
+    }
+
+    fn from_public_pem(public_pem: &str) -> Result<Self, AuthKeyError> {
+        let public_key = RsaPublicKey::from_public_key_pem(public_pem).map_err(|error| {
+            AuthKeyError::InvalidKeyMaterial(format!("invalid RSA public key: {error}"))
+        })?;
+        Self::from_parts(public_key, None)
+    }
+
+    fn from_parts(
+        public_key: RsaPublicKey,
+        encoding_key: Option<EncodingKey>,
+    ) -> Result<Self, AuthKeyError> {
+        if public_key.size() < 2048 {
+            return Err(AuthKeyError::InvalidKeyMaterial(
+                "RSA keys must be at least 2048 bits".to_string(),
+            ));
+        }
+        let public_pem = public_key
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .map_err(|error| {
+                AuthKeyError::InvalidKeyMaterial(format!("failed to encode RSA public key: {error}"))
+            })?;
+        let decoding_key = DecodingKey::from_rsa_pem(public_pem.as_bytes()).map_err(|error| {
+            AuthKeyError::InvalidKeyMaterial(format!("invalid RSA decoding key: {error}"))
+        })?;
+        Ok(Self {
+            encoding_key,
+            decoding_key,
+            jwk_n: BASE64_URL.encode(public_key.n().to_bytes_be()),
+            jwk_e: BASE64_URL.encode(public_key.e().to_bytes_be()),
+        })
+    }
+
+    fn matches_public_pem(&self, public_pem: &str) -> bool {
+        let Ok(public_key) = RsaPublicKey::from_public_key_pem(public_pem) else {
+            return false;
+        };
+        self.jwk_n == BASE64_URL.encode(public_key.n().to_bytes_be())
+            && self.jwk_e == BASE64_URL.encode(public_key.e().to_bytes_be())
+    }
+}
+
+#[derive(Deserialize)]
+struct JwtKeyRingEntry {
+    kid: String,
+    #[serde(default)]
+    signing: bool,
+    private_key_pem: Option<String>,
+    public_key_pem: Option<String>,
+    verification_not_after: Option<u64>,
+}
+
+fn parse_rsa_private_key(pem: &str) -> Result<RsaPrivateKey, AuthKeyError> {
+    RsaPrivateKey::from_pkcs8_pem(pem)
+        .or_else(|_| RsaPrivateKey::from_pkcs1_pem(pem))
+        .map_err(|error| AuthKeyError::InvalidKeyMaterial(format!("invalid RSA private key: {error}")))
+}
+
+fn generated_key_id(public_key: &RsaPublicKey) -> String {
+    let digest = Sha256::digest(public_key.n().to_bytes_be());
+    format!("rsa-{}", BASE64_URL.encode(&digest[..12]))
+}
+
+fn jwt_keyring_from_config(
+    legacy_private_key_pem: Option<String>,
+    key_ring_json: Option<String>,
+    current_key_id: Option<String>,
+    overlap_secs: u64,
+    allow_ephemeral: bool,
+) -> Result<SecretKeyring<Arc<JwtKeyMaterial>>, AuthKeyError> {
+    let key_ring_json = key_ring_json.filter(|value| !value.trim().is_empty());
+    let legacy_private_key_pem = legacy_private_key_pem.filter(|value| !value.trim().is_empty());
+    let current_key_id = current_key_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if key_ring_json.is_some() && legacy_private_key_pem.is_some() {
+        return Err(AuthKeyError::InvalidConfiguration(
+            "JWT_KEY_RING and JWT_PRIVATE_KEY are mutually exclusive".to_string(),
+        ));
+    }
+
+    if let Some(raw) = key_ring_json {
+        let entries: Vec<JwtKeyRingEntry> = serde_json::from_str(&raw).map_err(|error| {
+            AuthKeyError::InvalidConfiguration(format!("JWT_KEY_RING is invalid JSON: {error}"))
+        })?;
+        if entries.is_empty() {
+            return Err(AuthKeyError::InvalidConfiguration(
+                "JWT_KEY_RING must not be empty".to_string(),
+            ));
+        }
+        let signing_key_ids = entries
+            .iter()
+            .filter(|entry| entry.signing)
+            .map(|entry| entry.kid.trim())
+            .collect::<Vec<_>>();
+        if signing_key_ids.len() != 1 {
+            return Err(AuthKeyError::InvalidConfiguration(
+                "JWT_KEY_RING must contain exactly one signing key".to_string(),
+            ));
+        }
+        let selected_key_id = current_key_id
+            .as_deref()
+            .unwrap_or(signing_key_ids[0])
+            .to_string();
+        if selected_key_id != signing_key_ids[0] {
+            return Err(AuthKeyError::InvalidConfiguration(
+                "JWT_CURRENT_KEY_ID does not identify the signing key".to_string(),
+            ));
+        }
+
+        let now = now_secs();
+        let mut current = None;
+        let mut previous = Vec::new();
+        for entry in entries {
+            let material = if let Some(private_pem) = entry.private_key_pem.as_deref() {
+                let private_key = parse_rsa_private_key(private_pem)?;
+                let material = JwtKeyMaterial::from_private_key(&private_key)?;
+                if entry
+                    .public_key_pem
+                    .as_deref()
+                    .is_some_and(|public_pem| !material.matches_public_pem(public_pem))
+                {
+                    return Err(AuthKeyError::InvalidConfiguration(format!(
+                        "JWT_KEY_RING public key does not match signing key '{}'",
+                        entry.kid
+                    )));
+                }
+                Arc::new(material)
+            } else if let Some(public_pem) = entry.public_key_pem.as_deref() {
+                Arc::new(JwtKeyMaterial::from_public_pem(public_pem)?)
+            } else {
+                return Err(AuthKeyError::InvalidConfiguration(format!(
+                    "JWT_KEY_RING key '{}' has no key material",
+                    entry.kid
+                )));
+            };
+
+            let version = SecretVersion::new(entry.kid.trim(), material)
+                .with_expiry(entry.verification_not_after);
+            if selected_key_id == entry.kid.trim() {
+                if version
+                    .value()
+                    .encoding_key
+                    .is_none()
+                {
+                    return Err(AuthKeyError::InvalidConfiguration(format!(
+                        "JWT_KEY_RING signing key '{}' requires private key material",
+                        entry.kid
+                    )));
+                }
+                current = Some(version.with_expiry(None));
+            } else {
+                previous.push(version);
+            }
+        }
+        let current = current.ok_or_else(|| {
+            AuthKeyError::InvalidConfiguration(
+                "JWT_KEY_RING does not contain JWT_CURRENT_KEY_ID".to_string(),
+            )
+        })?;
+        return SecretKeyring::new(current, previous, now, overlap_secs).map_err(Into::into);
+    }
+
+    let (private_key, key_id) = if let Some(pem) = legacy_private_key_pem {
+        let private_key = parse_rsa_private_key(&pem)?;
+        let public_key = RsaPublicKey::from(&private_key);
+        (private_key, current_key_id.unwrap_or_else(|| generated_key_id(&public_key)))
+    } else if allow_ephemeral {
+        tracing::info!("Generating ephemeral RSA keypair for local development...");
+        let mut rng = rand::thread_rng();
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).map_err(|error| {
+            AuthKeyError::InvalidKeyMaterial(format!("failed to generate RSA key: {error}"))
+        })?;
+        let public_key = RsaPublicKey::from(&private_key);
+        (private_key, generated_key_id(&public_key))
+    } else {
+        return Err(AuthKeyError::InvalidConfiguration(
+            "JWT_PRIVATE_KEY or JWT_KEY_RING is required when ephemeral keys are disabled"
+                .to_string(),
+        ));
+    };
+
+    let material = Arc::new(JwtKeyMaterial::from_private_key(&private_key)?);
+    SecretKeyring::new(
+        SecretVersion::new(key_id, material),
+        Vec::new(),
+        now_secs(),
+        overlap_secs,
+    )
+    .map_err(Into::into)
+}
+
 pub struct AuthState {
-    pub encoding_key: EncodingKey,
-    pub decoding_key: DecodingKey,
-    pub jwk_n: String,
-    pub jwk_e: String,
+    jwt_keys: Arc<SecretKeyring<Arc<JwtKeyMaterial>>>,
     pub signing_key: SigningKey,
     pub server_public_key: [u8; 32],
     pub network_passphrase: String,
@@ -281,7 +512,30 @@ impl AuthState {
         sep10_seed: Option<[u8; 32]>,
         network_passphrase: String,
         emergency_verification_paused: bool,
-    ) -> Self {
+    ) -> Result<Self, AuthKeyError> {
+        Self::from_config(
+            jwt_private_key_pem,
+            None,
+            None,
+            1_800,
+            true,
+            sep10_seed,
+            network_passphrase,
+            emergency_verification_paused,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_config(
+        jwt_private_key_pem: Option<String>,
+        jwt_key_ring: Option<String>,
+        jwt_current_key_id: Option<String>,
+        jwt_key_overlap_secs: u64,
+        allow_ephemeral_jwt_key: bool,
+        sep10_seed: Option<[u8; 32]>,
+        network_passphrase: String,
+        emergency_verification_paused: bool,
+    ) -> Result<Self, AuthKeyError> {
         let seed = match sep10_seed {
             Some(seed) => seed,
             None => {
@@ -292,36 +546,22 @@ impl AuthState {
         };
         let signing_key = SigningKey::from_bytes(&seed);
         let server_public_key = signing_key.verifying_key().to_bytes();
-
-        let priv_key = if let Some(pem) = jwt_private_key_pem {
-            RsaPrivateKey::from_pkcs8_pem(&pem).expect("Invalid RSA Private Key PEM")
-        } else {
-            tracing::info!("Generating ephemeral RSA keypair for local development...");
-            let mut rng = rand::thread_rng();
-            RsaPrivateKey::new(&mut rng, 2048).expect("Failed to generate RSA key")
-        };
-
-        let pem_str = priv_key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).unwrap();
-        let encoding_key = EncodingKey::from_rsa_pem(pem_str.as_bytes()).unwrap();
-
-        let pub_key = RsaPublicKey::from(&priv_key);
-        let pub_pem = pub_key
-            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
-            .unwrap();
-        let decoding_key = DecodingKey::from_rsa_pem(pub_pem.as_bytes()).unwrap();
-
-        let n = BASE64_URL.encode(pub_key.n().to_bytes_be());
-        let e = BASE64_URL.encode(pub_key.e().to_bytes_be());
+        let jwt_keys = jwt_keyring_from_config(
+            jwt_private_key_pem,
+            jwt_key_ring,
+            jwt_current_key_id,
+            jwt_key_overlap_secs,
+            allow_ephemeral_jwt_key,
+        )?;
 
         let state = Self {
-            encoding_key,
-            decoding_key,
-            jwk_n: n,
-            jwk_e: e,
+            jwt_keys: Arc::new(jwt_keys),
             signing_key,
             server_public_key,
             network_passphrase,
-            emergency_verification_paused: Arc::new(AtomicBool::new(emergency_verification_paused)),
+            emergency_verification_paused: Arc::new(AtomicBool::new(
+                emergency_verification_paused,
+            )),
             refresh_tokens: Arc::new(RwLock::new(HashMap::new())),
             rate_limiter: Mutex::new(HashMap::new()),
         };
@@ -331,10 +571,58 @@ impl AuthState {
             Some(&state.server_stellar_address()),
             None,
             None,
-            Some("JWT signing key initialized or rotated"),
+            Some("JWT signing keyring initialized"),
         );
 
-        state
+        Ok(state)
+    }
+
+    pub fn rotate_signing_key(
+        &self,
+        private_key_pem: String,
+        key_id: String,
+    ) -> Result<(), AuthKeyError> {
+        let private_key = parse_rsa_private_key(&private_key_pem)?;
+        let material = Arc::new(JwtKeyMaterial::from_private_key(&private_key)?);
+        let rotated_key_id = key_id.clone();
+        self.jwt_keys
+            .rotate(SecretVersion::new(key_id, material), now_secs())?;
+        log_security_event(
+            SecurityEventType::JwtKeyRotated,
+            Some(&self.server_stellar_address()),
+            None,
+            None,
+            Some(&format!(
+                "JWT signing key rotated with overlap: {rotated_key_id}"
+            )),
+        );
+        Ok(())
+    }
+
+    fn verification_key(
+        &self,
+        key_id: &str,
+        now: u64,
+    ) -> Result<Option<Arc<JwtKeyMaterial>>, AuthKeyError> {
+        self.jwt_keys
+            .verification_key(key_id, now)
+            .map(|version| version.map(|version| Arc::clone(version.value())))
+            .map_err(Into::into)
+    }
+
+    fn verification_keys(
+        &self,
+        now: u64,
+    ) -> Result<Vec<Arc<JwtKeyMaterial>>, AuthKeyError> {
+        self.jwt_keys
+            .verification_keys(now)
+            .map(|versions| {
+                versions
+                    .into_iter()
+                    .map(|version| Arc::clone(version.value()))
+                    .collect()
+            })
+            .map_err(Into::into)
     }
 
     pub fn server_stellar_address(&self) -> String {
@@ -371,10 +659,10 @@ pub struct ChallengeResponse {
 #[derive(Deserialize, ToSchema)]
 pub struct VerifyRequest {
     pub transaction: String,
-    /// Optional role to request in token claims. Admin role is only granted to addresses in PERIGEE_ADMIN_STELLAR_ADDRESSES.
+    /// Optional role for administrator accounts. Non-admin login roles are rejected.
     #[serde(default)]
     pub role: Option<Role>,
-    /// Optional vault scopes to constrain this token to specific vaults.
+    /// Optional vault scopes for administrator accounts. Non-admin login scopes are rejected.
     #[serde(default)]
     pub vault_scopes: Option<Vec<String>>,
 }
@@ -434,8 +722,7 @@ pub struct Claims {
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+        .map_or(0, |duration| duration.as_secs())
 }
 
 fn hash_refresh_token(token: &str) -> String {
@@ -475,8 +762,18 @@ pub fn encode_access_token_with_role_and_vaults(
         vault_scopes,
     };
 
-    let header = Header::new(Algorithm::RS256);
-    encode(&header, &claims, &state.encoding_key)
+    let current = state
+        .jwt_keys
+        .current()
+        .map_err(|error| AppError::Internal(format!("JWT signing key unavailable: {error}")))?;
+    let encoding_key = current
+        .value()
+        .encoding_key
+        .as_ref()
+        .ok_or_else(|| AppError::Internal("JWT signing key has no private material".to_string()))?;
+    let mut header = Header::new(Algorithm::RS256);
+    header.kid = Some(current.id().to_string());
+    encode(&header, &claims, encoding_key)
         .map_err(|e| AppError::Internal(format!("JWT encode error: {e}")))
 }
 
@@ -977,25 +1274,42 @@ pub async fn verify_handler(
         }
     };
 
-    let requested_role = if let Some(role) = payload.role {
-        if role == Role::Admin && !is_admin_address(&subject) {
-            log_security_event(
-                SecurityEventType::UnauthorizedAccess,
-                Some(&subject),
-                None,
-                None,
-                Some("Admin role requested by non-admin address"),
-            );
-            return Err(AppError::Forbidden(
-                "Admin role can only be granted to authorized admin addresses".into(),
-            ));
-        }
-        Some(role)
-    } else {
-        None
-    };
+    let admin_address = is_admin_address(&subject);
+    if payload.role.is_some() && !admin_address {
+        log_security_event(
+            SecurityEventType::UnauthorizedAccess,
+            Some(&subject),
+            None,
+            None,
+            Some("Role requested during initial authentication"),
+        );
+        return Err(AppError::Forbidden(
+            "Roles must be assigned by an administrator or delegated by an authorized manager"
+                .into(),
+        ));
+    }
+    if payload
+        .vault_scopes
+        .as_ref()
+        .is_some_and(|scopes| !scopes.is_empty())
+        && !admin_address
+    {
+        log_security_event(
+            SecurityEventType::UnauthorizedAccess,
+            Some(&subject),
+            None,
+            None,
+            Some("Vault scopes requested during initial authentication"),
+        );
+        return Err(AppError::Forbidden(
+            "Vault scopes must be assigned by an administrator or delegated by an authorized manager"
+                .into(),
+        ));
+    }
 
-    let tokens = match issue_token_pair_with_scope(&state, &subject, requested_role, payload.vault_scopes) {
+    let requested_role = admin_address.then_some(payload.role.unwrap_or(Role::Admin));
+    let vault_scopes = if admin_address { payload.vault_scopes } else { None };
+    let tokens = match issue_token_pair_with_scope(&state, &subject, requested_role, vault_scopes) {
         Ok(t) => t,
         Err(e) => {
             log_security_event(
@@ -1028,8 +1342,7 @@ pub async fn verify_handler(
     request_body = RefreshRequest,
     responses(
         (status = 200, description = "Rotated access and refresh tokens", body = VerifyResponse),
-        (status = 401, description = "Invalid, expired, or reused refresh token"),
-        (status = 503, description = "Verification paused for emergency maintenance")
+        (status = 401, description = "Invalid, expired, or reused refresh token")
     ),
     tag = "Auth"
 )]
@@ -1059,8 +1372,7 @@ pub struct RevokeResponse {
     path = "/auth/revoke",
     request_body = RefreshRequest,
     responses(
-        (status = 200, description = "Refresh token family revoked", body = RevokeResponse),
-        (status = 503, description = "Verification paused for emergency maintenance")
+        (status = 200, description = "Refresh token family revoked", body = RevokeResponse)
     ),
     tag = "Auth"
 )]
@@ -1094,10 +1406,26 @@ pub async fn revoke_handler(
 )]
 pub async fn emergency_pause_handler(
     Extension(state): Extension<Arc<AuthState>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<EmergencyPauseRequest>,
     ApiJson(payload): ApiJson<EmergencyPauseRequest>,
     SanitizedJson(payload): SanitizedJson<EmergencyPauseRequest>,
 ) -> Result<Json<EmergencyPauseResponse>, AppError> {
+    if !user.is_admin() {
+        return Err(AppError::Forbidden(
+            "Administrator role is required".to_string(),
+        ));
+    }
     state.set_verification_paused(payload.paused);
+    log_audit_event(
+        "system",
+        if payload.paused {
+            "verification_paused"
+        } else {
+            "verification_resumed"
+        },
+        &user.stellar_address,
+    );
 
     let message = if payload.paused {
         "Message verification has been PAUSED for emergency maintenance".to_string()
@@ -1116,6 +1444,13 @@ pub async fn auth_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
+    let emergency_path = matches!(
+        req.uri().path(),
+        "/auth/emergency-pause" | "/v1/auth/emergency-pause"
+    );
+    if state.is_verification_paused() && !emergency_path {
+        return Err(AppError::Internal(
+            "Authentication is temporarily paused for emergency maintenance".into(),
     // Check if verification is paused — deny all requests during emergency maintenance
     if state.is_verification_paused() {
         return Err(AppError::with_code(
@@ -1156,11 +1491,69 @@ pub async fn auth_middleware(
         }
     };
 
-    let validation = Validation::new(Algorithm::RS256);
-    let token_data = match decode::<Claims>(token, &state.decoding_key, &validation) {
-        Ok(data) => data,
-        Err(e) => {
-            if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature) {
+    let header = match decode_header(token) {
+        Ok(header) => header,
+        Err(error) => {
+            log_security_event(
+                SecurityEventType::UnauthorizedAccess,
+                None,
+                None,
+                None,
+                Some("Invalid JWT header"),
+            );
+            return Err(AppError::Unauthorized(format!(
+                "Invalid token header: {error}"
+            )));
+        }
+    };
+    let now = now_secs();
+    let verification_keys = match header.kid.as_deref() {
+        Some(key_id) if !key_id.trim().is_empty() => {
+            match state.verification_key(key_id, now) {
+                Ok(Some(key)) => vec![key],
+                Ok(None) => {
+                    return Err(AppError::Unauthorized(
+                        "Unknown or retired signing key".to_string(),
+                    ))
+                }
+                Err(error) => return Err(AppError::Internal(error.to_string())),
+            }
+        }
+        _ => match state.verification_keys(now) {
+            Ok(keys) => keys,
+            Err(error) => return Err(AppError::Internal(error.to_string())),
+        },
+    };
+    if verification_keys.is_empty() {
+        return Err(AppError::Unauthorized(
+            "No active signing keys are available".to_string(),
+        ));
+    }
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_issuer(&[WEB_AUTH_DOMAIN]);
+    validation.set_required_spec_claims(&["exp", "iss", "sub"]);
+    let mut decoded = None;
+    let mut decode_error: Option<jsonwebtoken::errors::Error> = None;
+    let mut expired = false;
+    for verification_key in verification_keys {
+        match decode::<Claims>(token, &verification_key.decoding_key, &validation) {
+            Ok(data) => {
+                decoded = Some(data);
+                break;
+            }
+            Err(error) => {
+                expired |= matches!(
+                    error.kind(),
+                    jsonwebtoken::errors::ErrorKind::ExpiredSignature
+                );
+                decode_error = Some(error);
+            }
+        }
+    }
+    let token_data = match decoded {
+        Some(data) => data,
+        None => {
+            if expired {
                 log_security_event(
                     SecurityEventType::TokenExpired,
                     None,
@@ -1174,9 +1567,13 @@ pub async fn auth_middleware(
                     None,
                     None,
                     None,
-                    Some(&format!("Invalid JWT: {e}")),
+                    Some("Access JWT signature validation failed"),
                 );
             }
+            let detail = decode_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "no active verification key matched".to_string());
+            return Err(AppError::Unauthorized(format!("Invalid token: {detail}")));
             return Err(AppError::with_code(
                 ErrorCode::InvalidSignature,
                 format!("Invalid token: {e}"),
@@ -1185,7 +1582,6 @@ pub async fn auth_middleware(
     };
 
     // Validate JWT expiry claim (BE-030: verify token has not expired)
-    let now = now_secs();
     if token_data.claims.exp <= now {
         return Err(AppError::with_code(
             ErrorCode::TokenExpired,
@@ -1209,7 +1605,10 @@ pub async fn auth_middleware(
     // Rate limiting per manager/tenant (Stellar address)
     let tenant = token_data.claims.sub.clone();
     {
-        let mut rate_limiter = state.rate_limiter.lock().unwrap();
+        let mut rate_limiter = state
+            .rate_limiter
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let bucket = rate_limiter
             .entry(tenant.clone())
             .or_insert_with(|| TokenBucket::new(RATE_LIMIT_CAPACITY));
@@ -1229,21 +1628,43 @@ pub async fn auth_middleware(
         }
     }
 
+    if !matches!(
+        Strkey::from_string(&token_data.claims.sub),
+        Ok(Strkey::PublicKeyEd25519(_))
+    ) {
+        return Err(AppError::Unauthorized(
+            "Token subject is not a valid Stellar account".into(),
+        ));
+    }
+
+    let admin_address = is_admin_address(&token_data.claims.sub);
+    let claims_admin_role = token_data.claims.role == Some(Role::Admin)
+        || token_data
+            .claims
+            .roles
+            .as_ref()
+            .is_some_and(|roles| roles.contains(&Role::Admin));
+    if claims_admin_role && !admin_address {
+        return Err(AppError::Unauthorized(
+            "Token contains an unauthorized administrator role".into(),
+        ));
+    }
+
     let (role, roles) = if let Some(r) = token_data.claims.role {
         let rs = token_data.claims.roles.unwrap_or_else(|| vec![r]);
         (r, rs)
     } else if let Some(rs) = token_data.claims.roles {
         if let Some(&first) = rs.first() {
             (first, rs)
-        } else if is_admin_address(&token_data.claims.sub) {
+        } else if admin_address {
             (Role::Admin, vec![Role::Admin])
         } else {
-            (Role::Manager, vec![Role::Manager])
+            (Role::Viewer, vec![Role::Viewer])
         }
-    } else if is_admin_address(&token_data.claims.sub) {
+    } else if admin_address {
         (Role::Admin, vec![Role::Admin])
     } else {
-        (Role::Manager, vec![Role::Manager])
+        (Role::Viewer, vec![Role::Viewer])
     };
 
     let vault_scopes = token_data
@@ -1320,17 +1741,45 @@ pub async fn issue_scoped_token_handler(
         ));
     }
 
-    if !user.is_admin() && !payload.vault_scopes.is_empty() {
-        for v in &payload.vault_scopes {
-            if v == "*" && !user.can_access_all_vaults() {
+    let issuer_manager = if user.is_admin() {
+        None
+    } else {
+        let manager = state
+            .manager_store
+            .find_by_stellar_address(&user.stellar_address)
+            .await?
+            .ok_or_else(|| {
+                AppError::Forbidden(
+                    "Only approved managers may issue delegated vault tokens".into(),
+                )
+            })?;
+        if manager.status != "approved" {
+            return Err(AppError::Forbidden(
+                "Only approved managers may issue delegated vault tokens".into(),
+            ));
+        }
+        Some(manager)
+    };
+
+    if let Some(manager) = issuer_manager {
+        for vault_id in &payload.vault_scopes {
+            if vault_id == "*" {
                 return Err(AppError::Forbidden(
-                    "Cannot issue wildcard vault token without global vault permissions".into(),
+                    "Only administrators may issue wildcard vault tokens".into(),
                 ));
             }
-            if v != "*" && !user.can_access_vault(v) {
-                return Err(AppError::Forbidden(
-                    format!("Cannot issue token for vault '{}' outside your authorized scope", v),
-                ));
+            if !user.can_access_vault(vault_id) {
+                return Err(AppError::Forbidden(format!(
+                    "Cannot issue token for vault '{}' outside your authorized scope",
+                    vault_id
+                )));
+            }
+            let vault = state.vault_store.get(vault_id).await?;
+            if vault.manager_id != manager.id {
+                return Err(AppError::Forbidden(format!(
+                    "Cannot issue token for vault '{}' outside your manager account",
+                    vault_id
+                )));
             }
         }
     }
@@ -1390,16 +1839,25 @@ pub struct JwkResponse {
 pub async fn jwks_handler(
     Extension(state): Extension<Arc<AuthState>>,
 ) -> Result<Json<JwkSetResponse>, AppError> {
-    Ok(Json(JwkSetResponse {
-        keys: vec![JwkResponse {
-            kty: "RSA".to_string(),
-            alg: "RS256".to_string(),
-            kid: "1".to_string(),
-            n: state.jwk_n.clone(),
-            e: state.jwk_e.clone(),
-            use_: "sig".to_string(),
-        }],
-    }))
+    let versions = state
+        .jwt_keys
+        .verification_keys(now_secs())
+        .map_err(|error| AppError::Internal(error.to_string()))?;
+    let keys = versions
+        .into_iter()
+        .map(|version| {
+            let material = version.value();
+            JwkResponse {
+                kty: "RSA".to_string(),
+                alg: "RS256".to_string(),
+                kid: version.id().to_string(),
+                n: material.jwk_n.clone(),
+                e: material.jwk_e.clone(),
+                use_: "sig".to_string(),
+            }
+        })
+        .collect();
+    Ok(Json(JwkSetResponse { keys }))
 }
 
 #[cfg(test)]
@@ -1415,6 +1873,7 @@ mod tests {
             "Test SDF Network ; September 2015".to_string(),
             false,
         )
+        .unwrap()
     }
 
     fn signed_challenge(state: &AuthState) -> (String, String) {
@@ -1450,6 +1909,26 @@ mod tests {
         (signed_xdr, expected_sub)
     }
 
+    fn decode_claims(state: &AuthState, token: &str) -> Claims {
+        let header = decode_header(token).unwrap();
+        let key_id = header.kid.unwrap();
+        let key = state.verification_key(&key_id, now_secs()).unwrap().unwrap();
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.set_issuer(&[WEB_AUTH_DOMAIN]);
+        validation.set_required_spec_claims(&["exp", "iss", "sub"]);
+        decode::<Claims>(token, &key.decoding_key, &validation)
+            .unwrap()
+            .claims
+    }
+
+    fn encode_claims(state: &AuthState, claims: &Claims) -> String {
+        let current = state.jwt_keys.current().unwrap();
+        let key = current.value().encoding_key.as_ref().unwrap();
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(current.id().to_string());
+        encode(&header, claims, key).unwrap()
+    }
+
     #[test]
     fn test_auth_state_new() {
         let state = test_state();
@@ -1481,18 +1960,16 @@ mod tests {
         assert_eq!(tokens.token_type, "Bearer");
         assert_eq!(tokens.token, tokens.access_token);
 
-        let validation = Validation::new(Algorithm::RS256);
-        let token_data =
-            decode::<Claims>(&tokens.access_token, &state.decoding_key, &validation).unwrap();
-        assert_eq!(token_data.claims.sub, expected_sub);
-        assert_eq!(token_data.claims.iss, WEB_AUTH_DOMAIN.to_string());
-        assert!(token_data.claims.scopes.contains(&"simulate".to_string()));
+        let token_claims = decode_claims(&state, &tokens.access_token);
+        assert_eq!(token_claims.sub, expected_sub);
+        assert_eq!(token_claims.iss, WEB_AUTH_DOMAIN.to_string());
+        assert!(token_claims.scopes.contains(&"simulate".to_string()));
 
         let now = now_secs();
-        assert!(token_data.claims.exp <= now + ACCESS_TOKEN_EXPIRY_SECS);
-        assert!(token_data.claims.exp > now);
+        assert!(token_claims.exp <= now + ACCESS_TOKEN_EXPIRY_SECS);
+        assert!(token_claims.exp > now);
         // Access tokens must be short-lived (well under the old 24h window).
-        assert!(token_data.claims.exp - token_data.claims.iat <= ACCESS_TOKEN_EXPIRY_SECS);
+        assert!(token_claims.exp - token_claims.iat <= ACCESS_TOKEN_EXPIRY_SECS);
         assert!(ACCESS_TOKEN_EXPIRY_SECS < 3600);
     }
 
@@ -1536,24 +2013,46 @@ mod tests {
     fn test_access_token_expiry_claim_is_short() {
         let state = test_state();
         let jwt = encode_access_token(&state, "GTEST").unwrap();
-        let validation = Validation::new(Algorithm::RS256);
-        let claims = decode::<Claims>(&jwt, &state.decoding_key, &validation)
-            .unwrap()
-            .claims;
+        let claims = decode_claims(&state, &jwt);
         assert_eq!(claims.exp - claims.iat, ACCESS_TOKEN_EXPIRY_SECS);
     }
 
     #[test]
     fn test_jwks() {
         let state = test_state();
-        let _ = JwkResponse {
-            kty: "RSA".to_string(),
-            alg: "RS256".to_string(),
-            kid: "1".to_string(),
-            n: state.jwk_n.clone(),
-            e: state.jwk_e.clone(),
-            use_: "sig".to_string(),
-        };
+        let keys = state.jwt_keys.verification_keys(now_secs()).unwrap();
+        assert_eq!(keys.len(), 1);
+    }
+
+    #[test]
+    fn rotated_key_keeps_previous_tokens_verifiable() {
+        let state = test_state();
+        let old_token = encode_access_token(&state, "GTESTROTATE").unwrap();
+        let mut rng = OsRng;
+        let next_private = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let next_pem = next_private
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+        state
+            .rotate_signing_key(next_pem, "next-key".to_string())
+            .unwrap();
+        assert_eq!(decode_claims(&state, &old_token).sub, "GTESTROTATE");
+        assert_eq!(state.jwt_keys.verification_keys(now_secs()).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn production_keyring_rejects_missing_material() {
+        let result = AuthState::from_config(
+            None,
+            None,
+            None,
+            1_800,
+            false,
+            Some([2u8; 32]),
+            "Test SDF Network ; September 2015".to_string(),
+            false,
+        );
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1566,7 +2065,6 @@ mod tests {
 
     #[test]
     fn test_expired_token_rejected() {
-        use jsonwebtoken::encode;
         let state = test_state();
         let now = now_secs();
         
@@ -1575,16 +2073,24 @@ mod tests {
             sub: "GTESTEXPIRED".to_string(),
             iss: WEB_AUTH_DOMAIN.to_string(),
             iat: now - 100,
-            exp: now - 1,  // Expired
+            exp: now - 1,
             scopes: vec!["simulate".to_string()],
+            role: None,
+            roles: None,
+            vault_ids: None,
+            vault_scopes: None,
         };
         
-        let header = Header::new(Algorithm::RS256);
-        let expired_token = encode(&header, &expired_claims, &state.encoding_key).unwrap();
-        
+        let expired_token = encode_claims(&state, &expired_claims);
+
         // Attempt to validate the expired token using the same logic as auth_middleware
-        let validation = Validation::new(Algorithm::RS256);
-        let result = decode::<Claims>(&expired_token, &state.decoding_key, &validation);
+        let header = decode_header(&expired_token).unwrap();
+        let key_id = header.kid.unwrap();
+        let key = state.verification_key(&key_id, now_secs()).unwrap().unwrap();
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.set_issuer(&[WEB_AUTH_DOMAIN]);
+        validation.set_required_spec_claims(&["exp", "iss", "sub"]);
+        let result = decode::<Claims>(&expired_token, &key.decoding_key, &validation);
         
         // The token should fail validation (either by jsonwebtoken or our explicit check)
         // If it doesn't fail in decode, our explicit check in auth_middleware will catch it
@@ -1597,7 +2103,6 @@ mod tests {
 
     #[test]
     fn test_valid_token_not_expired() {
-        use jsonwebtoken::encode;
         let state = test_state();
         let now = now_secs();
         
@@ -1606,26 +2111,25 @@ mod tests {
             sub: "GTESTVALID".to_string(),
             iss: WEB_AUTH_DOMAIN.to_string(),
             iat: now,
-            exp: now + 3600,  // Expires in 1 hour
+            exp: now + 3600,
             scopes: vec!["simulate".to_string()],
+            role: None,
+            roles: None,
+            vault_ids: None,
+            vault_scopes: None,
         };
         
-        let header = Header::new(Algorithm::RS256);
-        let valid_token = encode(&header, &valid_claims, &state.encoding_key).unwrap();
-        
+        let valid_token = encode_claims(&state, &valid_claims);
+
         // Validate the token
-        let validation = Validation::new(Algorithm::RS256);
-        let result = decode::<Claims>(&valid_token, &state.decoding_key, &validation);
+        let result = decode_claims(&state, &valid_token);
         
-        assert!(result.is_ok(), "Valid token should decode successfully");
-        
-        let token_data = result.unwrap();
         let current_time = now_secs();
-        
+
         // Explicit expiry check from auth_middleware (BE-030)
-        assert!(token_data.claims.exp > current_time, "Valid token should not be expired");
-        assert_eq!(token_data.claims.sub, "GTESTVALID");
-        assert!(token_data.claims.scopes.contains(&"simulate".to_string()));
+        assert!(result.exp > current_time, "Valid token should not be expired");
+        assert_eq!(result.sub, "GTESTVALID");
+        assert!(result.scopes.contains(&"simulate".to_string()));
     }
 }
 
