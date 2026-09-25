@@ -1,4 +1,5 @@
 use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
+use Perigee_core::input_sanitization::SanitizedJson;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -94,7 +95,7 @@ async fn main() {
 
 async fn handle_rpc(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<RpcRequest>,
+    SanitizedJson(req): SanitizedJson<RpcRequest>,
 ) -> impl IntoResponse {
     if req.method == "eth_sendTransaction" {
         println!("Intercepting sendTransaction");

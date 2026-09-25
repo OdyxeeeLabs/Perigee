@@ -1,7 +1,8 @@
 use crate::errors::AppError;
+use crate::input_sanitization::{SanitizedJson, SanitizedPath, SanitizedQuery};
 use crate::db;
 use axum::{
-    extract::{Path, State},
+    extract::State,
     Json,
 };
 use chrono::Utc;
@@ -170,7 +171,7 @@ impl ManagerStore {
 )]
 pub async fn register_manager_handler(
     State(state): State<Arc<crate::AppState>>,
-    Json(payload): Json<RegisterManagerRequest>,
+    SanitizedJson(payload): SanitizedJson<RegisterManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
     let manager = state.manager_store.register(&payload).await?;
     Ok(Json(manager))
@@ -191,7 +192,7 @@ pub async fn register_manager_handler(
 )]
 pub async fn list_managers_handler(
     State(state): State<Arc<crate::AppState>>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    SanitizedQuery(params): SanitizedQuery<std::collections::HashMap<String, String>>,
 ) -> Result<Json<crate::db::models::PagedResponse<ManagerRecord>>, AppError> {
     let status_filter = params.get("status").map(|s| s.as_str());
 
@@ -221,7 +222,7 @@ pub async fn list_managers_handler(
 )]
 pub async fn get_manager_handler(
     State(state): State<Arc<crate::AppState>>,
-    Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
 ) -> Result<Json<ManagerRecord>, AppError> {
     let manager = state.manager_store.get(&id).await?;
     Ok(Json(manager))
@@ -241,8 +242,8 @@ pub async fn get_manager_handler(
 )]
 pub async fn approve_manager_handler(
     State(state): State<Arc<crate::AppState>>,
-    Path(id): Path<String>,
-    Json(payload): Json<ApproveManagerRequest>,
+    SanitizedPath(id): SanitizedPath<String>,
+    SanitizedJson(payload): SanitizedJson<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
     let manager = state.manager_store.approve(&id, &payload).await?;
     Ok(Json(manager))
@@ -262,8 +263,8 @@ pub async fn approve_manager_handler(
 )]
 pub async fn reject_manager_handler(
     State(state): State<Arc<crate::AppState>>,
-    Path(id): Path<String>,
-    Json(payload): Json<ApproveManagerRequest>,
+    SanitizedPath(id): SanitizedPath<String>,
+    SanitizedJson(payload): SanitizedJson<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
     let manager = state.manager_store.reject(&id, &payload).await?;
     Ok(Json(manager))
@@ -280,7 +281,7 @@ pub async fn reject_manager_handler(
 )]
 pub async fn check_manager_status_handler(
     State(state): State<Arc<crate::AppState>>,
-    Path(stellar_address): Path<String>,
+    SanitizedPath(stellar_address): SanitizedPath<String>,
 ) -> Result<Json<ManagerStatusResponse>, AppError> {
     let record = state
         .manager_store

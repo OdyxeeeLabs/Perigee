@@ -1,6 +1,6 @@
 use axum::{
     async_trait,
-    extract::{rejection::JsonRejection, FromRequest, Request},
+    extract::{FromRequest, Request},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 use std::env;
 use thiserror::Error;
 
+use crate::input_sanitization::{deserialize_sanitized, SanitizedJson};
 use crate::simulation::SimulationError;
 
 /// Returns `true` when `APP_ENV=production`.
@@ -299,33 +300,10 @@ where
     type Rejection = AppError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Json::<T>::from_request(req, state).await {
-            Ok(Json(value)) => {
-                // JSON parsed successfully — now run field-level validation.
-                value.validate().map_err(AppError::BadRequest)?;
-                Ok(ValidatedJson(value))
-            }
-            Err(rejection) => {
-                // Map every Axum JSON rejection variant to a 400 with a
-                // human-readable message inside the standard envelope.
-                let message = match &rejection {
-                    JsonRejection::JsonDataError(e) => {
-                        format!("Invalid JSON data: {}", e.body_text())
-                    }
-                    JsonRejection::JsonSyntaxError(e) => {
-                        format!("JSON syntax error: {}", e.body_text())
-                    }
-                    JsonRejection::MissingJsonContentType(_) => {
-                        "Content-Type must be application/json".to_string()
-                    }
-                    JsonRejection::BytesRejection(_) => {
-                        "Failed to read request body".to_string()
-                    }
-                    _ => "Invalid request body".to_string(),
-                };
-                Err(AppError::BadRequest(message))
-            }
-        }
+        let SanitizedJson(value) = SanitizedJson::<serde_json::Value>::from_request(req, state).await?;
+        let value: T = deserialize_sanitized(value)?;
+        value.validate().map_err(AppError::BadRequest)?;
+        Ok(ValidatedJson(value))
     }
 }
 

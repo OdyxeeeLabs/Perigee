@@ -4,6 +4,8 @@
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod agent_fleet;
+pub mod backpressure;
 pub mod billing_service;
 pub mod config;
 pub mod cache;
@@ -54,6 +56,7 @@ pub mod fee_validation;
 pub mod secure_ids;
 pub mod audit_log;
 pub mod metrics;
+pub mod input_sanitization;
 pub mod db;
 
 #[cfg(test)]

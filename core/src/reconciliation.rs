@@ -15,6 +15,7 @@
 //! places) in a future iteration.
 
 use crate::db;
+use crate::input_sanitization::{SanitizedJson, SanitizedPath, SanitizedQuery};
 use crate::runner::RequestCancellation;
 use std::str::FromStr;
 use tokio_util::sync::CancellationToken;
@@ -22,7 +23,7 @@ use crate::fee_analytics::FeeAnalyticsEngine;
 use crate::fee_store::FeeStore;
 use crate::AppError;
 use axum::{
-    extract::{Path, Query, State},
+    extract::State,
     http::StatusCode,
     Extension, Json,
 };
@@ -335,6 +336,7 @@ impl From<ReconciliationError> for AppError {
 )]
 pub async fn reconcile_handler(
     State(state): State<Arc<crate::AppState>>,
+    SanitizedJson(req): SanitizedJson<ReconcileRequest>,
     Extension(cancellation): Extension<RequestCancellation>,
     Json(req): Json<ReconcileRequest>,
 ) -> Result<(StatusCode, Json<ReconcileResponse>), AppError> {
@@ -391,6 +393,7 @@ pub async fn reconcile_handler(
 )]
 pub async fn get_reconcile_job_handler(
     State(state): State<Arc<crate::AppState>>,
+    SanitizedPath(job_id): SanitizedPath<String>,
     Extension(cancellation): Extension<RequestCancellation>,
     Path(job_id): Path<String>,
 ) -> Result<Json<crate::jobs::Job>, AppError> {
@@ -421,6 +424,7 @@ pub async fn get_reconcile_job_handler(
 )]
 pub async fn list_reports_handler(
     State(state): State<Arc<crate::AppState>>,
+    SanitizedQuery(params): SanitizedQuery<ListReportsQuery>,
     Extension(cancellation): Extension<RequestCancellation>,
     Query(params): Query<ListReportsQuery>,
 ) -> Result<Json<Vec<ReconciliationReport>>, AppError> {

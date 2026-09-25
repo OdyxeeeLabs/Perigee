@@ -1,5 +1,6 @@
 use crate::audit_log::{log_audit_event, log_security_event, SecurityEventType};
 use crate::errors::AppError;
+use crate::input_sanitization::SanitizedJson;
 use axum::{extract::Request, http::header, middleware::Next, response::Response, Extension, Json};
 use base64::{
     engine::general_purpose::STANDARD as BASE64,
@@ -896,7 +897,7 @@ pub(crate) fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str)
 )]
 pub async fn challenge_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<ChallengeRequest>,
+    SanitizedJson(payload): SanitizedJson<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, AppError> {
     if state.is_verification_paused() {
         return Err(AppError::Internal(
@@ -933,7 +934,7 @@ pub async fn challenge_handler(
 )]
 pub async fn verify_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<VerifyRequest>,
+    SanitizedJson(payload): SanitizedJson<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
     if state.is_verification_paused() {
         log_security_event(
@@ -1020,7 +1021,7 @@ pub async fn verify_handler(
 )]
 pub async fn refresh_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<RefreshRequest>,
+    SanitizedJson(payload): SanitizedJson<RefreshRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
     if state.is_verification_paused() {
         return Err(AppError::Internal(
@@ -1049,7 +1050,7 @@ pub struct RevokeResponse {
 )]
 pub async fn revoke_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<RefreshRequest>,
+    SanitizedJson(payload): SanitizedJson<RefreshRequest>,
 ) -> Result<Json<RevokeResponse>, AppError> {
     if state.is_verification_paused() {
         return Err(AppError::Internal(
@@ -1075,7 +1076,7 @@ pub async fn revoke_handler(
 )]
 pub async fn emergency_pause_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<EmergencyPauseRequest>,
+    SanitizedJson(payload): SanitizedJson<EmergencyPauseRequest>,
 ) -> Result<Json<EmergencyPauseResponse>, AppError> {
     state.set_verification_paused(payload.paused);
 
@@ -1273,7 +1274,7 @@ pub struct ScopedTokenResponse {
 pub async fn issue_scoped_token_handler(
     Extension(state): Extension<Arc<AuthState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<ScopedTokenRequest>,
+    SanitizedJson(payload): SanitizedJson<ScopedTokenRequest>,
 ) -> Result<Json<ScopedTokenResponse>, AppError> {
     if state.is_verification_paused() {
         return Err(AppError::Internal(
