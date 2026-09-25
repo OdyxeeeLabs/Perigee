@@ -38,6 +38,7 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, State,
     },
+    http::HeaderMap,
     response::IntoResponse,
 };
 use chrono::{DateTime, Utc};
@@ -476,14 +477,26 @@ pub async fn ws_handler(
     ws: WebSocketUpgrade,
     Path(job_id): Path<String>,
     State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, job_id, state))
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    ws.on_upgrade(move |socket| handle_socket(socket, job_id, state, request_id))
 }
 
-async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::AppState>) {
-    tracing::info!(job_id = %job_id, "WebSocket client connected");
+async fn handle_socket(
+    mut socket: WebSocket,
+    job_id: String,
+    state: Arc<crate::AppState>,
+    request_id: String,
+) {
+    tracing::info!(request_id = %request_id, job_id = %job_id, "WebSocket client connected");
 
     let mut rx = state.simulation_bus.subscribe();
+    let shutdown = state.shutdown.clone();
 
     // CORE-25: heartbeat cadence + liveness window so dead sessions are closed
     // instead of left half-open.
@@ -494,10 +507,17 @@ async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::
 
     loop {
         tokio::select! {
+            _ = shutdown.cancelled() => {
+                connection_state = ConnectionState::Closed;
+                let _ = socket.send(Message::Close(None)).await;
+                break;
+            }
+
             // CORE-25: send a periodic ping and watch for the pong timeout.
             _ = heartbeat.tick() => {
                 if last_pong.elapsed() >= PONG_TIMEOUT {
                     tracing::warn!(
+                        request_id = %request_id,
                         job_id = %job_id,
                         elapsed_ms = last_pong.elapsed().as_millis(),
                         "WebSocket heartbeat missed — closing connection for reconnection"
@@ -531,8 +551,9 @@ async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::
                             Ok(s) => s,
                             Err(e) => {
                                 tracing::error!(
+                                    request_id = %request_id,
                                     job_id = %job_id,
-                                    error = %e,
+                                    error = %crate::log_redaction::redact_display(&e),
                                     "Failed to serialise SimulationEvent"
                                 );
                                 continue;
@@ -554,6 +575,7 @@ async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(
+                            request_id = %request_id,
                             job_id = %job_id,
                             skipped = n,
                             "WebSocket consumer lagged — events were skipped"
@@ -590,6 +612,7 @@ async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::
     }
 
     tracing::info!(
+        request_id = %request_id,
         job_id = %job_id,
         connection_state = ?connection_state,
         "WebSocket client disconnected"

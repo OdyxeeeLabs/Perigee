@@ -41,6 +41,7 @@
 //! `Send + Sync`, so it can be stored in `AppState` and injected into every
 //! handler / background task.
 
+use crate::log_redaction::{redact_display, redact_endpoint, redact_sensitive_text};
 use crate::rpc_provider::{ProviderRegistry, RpcProvider};
 use reqwest::Client;
 use serde_json::Value;
@@ -294,7 +295,7 @@ impl StellarService {
                 tracing::debug!(
                     attempt,
                     delay_ms = delay.as_millis(),
-                    url = %url,
+                    url = %redact_endpoint(url),
                     method,
                     "Retrying RPC call after back-off"
                 );
@@ -312,7 +313,7 @@ impl StellarService {
                     tracing::debug!(
                         attempt,
                         rtt_us,
-                        url = %url,
+                        url = %redact_endpoint(url),
                         method,
                         "RPC call succeeded"
                     );
@@ -331,8 +332,8 @@ impl StellarService {
                         tracing::warn!(
                             attempt,
                             max = inner.config.max_attempts,
-                            error = %e,
-                            url = %url,
+                            error = %redact_display(&e),
+                            url = %redact_endpoint(url),
                             method,
                             "Retryable RPC error; will retry"
                         );
@@ -343,15 +344,15 @@ impl StellarService {
                     // Non-retryable error, or final attempt.
                     tracing::error!(
                         attempt,
-                        error = %e,
-                        url = %url,
+                        error = %redact_display(&e),
+                        url = %redact_endpoint(url),
                         method,
                         "RPC call failed"
                     );
 
                     if !has_more || retryable {
                         // Wrap as AllAttemptsFailed on exhaustion.
-                        let last = e.to_string();
+                        let last = redact_sensitive_text(&e.to_string());
                         return Err(StellarServiceError::AllAttemptsFailed {
                             attempts: attempt,
                             url: url.clone(),
@@ -367,7 +368,7 @@ impl StellarService {
         // Retryable path exhausted all attempts.
         let last = last_error
             .as_ref()
-            .map(|e| e.to_string())
+            .map(|e| redact_sensitive_text(&e.to_string()))
             .unwrap_or_default();
         Err(StellarServiceError::AllAttemptsFailed {
             attempts: inner.config.max_attempts,
@@ -391,17 +392,15 @@ impl StellarService {
             })?;
 
         tracing::info!(
-            url = %url,
-            current_network_passphrase = current,
-            expected_network_passphrase = expected,
+            url = %redact_endpoint(url),
+            network_passphrase_match = current == expected,
             "Validating Stellar RPC network passphrase"
         );
 
         if current != expected {
             tracing::error!(
-                url = %url,
-                current_network_passphrase = current,
-                expected_network_passphrase = expected,
+                url = %redact_endpoint(url),
+                network_passphrase_match = false,
                 "Stellar RPC network passphrase mismatch; signing is disabled"
             );
             return Err(StellarServiceError::NetworkPassphraseMismatch {

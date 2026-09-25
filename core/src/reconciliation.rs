@@ -227,7 +227,7 @@ impl FeeReconciler {
             avg_delta_pct,
             max_delta_pct,
             summary: Some(summary),
-            created_at: Utc::now().to_rfc3339(),
+            created_at: Utc::now(),
         };
 
         // Persist report and discrepancies
