@@ -6,15 +6,20 @@
 )]
 
 use crate::error_codes::ErrorCode;
+use crate::input_sanitization::{SanitizedJson, SanitizedPath};
 use crate::insights::InsightsEngine;
 use crate::reconciliation::{FeeReconciler, ReconciliationReport};
+use crate::runner::{wait_for_cancellation, RequestCancellation};
 use crate::secret_hash;
 use crate::simulation::{SimulationEngine, SimulationResult, SorobanResources};
+use crate::two_phase_commit::{TransactionParticipant, TwoPhaseCoordinator, TwoPhaseTx};
 use crate::ws::SimulationBus;
 use crate::errors::ApiJson;
 use crate::AppError;
 use axum::{
-    extract::{Path, State},
+    async_trait,
+    extract::State,
+    extract::{Extension, Path, State},
     http::StatusCode,
     Json,
 };
@@ -27,11 +32,39 @@ use sqlx::any::AnyQueryResult;
 use sqlx::{PgPool, SqlitePool};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
+use tokio_util::sync::CancellationToken;
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+const POSTGRES_JOBS_MIGRATION: &str = r#"
+CREATE TABLE IF NOT EXISTS jobs (
+    id UUID PRIMARY KEY,
+    job_type VARCHAR(50) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'QUEUED',
+    payload JSONB NOT NULL,
+    result JSONB,
+    progress_percent INTEGER NOT NULL DEFAULT 0,
+    progress_message VARCHAR(255) NOT NULL DEFAULT 'Queued',
+    webhook_url VARCHAR(500),
+    webhook_headers JSONB,
+    webhook_secret VARCHAR(255),
+    error_message TEXT,
+    error_type VARCHAR(50),
+    timeout_secs INTEGER NOT NULL DEFAULT 300,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_created_at ON jobs(status, created_at);
+"#;
 
 /// Database pool type - supports both PostgreSQL and SQLite
 #[derive(Clone)]
@@ -311,6 +344,101 @@ impl Default for JobQueueConfig {
     }
 }
 
+#[derive(Clone)]
+struct JobSubmissionData {
+    id: JobId,
+    job_type: JobType,
+    payload: Value,
+    webhook_url: Option<String>,
+    webhook_headers: Option<Value>,
+    webhook_secret_hash: Option<String>,
+    timeout_secs: i32,
+}
+
+#[derive(Clone, Copy)]
+enum JobSubmissionTarget {
+    Database,
+    Redis,
+}
+
+impl JobSubmissionTarget {
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Database => "database",
+            Self::Redis => "redis",
+        }
+    }
+}
+
+struct JobSubmissionParticipant {
+    queue: JobQueue,
+    target: JobSubmissionTarget,
+    data: JobSubmissionData,
+    committed: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl TransactionParticipant for JobSubmissionParticipant {
+    async fn prepare(&self, _tx_id: &str, operation: &str) -> Result<(), String> {
+        if operation != self.target.operation() {
+            return Err(format!("Unsupported job submission operation: {}", operation));
+        }
+        Ok(())
+    }
+
+    async fn commit(&self, _tx_id: &str, operation: &str) -> Result<(), String> {
+        if operation != self.target.operation() {
+            return Err(format!("Unsupported job submission operation: {}", operation));
+        }
+        if self.committed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.committed.store(true, Ordering::Release);
+        match self.target {
+            JobSubmissionTarget::Database => self
+                .queue
+                .insert_submission(&self.data)
+                .await
+                .map_err(|error| error.to_string())?,
+            JobSubmissionTarget::Redis => self
+                .queue
+                .enqueue_submission(&self.data)
+                .await
+                .map_err(|error| error.to_string())?,
+        }
+        Ok(())
+    }
+
+    async fn abort(&self, _tx_id: &str, operation: &str) -> Result<(), String> {
+        if operation != self.target.operation() {
+            return Err(format!("Unsupported job submission operation: {}", operation));
+        }
+        if !self.committed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let result = match self.target {
+            JobSubmissionTarget::Database => self
+                .queue
+                .delete_submission(&self.data.id)
+                .await
+                .map_err(|error| error.to_string()),
+            JobSubmissionTarget::Redis => self
+                .queue
+                .dequeue_submission(&self.data.id)
+                .await
+                .map_err(|error| error.to_string()),
+        };
+        if result.is_ok() {
+            self.committed.store(false, Ordering::Release);
+        }
+        result
+    }
+
+    fn supports(&self, operation: &str) -> bool {
+        operation == self.target.operation()
+    }
+}
+
 /// SQL-based job queue
 pub struct JobQueue {
     pool: DbPool,
@@ -347,16 +475,19 @@ impl JobQueue {
     }
 
     async fn run_migrations(pool: &DbPool) -> Result<(), JobError> {
-        let migration_sql = include_str!("../migrations/001_create_jobs_table.sql");
-
-        // Split and execute each statement
-        for statement in migration_sql.split(";") {
-            let stmt = statement.trim();
-            if !stmt.is_empty() {
-                pool.execute(stmt).await?;
+        match pool {
+            DbPool::Sqlite(pool) => {
+                crate::db::migrations::run_migrations(pool).await?;
+            }
+            DbPool::Postgres(pool) => {
+                for statement in POSTGRES_JOBS_MIGRATION.split(';') {
+                    let statement = statement.trim();
+                    if !statement.is_empty() {
+                        sqlx::query(statement).execute(pool).await?;
+                    }
+                }
             }
         }
-
         Ok(())
     }
 
@@ -390,22 +521,67 @@ impl JobQueue {
             None => (None, None, None),
         };
 
+        let submission = JobSubmissionData {
+            id,
+            job_type,
+            payload: payload_json,
+            webhook_url,
+            webhook_headers,
+            webhook_secret_hash,
+            timeout_secs: self.config.job_timeout_secs as i32,
+        };
+        let mut transaction = TwoPhaseTx::new(
+            id.to_string(),
+            vec!["database".to_string(), "redis".to_string()],
+        );
+        let database_participant: Arc<dyn TransactionParticipant> = Arc::new(
+            JobSubmissionParticipant {
+                queue: self.clone(),
+                target: JobSubmissionTarget::Database,
+                data: submission.clone(),
+                committed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        let redis_participant: Arc<dyn TransactionParticipant> = Arc::new(
+            JobSubmissionParticipant {
+                queue: self.clone(),
+                target: JobSubmissionTarget::Redis,
+                data: submission,
+                committed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+
+        TwoPhaseCoordinator::new()
+            .execute(
+                &mut transaction,
+                &[database_participant, redis_participant],
+            )
+            .await
+            .map_err(|error| {
+                JobError::ProcessingFailed(format!("Job submission transaction failed: {}", error))
+            })?;
+
+        tracing::info!(job_id = %id, "Job submitted to Redis queue");
+        Ok(id)
+    }
+
+    async fn insert_submission(&self, data: &JobSubmissionData) -> Result<(), sqlx::Error> {
         match &self.pool {
             DbPool::Postgres(pool) => {
                 sqlx::query(
                     r#"
                     INSERT INTO jobs (id, job_type, status, payload, webhook_url, webhook_headers, webhook_secret, timeout_secs)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    "#
+                    "#,
                 )
-                .bind(&id)
-                .bind(&job_type)
+                .bind(&data.id)
+                .bind(&data.job_type)
                 .bind(&JobStatus::Queued)
-                .bind(&payload_json)
-                .bind(&webhook_url)
-                .bind(&webhook_headers)
-                .bind(&webhook_secret_hash)
-                .bind(self.config.job_timeout_secs as i32)
+                .bind(&data.payload)
+                .bind(&data.webhook_url)
+                .bind(&data.webhook_headers)
+                .bind(&data.webhook_secret_hash)
+                .bind(data.timeout_secs)
                 .execute(pool)
                 .await?;
             }
@@ -414,36 +590,59 @@ impl JobQueue {
                     r#"
                     INSERT INTO jobs (id, job_type, status, payload, webhook_url, webhook_headers, webhook_secret, timeout_secs)
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                    "#
+                    "#,
                 )
-                .bind(&id.0.to_string())
-                .bind(format!("{:?}", job_type))
+                .bind(data.id.0.to_string())
+                .bind(format!("{:?}", data.job_type))
                 .bind("QUEUED")
-                .bind(&payload_json)
-                .bind(&webhook_url)
-                .bind(&webhook_headers)
-                .bind(&webhook_secret_hash)
-                .bind(self.config.job_timeout_secs as i32)
+                .bind(&data.payload)
+                .bind(&data.webhook_url)
+                .bind(&data.webhook_headers)
+                .bind(&data.webhook_secret_hash)
+                .bind(data.timeout_secs)
                 .execute(pool)
                 .await?;
             }
         }
+        Ok(())
+    }
 
-        // Push JobId to Redis queue
-        let mut conn = self
-            .redis
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|e| {
-                JobError::ProcessingFailed(format!("Failed to get Redis connection: {}", e))
-            })?;
+    async fn delete_submission(&self, id: &JobId) -> Result<(), sqlx::Error> {
+        match &self.pool {
+            DbPool::Postgres(pool) => {
+                sqlx::query("DELETE FROM jobs WHERE id = $1")
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+            }
+            DbPool::Sqlite(pool) => {
+                sqlx::query("DELETE FROM jobs WHERE id = ?1")
+                    .bind(id.0.to_string())
+                    .execute(pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
 
-        conn.lpush::<_, _, ()>("Perigee:jobs:queue", id.0.to_string())
-            .await
-            .map_err(|e| JobError::ProcessingFailed(format!("Redis LPUSH failed: {}", e)))?;
+    async fn enqueue_submission(&self, data: &JobSubmissionData) -> Result<(), redis::RedisError> {
+        let mut connection = self.redis.get_multiplexed_async_connection().await?;
+        connection
+            .lpush::<_, _, ()>("Perigee:jobs:queue", data.id.0.to_string())
+            .await?;
+        Ok(())
+    }
 
-        tracing::info!(job_id = %id, "Job submitted to Redis queue");
-        Ok(id)
+    async fn dequeue_submission(&self, id: &JobId) -> Result<(), redis::RedisError> {
+        let mut connection = self.redis.get_multiplexed_async_connection().await?;
+        let id = id.0.to_string();
+        let queue_result: Result<(), redis::RedisError> =
+            connection.lrem("Perigee:jobs:queue", 1, id.clone()).await;
+        queue_result?;
+        let processing_result: Result<(), redis::RedisError> =
+            connection.lrem("Perigee:jobs:processing", 1, id).await;
+        processing_result?;
+        Ok(())
     }
 
     /// Get a job by ID
@@ -815,12 +1014,20 @@ pub struct SubmitJobResponse {
 pub async fn submit_job_handler(
     State(state): State<Arc<crate::AppState>>,
     ApiJson(payload): ApiJson<SubmitJobRequest>,
+    SanitizedJson(payload): SanitizedJson<SubmitJobRequest>,
+    Extension(cancellation): Extension<RequestCancellation>,
+    Json(payload): Json<SubmitJobRequest>,
 ) -> Result<(StatusCode, Json<SubmitJobResponse>), AppError> {
-    let job_id = state
-        .job_queue
-        .submit(payload.job_type, payload.payload, payload.webhook)
+    let job_id = cancellation
+        .wait(
+            state
+                .job_queue
+                .submit(payload.job_type, payload.payload, payload.webhook),
+        )
         .await
         .map_err(AppError::from)?;
+        .map_err(|_| AppError::Internal("Request cancelled".into()))?
+        .map_err(|e| AppError::Internal(e.to_string()))?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -846,6 +1053,8 @@ pub async fn submit_job_handler(
 )]
 pub async fn get_job_handler(
     State(state): State<Arc<crate::AppState>>,
+    SanitizedPath(id): SanitizedPath<String>,
+    Extension(cancellation): Extension<RequestCancellation>,
     Path(id): Path<String>,
 ) -> Result<Json<Job>, AppError> {
     let job_id = JobId::from_str(&id).map_err(|_| {
@@ -857,6 +1066,13 @@ pub async fn get_job_handler(
         .await
         .map_err(AppError::from)?
         .ok_or_else(|| AppError::with_code(ErrorCode::JobNotFound, format!("Job {} not found", id)))?;
+    let job_id = JobId::from_str(&id).map_err(|_| AppError::BadRequest("Invalid job ID".into()))?;
+    let job = cancellation
+        .wait(state.job_queue.get(&job_id))
+        .await
+        .map_err(|_| AppError::Internal("Request cancelled".into()))?
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .ok_or_else(|| AppError::NotFound(format!("Job {} not found", id)))?;
 
     Ok(Json(job))
 }
@@ -876,6 +1092,8 @@ pub async fn get_job_handler(
 )]
 pub async fn cancel_job_handler(
     State(state): State<Arc<crate::AppState>>,
+    SanitizedPath(id): SanitizedPath<String>,
+    Extension(cancellation): Extension<RequestCancellation>,
     Path(id): Path<String>,
 ) -> Result<Json<Job>, AppError> {
     let job_id = JobId::from_str(&id).map_err(|_| {
@@ -886,6 +1104,16 @@ pub async fn cancel_job_handler(
         .cancel(&job_id)
         .await
         .map_err(AppError::from)?;
+    let job_id = JobId::from_str(&id).map_err(|_| AppError::BadRequest("Invalid job ID".into()))?;
+    let job = cancellation
+        .wait(state.job_queue.cancel(&job_id))
+        .await
+        .map_err(|_| AppError::Internal("Request cancelled".into()))?
+        .map_err(|e| match e {
+            JobError::NotFound(_) => AppError::NotFound(format!("Job {} not found", id)),
+            JobError::CannotCancel(_) => AppError::BadRequest(e.to_string()),
+            _ => AppError::Internal(e.to_string()),
+        })?;
 
     Ok(Json(job))
 }
@@ -1063,16 +1291,27 @@ impl JobWorker {
         // Mark as processing and emit first progress event
         queue.mark_processing(&job.id).await?;
         if let Some(b) = &bus {
-            b.publish(SimulationBus::progress(&job.id, 10, "Processing started"));
+            let _ = b.publish_async(SimulationBus::progress(&job.id, 10, "Processing started")).await;
         }
 
         // Process with timeout
         let timeout = Duration::from_secs(job.timeout_secs as u64);
+        let cancellation = CancellationToken::new();
         let result = tokio::time::timeout(
             timeout,
-            Self::execute_job(&job, &engine, &insights_engine, &insights_cache, queue, bus.clone(), reconciler),
+            Self::execute_job(
+                &job,
+                &engine,
+                &insights_engine,
+                &insights_cache,
+                queue,
+                bus.clone(),
+                reconciler,
+                cancellation.clone(),
+            ),
         )
         .await;
+        cancellation.cancel();
 
         // Handle result, emit terminal event, and optionally send webhook
         match result {
@@ -1086,14 +1325,21 @@ impl JobWorker {
                         ..
                     } = job_result
                     {
-                        b.publish(SimulationBus::completed(
-                            &job.id,
-                            &sim.resources,
-                            sim.cost_stroops,
-                        ));
+                        let _ = b
+                            .publish_async(SimulationBus::completed(
+                                &job.id,
+                                &sim.resources,
+                                sim.cost_stroops,
+                            ))
+                            .await;
                     } else {
-                        // OptimizeLimits / Compare jobs: emit a generic completion
-                        b.publish(SimulationBus::progress(&job.id, 100, "Completed"));
+                        let _ = b
+                            .publish_async(SimulationBus::completed(
+                                &job.id,
+                                &SorobanResources::default(),
+                                0,
+                            ))
+                            .await;
                     }
                 }
 
@@ -1118,11 +1364,13 @@ impl JobWorker {
                 let _ = queue.retry_job(&job).await;
 
                 if let Some(b) = &bus {
-                    b.publish(SimulationBus::failed(
-                        &job.id,
-                        &error_msg,
-                        "ProcessingError",
-                    ));
+                    let _ = b
+                        .publish_async(SimulationBus::failed(
+                            &job.id,
+                            &error_msg,
+                            "ProcessingError",
+                        ))
+                        .await;
                 }
 
                 if let Some(webhook_config) = job.get_webhook_config() {
@@ -1146,7 +1394,9 @@ impl JobWorker {
                 let _ = queue.retry_job(&job).await;
 
                 if let Some(b) = &bus {
-                    b.publish(SimulationBus::failed(&job.id, &error_msg, "Timeout"));
+                    let _ = b
+                        .publish_async(SimulationBus::failed(&job.id, &error_msg, "Timeout"))
+                        .await;
                 }
 
                 if let Some(webhook_config) = job.get_webhook_config() {
@@ -1175,6 +1425,7 @@ impl JobWorker {
         queue: &JobQueue,
         bus: Option<Arc<SimulationBus>>,
         reconciler: Option<Arc<FeeReconciler>>,
+        cancellation: CancellationToken,
     ) -> Result<JobResult, Box<dyn std::error::Error + Send + Sync>> {
         let payload = job.get_payload().ok_or("Invalid payload")?;
 
@@ -1183,7 +1434,18 @@ impl JobWorker {
             ($percent:expr, $msg:expr) => {{
                 let _ = queue.update_progress(&job.id, $percent, $msg).await;
                 if let Some(ref b) = bus {
-                    b.publish(SimulationBus::progress(&job.id, $percent, $msg));
+                    let _ = b
+                        .publish_async(SimulationBus::progress(&job.id, $percent, $msg))
+                        .await;
+                let _ = wait_for_cancellation(
+                    &cancellation,
+                    queue.update_progress(&job.id, $percent, $msg),
+                )
+                .await;
+                if !cancellation.is_cancelled() {
+                    if let Some(ref b) = bus {
+                        b.publish(SimulationBus::progress(&job.id, $percent, $msg));
+                    }
                 }
             }};
         }
@@ -1199,13 +1461,14 @@ impl JobWorker {
 
                 let args_ref = args.as_ref().cloned().unwrap_or_default();
                 let sim_result = engine
-                    .simulate_from_contract_id(
+                    .simulate_from_contract_id_with_cancellation(
                         &contract_id,
                         &function_name,
                         args_ref,
                         ledger_overrides,
                         None,
                         None,
+                        cancellation.clone(),
                     )
                     .await
                     .map_err(|e| {
@@ -1216,12 +1479,13 @@ impl JobWorker {
                         let msg = e.to_string();
                         if let Some(ref b) = bus {
                             if msg.contains("failover") || msg.contains("provider") {
-                                b.publish(SimulationBus::provider_failover(
+                                let event = SimulationBus::provider_failover(
                                     &job.id,
                                     "unknown",
                                     "next-available",
                                     &msg,
-                                ));
+                                );
+                                let _ = b.publish(event);
                             }
                         }
                         e
@@ -1231,12 +1495,14 @@ impl JobWorker {
                 // (SimulationEngine sets `sim_result.provider_name` when consensus
                 //  succeeded; we broadcast an agreement event here.)
                 if let Some(ref b) = bus {
-                    b.publish(SimulationBus::consensus_check(
-                        &job.id,
-                        true,   // reached this point → consensus passed (or failover mode)
-                        vec![], // provider names are opaque at this layer
-                        None,
-                    ));
+                    let _ = b
+                        .publish_async(SimulationBus::consensus_check(
+                            &job.id,
+                            true,
+                            vec![],
+                            None,
+                        ))
+                        .await;
                 }
 
                 progress!(70, "Generating insights");
@@ -1274,7 +1540,13 @@ impl JobWorker {
                 progress!(30, "Running optimization");
 
                 let report = engine
-                    .optimize_limits(&contract_id, &function_name, args, safety_margin)
+                    .optimize_limits_with_cancellation(
+                        &contract_id,
+                        &function_name,
+                        args,
+                        safety_margin,
+                        cancellation.clone(),
+                    )
                     .await?;
 
                 progress!(90, "Finalizing results");
@@ -1299,29 +1571,57 @@ impl JobWorker {
 
                 let queue_for_cb = queue.clone();
                 let bus_for_cb = bus.clone();
+                let cancellation_for_cb = cancellation.clone();
                 let job_id_for_cb = job.id;
+                let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(16);
+                let progress_task = tokio::spawn(async move {
+                    while let Some((percent, msg)) = progress_rx.recv().await {
+                        let _ = queue_for_cb
+                            .update_progress(&job_id_for_cb, percent, &msg)
+                            .await;
+                        if let Some(ref bus) = bus_for_cb {
+                            let _ = bus
+                                .publish_async(SimulationBus::progress(
+                                    &job_id_for_cb,
+                                    percent,
+                                    &msg,
+                                ))
+                                .await;
+                        }
+                    }
+                });
 
                 let report = reconciler
-                    .run(
+                    .run_with_cancellation(
                         from_ledger,
                         to_ledger,
                         tolerance_pct,
                         Some(Box::new(move |percent, msg| {
+                            let _ = progress_tx.try_send((percent, msg.to_string()));
                             let q = queue_for_cb.clone();
                             let b = bus_for_cb.clone();
                             let jid = job_id_for_cb;
                             let msg = msg.to_string();
+                            let progress_cancellation = cancellation_for_cb.clone();
                             tokio::spawn(async move {
-                                let _ = q.update_progress(&jid, percent, &msg).await;
-                                if let Some(ref bus) = b {
-                                    bus.publish(crate::ws::SimulationBus::progress(
-                                        &jid, percent, &msg,
-                                    ));
+                                tokio::select! {
+                                    _ = progress_cancellation.cancelled() => {}
+                                    _ = async move {
+                                        let _ = q.update_progress(&jid, percent, &msg).await;
+                                        if let Some(ref bus) = b {
+                                            bus.publish(crate::ws::SimulationBus::progress(
+                                                &jid, percent, &msg,
+                                            ));
+                                        }
+                                    } => {}
                                 }
                             });
                         })),
+                        cancellation.clone(),
                     )
-                    .await?;
+                    .await;
+                let _ = progress_task.await;
+                let report = report?;
 
                 progress!(100, "Reconciliation complete");
 

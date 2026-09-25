@@ -12,6 +12,11 @@
 //! loaded for the target contract or a retriable error occurs.
 
 pub mod async_bounds;
+pub mod cancellation;
 pub mod local;
 
+pub use cancellation::{
+    wait_for_blocking, wait_for_cancellation, CancellationError, RequestCancellation,
+    RequestCancellationGuard, RequestCancelled, RequestContext,
+};
 pub use local::{ContractInvocation, LocalRunner};

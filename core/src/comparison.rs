@@ -1,6 +1,7 @@
 use crate::simulation::{SimulationEngine, SimulationError, SorobanResources};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use utoipa::ToSchema;
 
@@ -101,6 +102,14 @@ pub async fn run_comparison(
     engine: &SimulationEngine,
     mode: CompareMode,
 ) -> Result<RegressionReport, ComparisonError> {
+    run_comparison_with_cancellation(engine, mode, CancellationToken::new()).await
+}
+
+pub async fn run_comparison_with_cancellation(
+    engine: &SimulationEngine,
+    mode: CompareMode,
+    cancellation: CancellationToken,
+) -> Result<RegressionReport, ComparisonError> {
     let (current_resources, base_resources) = match mode {
         CompareMode::LocalVsLocal {
             current_wasm,
@@ -114,8 +123,24 @@ pub async fn run_comparison(
             let base_id = base_wasm.to_string_lossy().to_string();
 
             let (current_result, base_result) = tokio::join!(
-                engine.simulate_from_contract_id(&current_id, "compare", vec![], None, None, None),
-                engine.simulate_from_contract_id(&base_id, "compare", vec![], None, None, None)
+                engine.simulate_from_contract_id_with_cancellation(
+                    &current_id,
+                    "compare",
+                    vec![],
+                    None,
+                    None,
+                    None,
+                    cancellation.clone(),
+                ),
+                engine.simulate_from_contract_id_with_cancellation(
+                    &base_id,
+                    "compare",
+                    vec![],
+                    None,
+                    None,
+                    None,
+                    cancellation.clone(),
+                )
             );
 
             (current_result?.resources, base_result?.resources)
@@ -129,21 +154,23 @@ pub async fn run_comparison(
             let current_id = current_wasm.to_string_lossy().to_string();
 
             let (current_result, base_result) = tokio::join!(
-                engine.simulate_from_contract_id(
+                engine.simulate_from_contract_id_with_cancellation(
                     &current_id,
                     &function_name,
                     args.clone(),
                     None,
                     None,
                     None,
+                    cancellation.clone(),
                 ),
-                engine.simulate_from_contract_id(
+                engine.simulate_from_contract_id_with_cancellation(
                     &contract_id,
                     &function_name,
                     args,
                     None,
                     None,
-                    None
+                    None,
+                    cancellation,
                 )
             );
 

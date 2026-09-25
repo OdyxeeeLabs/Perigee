@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 ///
 /// - `page` is 1-indexed; defaults to 1.
 /// - `page_size` defaults to 50; maximum is 200.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct PaginationParams {
     #[serde(default = "default_page")]
     pub page: u32,
@@ -181,7 +181,7 @@ pub struct ReconcileResponse {
     pub message: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct ListReportsQuery {
     #[serde(default = "default_limit")]
     pub limit: i64,

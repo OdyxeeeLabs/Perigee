@@ -1,6 +1,6 @@
 use axum::{
     async_trait,
-    extract::{rejection::JsonRejection, FromRequest, Request},
+    extract::{FromRequest, Request},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 use std::env;
 use thiserror::Error;
 
+use crate::input_sanitization::{deserialize_sanitized, SanitizedJson};
 use crate::simulation::SimulationError;
 
 /// Returns `true` when `APP_ENV=production`.
@@ -257,6 +258,12 @@ impl From<SimulationError> for AppError {
             }
             SimulationError::NodeTimeout => {
                 AppError::with_code(ErrorCode::RpcTimeout, "RPC request timed out")
+
+            // Server errors (HTTP 500)
+            SimulationError::NodeTimeout => AppError::Internal("RPC request timed out".to_string()),
+            SimulationError::Cancelled => AppError::Internal("Request cancelled".to_string()),
+            SimulationError::RpcRequestFailed(msg) => {
+                AppError::Internal(format!("RPC request failed: {}", msg))
             }
             SimulationError::RpcRequestFailed(msg) => {
                 AppError::with_code(ErrorCode::RpcRequestFailed, format!("RPC request failed: {}", msg))
@@ -409,6 +416,10 @@ where
             }
             Err(rejection) => Err(json_rejection_error(&rejection)),
         }
+        let SanitizedJson(value) = SanitizedJson::<serde_json::Value>::from_request(req, state).await?;
+        let value: T = deserialize_sanitized(value)?;
+        value.validate().map_err(AppError::BadRequest)?;
+        Ok(ValidatedJson(value))
     }
 }
 

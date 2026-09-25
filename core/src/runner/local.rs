@@ -10,11 +10,13 @@
 //! interpreter is synchronous and CPU-heavy; stalling the async runtime with
 //! it would starve other simulations.
 
+use crate::runner::cancellation::wait_for_blocking;
 use crate::simulation::{SimulationError, SimulationResult, SorobanResources};
 use soroban_env_host::LedgerInfo;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 /// A single contract-invocation request: which contract, which function,
 /// and which arguments to pass.
@@ -97,6 +99,19 @@ impl LocalRunner {
         &self,
         invocation: &ContractInvocation,
     ) -> Result<SimulationResult, SimulationError> {
+        self.simulate_with_cancellation(invocation, CancellationToken::new())
+            .await
+    }
+
+    pub async fn simulate_with_cancellation(
+        &self,
+        invocation: &ContractInvocation,
+        cancellation: CancellationToken,
+    ) -> Result<SimulationResult, SimulationError> {
+        if cancellation.is_cancelled() {
+            return Err(SimulationError::Cancelled);
+        }
+
         let wasm_bytes = {
             let store = self.wasm_store.read().await;
             match store.get(&invocation.contract_hash) {
@@ -107,17 +122,20 @@ impl LocalRunner {
 
         let function_name = invocation.function_name.clone();
         let args = invocation.args.clone();
-
-        // The Soroban host interpreter is synchronous and CPU-heavy; push
-        // it onto the blocking pool so the async runtime keeps serving
-        // other simulations.
-        let resources = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             execute_wasm_invocation(wasm_bytes, function_name, args)
-        })
-        .await
-        .map_err(|e| {
-            SimulationError::ExecutionFailed(format!("blocking task join failed: {e}"))
-        })??;
+        });
+
+        let resources = wait_for_blocking(&cancellation, task)
+            .await
+            .map_err(|_| SimulationError::Cancelled)?
+            .map_err(|e| {
+                SimulationError::ExecutionFailed(format!("blocking task join failed: {e}"))
+            })?;
+
+        if cancellation.is_cancelled() {
+            return Err(SimulationError::Cancelled);
+        }
 
         Ok(SimulationResult {
             cost_stroops: estimate_cost_stroops(&resources),

@@ -1,4 +1,5 @@
 use crate::parser::ArgParser;
+use crate::runner::cancellation::wait_for_cancellation;
 use crate::rpc_provider::ProviderRegistry;
 use crate::stellar_service::{StellarService, StellarServiceConfig, StellarServiceError};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -39,6 +40,9 @@ pub enum SimulationError {
 
     #[error("RPC node timeout")]
     NodeTimeout,
+
+    #[error("Request cancelled")]
+    Cancelled,
 
     #[error("Node returned an error: {0}")]
     NodeError(String),
@@ -1510,6 +1514,32 @@ impl SimulationEngine {
         protocol_version: Option<u32>,
         enable_experimental: Option<bool>,
     ) -> Result<SimulationResult, SimulationError> {
+        self.simulate_from_contract_id_with_cancellation(
+            contract_id,
+            function_name,
+            args,
+            ledger_overrides,
+            protocol_version,
+            enable_experimental,
+            CancellationToken::new(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn simulate_from_contract_id_with_cancellation(
+        &self,
+        contract_id: &str,
+        function_name: &str,
+        args: Vec<String>,
+        ledger_overrides: Option<HashMap<String, String>>,
+        protocol_version: Option<u32>,
+        enable_experimental: Option<bool>,
+        cancellation: CancellationToken,
+    ) -> Result<SimulationResult, SimulationError> {
+        if cancellation.is_cancelled() {
+            return Err(SimulationError::Cancelled);
+        }
         if contract_id.is_empty() {
             return Err(SimulationError::NodeError(
                 "Contract ID cannot be empty".to_string(),
@@ -1519,16 +1549,19 @@ impl SimulationEngine {
         if let Some(overrides) = ledger_overrides {
             if !overrides.is_empty() || protocol_version.is_some() || enable_experimental.is_some()
             {
-                return self
-                    .simulate_locally(
+                return wait_for_cancellation(
+                    &cancellation,
+                    self.simulate_locally(
                         contract_id,
                         function_name,
                         args,
                         overrides,
                         protocol_version,
                         enable_experimental,
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .map_err(|_| SimulationError::Cancelled)?;
             }
         }
 
@@ -1540,7 +1573,10 @@ impl SimulationEngine {
             let contract_hash = self.parse_contract_id(contract_id)?;
             let invocation =
                 crate::runner::ContractInvocation::new(contract_hash, function_name, args.clone());
-            match runner.simulate(&invocation).await {
+            match runner
+                .simulate_with_cancellation(&invocation, cancellation.clone())
+                .await
+            {
                 Ok(result) => {
                     tracing::debug!(
                         contract_id = %contract_id,
@@ -1562,7 +1598,12 @@ impl SimulationEngine {
         }
 
         let transaction_xdr = self.create_invoke_transaction(contract_id, function_name, args)?;
-        self.simulate_transaction(&transaction_xdr).await
+        wait_for_cancellation(
+            &cancellation,
+            self.simulate_transaction(&transaction_xdr),
+        )
+        .await
+        .map_err(|_| SimulationError::Cancelled)?
     }
 
     /// Optimized limit discovery via binary search
@@ -1574,107 +1615,77 @@ impl SimulationEngine {
         args: Vec<String>,
         safety_margin: f64,
     ) -> Result<OptimizationReport, SimulationError> {
+        self.optimize_limits_with_cancellation(
+            contract_id,
+            function_name,
+            args,
+            safety_margin,
+            CancellationToken::new(),
+        )
+        .await
+    }
+
+    pub async fn optimize_limits_with_cancellation(
+        &self,
+        contract_id: &str,
+        function_name: &str,
+        args: Vec<String>,
+        safety_margin: f64,
+        cancellation: CancellationToken,
+    ) -> Result<OptimizationReport, SimulationError> {
         // 1. Get initial estimate
         let initial_result = self
-            .simulate_from_contract_id(contract_id, function_name, args.clone(), None, None, None)
+            .simulate_from_contract_id_with_cancellation(
+                contract_id,
+                function_name,
+                args.clone(),
+                None,
+                None,
+                None,
+                cancellation.clone(),
+            )
             .await?;
         let estimate = initial_result.resources;
         let contract_id = contract_id.to_string();
         let function_name = function_name.to_string();
         let transaction_data = initial_result.transaction_data.clone();
-        let cancellation = CancellationToken::new();
 
-        let cpu_search = {
-            let engine = self.clone();
-            let contract_id = contract_id.clone();
-            let function_name = function_name.clone();
-            let args = args.clone();
-            let estimate = estimate.clone();
-            let transaction_data = transaction_data.clone();
-            let cancellation = cancellation.clone();
-            tokio::spawn(async move {
-                engine
-                    .binary_search_resource(
-                        &contract_id,
-                        &function_name,
-                        args,
-                        ResourceSearchKind::Cpu,
-                        estimate,
-                        &transaction_data,
-                        cancellation,
-                    )
-                    .await
-            })
-        };
-
-        let ram_search = {
-            let engine = self.clone();
-            let contract_id = contract_id.clone();
-            let function_name = function_name.clone();
-            let args = args.clone();
-            let estimate = estimate.clone();
-            let transaction_data = transaction_data.clone();
-            let cancellation = cancellation.clone();
-            tokio::spawn(async move {
-                engine
-                    .binary_search_resource(
-                        &contract_id,
-                        &function_name,
-                        args,
-                        ResourceSearchKind::Ram,
-                        estimate,
-                        &transaction_data,
-                        cancellation,
-                    )
-                    .await
-            })
-        };
-
-        let ledger_read_search = {
-            let engine = self.clone();
-            let contract_id = contract_id.clone();
-            let function_name = function_name.clone();
-            let args = args.clone();
-            let estimate = estimate.clone();
-            let transaction_data = transaction_data.clone();
-            let cancellation = cancellation.clone();
-            tokio::spawn(async move {
-                engine
-                    .binary_search_resource(
-                        &contract_id,
-                        &function_name,
-                        args,
-                        ResourceSearchKind::LedgerRead,
-                        estimate,
-                        &transaction_data,
-                        cancellation,
-                    )
-                    .await
-            })
-        };
-
-        let ledger_write_search = {
-            let engine = self.clone();
-            let contract_id = contract_id.clone();
-            let function_name = function_name.clone();
-            let args = args.clone();
-            let estimate = estimate.clone();
-            let transaction_data = transaction_data.clone();
-            let cancellation = cancellation.clone();
-            tokio::spawn(async move {
-                engine
-                    .binary_search_resource(
-                        &contract_id,
-                        &function_name,
-                        args,
-                        ResourceSearchKind::LedgerWrite,
-                        estimate,
-                        &transaction_data,
-                        cancellation,
-                    )
-                    .await
-            })
-        };
+        let cpu_search = self.binary_search_resource(
+            &contract_id,
+            &function_name,
+            args.clone(),
+            ResourceSearchKind::Cpu,
+            estimate.clone(),
+            &transaction_data,
+            cancellation.clone(),
+        );
+        let ram_search = self.binary_search_resource(
+            &contract_id,
+            &function_name,
+            args.clone(),
+            ResourceSearchKind::Ram,
+            estimate.clone(),
+            &transaction_data,
+            cancellation.clone(),
+        );
+        let ledger_read_search = self.binary_search_resource(
+            &contract_id,
+            &function_name,
+            args.clone(),
+            ResourceSearchKind::LedgerRead,
+            estimate.clone(),
+            &transaction_data,
+            cancellation.clone(),
+        );
+        let ledger_write_search = self.binary_search_resource(
+            &contract_id,
+            &function_name,
+            args,
+            ResourceSearchKind::LedgerWrite,
+            estimate,
+            &transaction_data,
+            cancellation.clone(),
+        );
 
         let (cpu_search, ram_search, ledger_read_search, ledger_write_search) = tokio::join!(
             cpu_search,
@@ -1870,33 +1881,28 @@ impl SimulationEngine {
     }
 
     fn resolve_search_result(
-        result: Result<Result<u64, SimulationError>, tokio::task::JoinError>,
+        result: Result<u64, SimulationError>,
         resource_type: ResourceSearchKind,
     ) -> Result<u64, SimulationError> {
-        match result {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(err)) => Err(err),
-            Err(err) => Err(SimulationError::RpcRequestFailed(format!(
-                "{} optimization task failed: {}",
-                resource_type.label(),
+        result.map_err(|err| {
+            if Self::is_cancelled_search_error(&err) {
                 err
-            ))),
-        }
+            } else {
+                SimulationError::RpcRequestFailed(format!(
+                    "{} optimization search failed: {}",
+                    resource_type.label(),
+                    err
+                ))
+            }
+        })
     }
 
-    fn cancelled_search_error(resource_type: ResourceSearchKind) -> SimulationError {
-        SimulationError::RpcRequestFailed(format!(
-            "Optimization search cancelled while {} search was running",
-            resource_type.label()
-        ))
+    fn cancelled_search_error(_resource_type: ResourceSearchKind) -> SimulationError {
+        SimulationError::Cancelled
     }
 
     fn is_cancelled_search_error(err: &SimulationError) -> bool {
-        matches!(
-            err,
-            SimulationError::RpcRequestFailed(msg)
-                if msg.starts_with("Optimization search cancelled")
-        )
+        matches!(err, SimulationError::Cancelled)
     }
 
     fn is_significant_search_failure(err: &SimulationError) -> bool {
@@ -2345,6 +2351,17 @@ impl SimulationEngine {
             )
             .await
             .map_err(SimulationError::from)?;
+            .map_err(|e| match e {
+                StellarServiceError::Timeout { .. } => SimulationError::NodeTimeout,
+                StellarServiceError::Cancelled { .. } => SimulationError::Cancelled,
+                StellarServiceError::Network { source, .. } => {
+                    SimulationError::NetworkError(source)
+                }
+                StellarServiceError::HttpError { status, url } => {
+                    SimulationError::RpcRequestFailed(format!("HTTP error: {status} from {url}"))
+                }
+                other => SimulationError::RpcRequestFailed(other.to_string()),
+            })?;
 
         let rpc_response: SimulateTransactionResponse =
             serde_json::from_value(raw).map_err(|e| {
