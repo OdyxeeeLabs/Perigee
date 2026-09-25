@@ -17,6 +17,7 @@ mod config;
 mod db;
 mod error_codes;
 mod errors;
+mod namespaced_errors;
 pub mod fee_analytics;
 pub mod fee_collector;
 pub mod fee_store;
@@ -35,6 +36,7 @@ pub mod reconciliation;
 mod reputation;
 mod rounding;
 mod routing;
+mod rate_limiter;
 pub mod rpc_provider;
 mod runner;
 mod secret_hash;
@@ -50,6 +52,8 @@ mod ws;
 
 use crate::cache::{ContractCache, SimulationCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
+use crate::error_codes::{ErrorCode, ErrorResponse};
+use crate::errors::{ApiJson, AppError, Validate, ValidatedJson};
 use crate::errors::{AppError, Validate, ValidatedJson};
 use crate::input_sanitization::{SanitizedJson, SanitizedQuery};
 use axum::{
@@ -74,8 +78,10 @@ use crate::fee_store::FeeStore;
 use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
 use crate::insights::InsightsEngine;
 use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
-use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
-use crate::runner::RequestCancellation;
+use crate::rate_limiter::{ApiRateLimiter, RateLimitConfig, RateLimitLayer};
+use crate::rpc_provider::{
+    CircuitBreakerConfig, ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider,
+};
 use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult, SorobanResources};
 use crate::signed_receipt::ReceiptSigner;
 use crate::logging::{LogLevelSnapshot, LogLevelUpdate, RuntimeLogController};
@@ -263,6 +269,9 @@ fn build_cors_layer(cors_allowed_origins: &str) -> CorsLayer {
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
             header::ACCEPT,
+            axum::http::HeaderName::from_static("x-api-key"),
+            axum::http::HeaderName::from_static("x-request-id"),
+            axum::http::HeaderName::from_static("x-correlation-id"),
         ])
         .allow_methods([
             Method::GET,
@@ -1109,7 +1118,10 @@ async fn analyze_wasm(
 
     let wasm_bytes = BASE64
         .decode(&payload.wasm_bytes)
-        .map_err(|e| AppError::BadRequest(format!("Invalid base64 WASM data: {}", e)))?;
+        .map_err(|e| AppError::with_code(
+            ErrorCode::InvalidBase64,
+            format!("Invalid base64 WASM data: {}", e),
+        ))?;
 
     let function_name = payload.function_name.clone();
     let args = payload.args.clone().unwrap_or_default();
@@ -1211,7 +1223,10 @@ async fn analyze_wasm_profile(
 
     let wasm_bytes = BASE64
         .decode(&payload.wasm_bytes)
-        .map_err(|e| AppError::BadRequest(format!("Invalid base64 WASM data: {}", e)))?;
+        .map_err(|e| AppError::with_code(
+            ErrorCode::InvalidBase64,
+            format!("Invalid base64 WASM data: {}", e),
+        ))?;
 
     let function_name = payload.function_name.clone();
     let args = payload.args.clone();
@@ -1271,7 +1286,10 @@ async fn analyze_wasm_branches(
 
     let wasm_bytes = BASE64
         .decode(&payload.wasm_bytes)
-        .map_err(|e| AppError::BadRequest(format!("Invalid base64 WASM data: {}", e)))?;
+        .map_err(|e| AppError::with_code(
+            ErrorCode::InvalidBase64,
+            format!("Invalid base64 WASM data: {}", e),
+        ))?;
 
     let function_name = payload.function_name.clone();
     let args = payload.args.clone().unwrap_or_default();
@@ -1689,7 +1707,10 @@ async fn analyze_gas_golfing(
 
     let wasm_bytes = BASE64
         .decode(&payload.wasm_bytes)
-        .map_err(|e| AppError::BadRequest(format!("Invalid base64 WASM data: {}", e)))?;
+        .map_err(|e| AppError::with_code(
+            ErrorCode::InvalidBase64,
+            format!("Invalid base64 WASM data: {}", e),
+        ))?;
 
     let contract_name = payload.contract_name.clone();
 
@@ -2032,7 +2053,11 @@ async fn ready_check(
     if db_ok && rpc_ok && agents_ok {
         (axum::http::StatusCode::OK, "OK").into_response()
     } else {
-        (axum::http::StatusCode::SERVICE_UNAVAILABLE, "Service Unavailable").into_response()
+        let body = Json(ErrorResponse::from_error_code(
+            ErrorCode::ServiceUnavailable,
+            "Service is not ready",
+        ));
+        (axum::http::StatusCode::SERVICE_UNAVAILABLE, body).into_response()
     }
 }
 
@@ -2050,7 +2075,7 @@ async fn registry_peers(
 
 async fn registry_gossip(
     State(state): State<Arc<AppState>>,
-    SanitizedJson(snapshot): SanitizedJson<RegistrySnapshot>,
+    ApiJson(snapshot): ApiJson<RegistrySnapshot>,
 ) -> Json<RegistrySnapshot> {
     state.provider_registry.merge_snapshot(snapshot).await;
     Json(state.provider_registry.registry_snapshot().await)
@@ -2428,7 +2453,19 @@ async fn main() {
     let provider_names: Vec<&str> = providers.iter().map(|p| p.name.as_str()).collect();
     tracing::info!(providers = ?provider_names, "RPC provider pool");
 
-    let registry = ProviderRegistry::new_with_config(providers, build_registry_config(&config));
+    let circuit_breaker_config = CircuitBreakerConfig::from_env();
+    tracing::info!(
+        failure_threshold = circuit_breaker_config.failure_threshold,
+        recovery_timeout_secs = circuit_breaker_config.recovery_timeout.as_secs(),
+        success_threshold = circuit_breaker_config.success_threshold,
+        half_open_max_calls = circuit_breaker_config.half_open_max_calls,
+        "RPC circuit breaker configured"
+    );
+    let registry = ProviderRegistry::new_with_config_and_circuit_breaker(
+        providers,
+        build_registry_config(&config),
+        circuit_breaker_config,
+    );
     tracing::info!(
         instance_id = registry.instance_id(),
         public_url = ?registry.public_base_url(),
@@ -2713,7 +2750,18 @@ async fn main() {
         )
         .route_layer(axum::middleware::from_fn(auth::auth_middleware));
 
-    let api_routes = Router::new()
+    let public_rate_limit_config = RateLimitConfig::from_env();
+    tracing::info!(
+        enabled = public_rate_limit_config.enabled,
+        default_requests = public_rate_limit_config.default.max_requests,
+        default_window_secs = public_rate_limit_config.default.window.as_secs(),
+        endpoint_overrides = public_rate_limit_config.endpoints.len(),
+        "Public API rate limiter configured"
+    );
+    let public_rate_limiter = ApiRateLimiter::new(public_rate_limit_config);
+    let public_rate_limit_layer = RateLimitLayer::new(public_rate_limiter);
+
+    let public_routes = Router::new()
         .route("/health", get(health_check))
         .route("/ready", get(ready_check))
         .route("/metrics", get(metrics_handler))
@@ -2723,11 +2771,9 @@ async fn main() {
         .route("/auth/revoke", post(auth::revoke_handler))
         .route("/auth/emergency-pause", post(auth::emergency_pause_handler))
         .route("/auth/jwks", get(auth::jwks_handler))
-        // Fee market routes (public access)
         .route("/fees/recommend", get(fee_recommend))
         .route("/fees/history", get(fee_history))
         .route("/fees/analytics", get(fee_analytics))
-        // Manager onboarding with approval/KYC gate (API-33)
         .route("/managers/register", post(manager_store::register_manager_handler))
         .route("/managers", get(manager_store::list_managers_handler))
         .route(
@@ -2746,7 +2792,6 @@ async fn main() {
             "/managers/status/:stellar_address",
             get(manager_store::check_manager_status_handler),
         )
-        // Reconciliation routes (async via job queue)
         .route("/reconcile", post(reconciliation::reconcile_handler))
         .route(
             "/reconcile/reports",
@@ -2756,9 +2801,11 @@ async fn main() {
             "/reconcile/:job_id",
             get(reconciliation::get_reconcile_job_handler),
         )
-        // WebSocket streaming (Issue #105) — no auth required on the upgrade;
-        // the client passes the job_id in the path.
         .route("/ws/jobs/:job_id", get(ws::ws_handler))
+        .layer(public_rate_limit_layer);
+
+    let api_routes = Router::new()
+        .merge(public_routes)
         .merge(protected);
 
     let app = Router::new()
@@ -2776,17 +2823,18 @@ async fn main() {
         // version strings or routing internals.
         .fallback(not_found_handler)
         .layer(Extension(auth_state))
-        .layer(cors)
         .layer(axum::middleware::from_fn(
             crate::middleware::method_not_allowed_middleware,
         ))
         .layer(axum::middleware::from_fn(
-            crate::middleware::receipt_middleware,
+            crate::middleware::api_version_middleware,
         ))
+        .layer(cors)
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 2)) // 2 MB limit
         .layer(axum::middleware::from_fn(
             crate::middleware::correlation_id_middleware,
         ))
-        .layer(axum::middleware::from_fn(
+        .layer(TraceLayer::new_for_http())
             crate::middleware::request_cancellation_middleware,
         ))
         .layer(axum::middleware::from_fn(
@@ -3278,6 +3326,7 @@ mod tests {
 
 async fn analyze_simulation(
     State(simulation_service): State<Arc<SimulationService>>,
+    ApiJson(metric): ApiJson<SimulationMetric>,
     SanitizedJson(metric): SanitizedJson<SimulationMetric>,
 ) -> Result<Json<AnalysisResult>, AppError> {
     let result = simulation_service.record_and_analyze(metric).await?;

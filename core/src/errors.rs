@@ -82,6 +82,9 @@ pub enum AppError {
     /// and the caller is authenticated — the authority behind it has lapsed.
     #[error("Policy expired: {0}")]
     PolicyExpired(String),
+
+    #[error("{1}")]
+    Named(ErrorCode, String),
 }
 
 impl AppError {
@@ -99,6 +102,7 @@ impl AppError {
             | Self::TooManyRequests(msg)
             | Self::Conflict(msg)
             | Self::PolicyExpired(msg) => msg.as_str(),
+            Self::Named(_, msg) => msg.as_str(),
         }
     }
 
@@ -112,15 +116,31 @@ impl AppError {
             Self::TooManyRequests(_) => ErrorCode::TooManyRequests,
             Self::Conflict(_) => ErrorCode::Conflict,
             Self::PolicyExpired(_) => ErrorCode::PolicyExpired,
+            Self::Named(code, _) => *code,
         }
     }
 
-    fn status_code(&self) -> StatusCode {
+    pub fn status_code(&self) -> StatusCode {
         self.error_code().status_code()
     }
 
+    pub fn with_code(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::Named(code, message.into())
+    }
+
+    pub fn from_code(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::with_code(code, message)
+    }
+
+    pub fn legacy_error_code(&self) -> ErrorCode {
+        match self {
+            Self::Named(code, _) => code.legacy_code(),
+            _ => self.error_code(),
+        }
+    }
+
     fn error_type(&self) -> &'static str {
-        self.error_code().as_str()
+        self.legacy_error_code().as_str()
     }
 
     /// The client-visible message for this error.
@@ -161,6 +181,25 @@ impl AppError {
             // The caller needs the expiry timestamp to understand why, and it
             // is not sensitive — it is their own policy.
             Self::PolicyExpired(msg) => format!("Policy expired: {}", msg),
+            Self::Named(code, msg) => {
+                if code.is_sensitive() && is_production() {
+                    match *code {
+                        ErrorCode::InvalidApiKey | ErrorCode::InvalidSignature => {
+                            "Unauthorized.".to_string()
+                        }
+                        ErrorCode::CircuitBreakerOpen | ErrorCode::NoHealthyRpcProviders => {
+                            "RPC provider temporarily unavailable.".to_string()
+                        }
+                        ErrorCode::RpcTimeout | ErrorCode::NodeTimeout => {
+                            "RPC provider timed out.".to_string()
+                        }
+                        _ => "An internal server error occurred. Please try again later."
+                            .to_string(),
+                    }
+                } else {
+                    msg.clone()
+                }
+            }
         }
     }
 }
@@ -181,12 +220,11 @@ impl IntoResponse for AppError {
             "Request failed"
         );
 
-        let body = Json(ErrorResponse {
-            code: code.as_str().to_string(),
-            error: code.as_str().to_string(),
-            message: self.client_message(),
-            details: None,
-        });
+        let body = Json(ErrorResponse::from_error_code_with_legacy(
+            code,
+            self.legacy_error_code(),
+            self.client_message(),
+        ));
 
         (status, body).into_response()
     }
@@ -198,28 +236,28 @@ impl IntoResponse for AppError {
 impl From<SimulationError> for AppError {
     fn from(err: SimulationError) -> Self {
         match err {
-            // Client errors (HTTP 400)
             SimulationError::NodeError(msg) => {
-                // NodeError covers invalid contract IDs, bad parameters
-                AppError::BadRequest(format!("RPC node error: {}", msg))
+                AppError::with_code(ErrorCode::NodeError, format!("RPC node error: {}", msg))
             }
-            SimulationError::InvalidContract(msg) => {
-                AppError::BadRequest(format!("Invalid contract: {}", msg))
-            }
-            // BE-020: malformed WASM is the caller's input, so 400 rather than
-            // 500, and the message says what was wrong with it.
+            SimulationError::InvalidContract(msg) => AppError::with_code(
+                ErrorCode::InvalidContractId,
+                format!("Invalid contract: {}", msg),
+            ),
             SimulationError::InvalidWasm(msg) => {
-                AppError::BadRequest(format!("Invalid WASM: {}", msg))
+                AppError::with_code(ErrorCode::InvalidWasm, format!("Invalid WASM: {}", msg))
             }
-            SimulationError::ParseError(e) => {
-                AppError::BadRequest(format!("Argument parse error: {}", e))
-            }
+            SimulationError::ParseError(e) => AppError::with_code(
+                ErrorCode::ParseError,
+                format!("Argument parse error: {}", e),
+            ),
             SimulationError::XdrError(msg) => {
-                AppError::BadRequest(format!("XDR encoding error: {}", msg))
+                AppError::with_code(ErrorCode::InvalidXdr, format!("XDR encoding error: {}", msg))
             }
             SimulationError::Base64Error(e) => {
-                AppError::BadRequest(format!("Base64 decode error: {}", e))
+                AppError::with_code(ErrorCode::InvalidBase64, format!("Base64 decode error: {}", e))
             }
+            SimulationError::NodeTimeout => {
+                AppError::with_code(ErrorCode::RpcTimeout, "RPC request timed out")
 
             // Server errors (HTTP 500)
             SimulationError::NodeTimeout => AppError::Internal("RPC request timed out".to_string()),
@@ -227,26 +265,42 @@ impl From<SimulationError> for AppError {
             SimulationError::RpcRequestFailed(msg) => {
                 AppError::Internal(format!("RPC request failed: {}", msg))
             }
-            SimulationError::NetworkError(e) => AppError::Internal(format!("Network error: {}", e)),
-            SimulationError::Io(e) => AppError::Internal(format!("IO error: {}", e)),
-            SimulationError::SerializationError(e) => {
-                AppError::Internal(format!("Serialization error: {}", e))
+            SimulationError::RpcRequestFailed(msg) => {
+                AppError::with_code(ErrorCode::RpcRequestFailed, format!("RPC request failed: {}", msg))
             }
-
-            // Local-runner errors. `LocalUnavailable` should normally be
-            // handled upstream by falling back to RPC, so if it reaches the
-            // HTTP boundary treat it as an internal misconfiguration.
-            SimulationError::LocalUnavailable => AppError::Internal(
-                "Local WASM execution unavailable and no RPC fallback succeeded".to_string(),
+            SimulationError::AllAttemptsFailed {
+                attempts,
+                last_error,
+            } => AppError::with_code(
+                ErrorCode::RpcRequestFailed,
+                format!("All {attempts} RPC attempts failed: {last_error}"),
             ),
-            SimulationError::ExecutionFailed(msg) => {
-                AppError::BadRequest(format!("Contract execution failed: {}", msg))
+            SimulationError::NetworkError(e) => {
+                AppError::with_code(ErrorCode::NetworkError, format!("Network error: {}", e))
             }
-            SimulationError::InsufficientConsensusProviders(msg) => {
-                AppError::Internal(format!("Insufficient consensus providers: {}", msg))
+            SimulationError::Io(e) => {
+                AppError::with_code(ErrorCode::IoError, format!("IO error: {}", e))
             }
+            SimulationError::SerializationError(e) => {
+                AppError::with_code(ErrorCode::SerializationError, format!("Serialization error: {}", e))
+            }
+            SimulationError::CircuitBreakerOpen(msg) => {
+                AppError::with_code(ErrorCode::CircuitBreakerOpen, msg)
+            }
+            SimulationError::LocalUnavailable => AppError::with_code(
+                ErrorCode::LocalUnavailable,
+                "Local WASM execution unavailable and no RPC fallback succeeded",
+            ),
+            SimulationError::ExecutionFailed(msg) => AppError::with_code(
+                ErrorCode::ContractExecutionFailed,
+                format!("Contract execution failed: {}", msg),
+            ),
+            SimulationError::InsufficientConsensusProviders(msg) => AppError::with_code(
+                ErrorCode::InsufficientConsensus,
+                format!("Insufficient consensus providers: {}", msg),
+            ),
             SimulationError::ConsensusMismatch(msg) => {
-                AppError::Internal(format!("Consensus mismatch: {}", msg))
+                AppError::with_code(ErrorCode::ConsensusMismatch, format!("Consensus mismatch: {}", msg))
             }
         }
     }
@@ -254,7 +308,41 @@ impl From<SimulationError> for AppError {
 
 impl From<crate::parser::ParserError> for AppError {
     fn from(err: crate::parser::ParserError) -> Self {
-        AppError::BadRequest(err.to_string())
+        AppError::with_code(ErrorCode::ParseError, err.to_string())
+    }
+}
+
+impl From<crate::stellar_service::StellarServiceError> for AppError {
+    fn from(err: crate::stellar_service::StellarServiceError) -> Self {
+        use crate::stellar_service::StellarServiceError;
+
+        let message = err.to_string();
+        match err {
+            StellarServiceError::CircuitOpen { .. } => {
+                AppError::with_code(ErrorCode::CircuitBreakerOpen, message)
+            }
+            StellarServiceError::NoHealthyProviders => {
+                AppError::with_code(ErrorCode::NoHealthyRpcProviders, message)
+            }
+            StellarServiceError::Timeout { .. } => {
+                AppError::with_code(ErrorCode::RpcTimeout, message)
+            }
+            StellarServiceError::Network { .. } => {
+                AppError::with_code(ErrorCode::NetworkError, message)
+            }
+            StellarServiceError::ParseError { .. } => {
+                AppError::with_code(ErrorCode::SerializationError, message)
+            }
+            StellarServiceError::HttpError { .. }
+            | StellarServiceError::AllAttemptsFailed { .. } => {
+                AppError::with_code(ErrorCode::RpcRequestFailed, message)
+            }
+            StellarServiceError::MissingNetworkPassphrase { .. }
+            | StellarServiceError::NetworkPassphraseMismatch { .. }
+            | StellarServiceError::ClientBuild { .. } => {
+                AppError::with_code(ErrorCode::ConfigurationError, message)
+            }
+        }
     }
 }
 
@@ -291,20 +379,71 @@ pub trait Validate {
 /// where `MyRequest: serde::de::DeserializeOwned + Validate + Send + 'static`.
 pub struct ValidatedJson<T>(pub T);
 
+pub struct ApiJson<T>(pub T);
+
 #[async_trait]
-impl<T, S> FromRequest<S> for ValidatedJson<T>
+impl<T, S> FromRequest<S> for ApiJson<T>
 where
-    T: DeserializeOwned + Validate,
+    T: DeserializeOwned + Send + 'static,
     S: Send + Sync,
 {
     type Rejection = AppError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(value)) => Ok(Self(value)),
+            Err(rejection) => Err(json_rejection_error(&rejection)),
+        }
+    }
+}
+
+#[async_trait]
+impl<T, S> FromRequest<S> for ValidatedJson<T>
+where
+    T: DeserializeOwned + Validate + Send + 'static,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(value)) => {
+                // JSON parsed successfully — now run field-level validation.
+                value
+                    .validate()
+                    .map_err(|message| AppError::with_code(ErrorCode::ValidationFailed, message))?;
+                Ok(ValidatedJson(value))
+            }
+            Err(rejection) => Err(json_rejection_error(&rejection)),
+        }
         let SanitizedJson(value) = SanitizedJson::<serde_json::Value>::from_request(req, state).await?;
         let value: T = deserialize_sanitized(value)?;
         value.validate().map_err(AppError::BadRequest)?;
         Ok(ValidatedJson(value))
     }
+}
+
+fn json_rejection_error(rejection: &JsonRejection) -> AppError {
+    let (code, message) = match rejection {
+        JsonRejection::JsonDataError(e) => (
+            ErrorCode::InvalidJson,
+            format!("Invalid JSON data: {}", e.body_text()),
+        ),
+        JsonRejection::JsonSyntaxError(e) => (
+            ErrorCode::InvalidJson,
+            format!("JSON syntax error: {}", e.body_text()),
+        ),
+        JsonRejection::MissingJsonContentType(_) => (
+            ErrorCode::BadRequest,
+            "Content-Type must be application/json".to_string(),
+        ),
+        JsonRejection::BytesRejection(_) => (
+            ErrorCode::RequestBodyReadFailed,
+            "Failed to read request body".to_string(),
+        ),
+        _ => (ErrorCode::BadRequest, "Invalid request body".to_string()),
+    };
+    AppError::with_code(code, message)
 }
 
 #[cfg(test)]

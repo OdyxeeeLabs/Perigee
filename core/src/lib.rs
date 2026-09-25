@@ -13,7 +13,7 @@ pub mod comparison;
 pub mod error_codes;
 pub mod errors;
 pub use error_codes::{ErrorCode, ErrorResponse};
-pub use errors::AppError;
+pub use errors::{ApiJson, AppError};
 pub mod fee_analytics;
 pub mod fee_collector;
 pub mod fee_store;

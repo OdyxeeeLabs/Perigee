@@ -99,6 +99,9 @@ pub enum StellarServiceError {
     #[error("No healthy RPC providers available")]
     NoHealthyProviders,
 
+    #[error("RPC provider circuit is open: {url}")]
+    CircuitOpen { url: String },
+
     /// The RPC response did not include the network passphrase.
     #[error("RPC getNetwork response from {url} did not include result.passphrase")]
     MissingNetworkPassphrase { url: String },
@@ -136,7 +139,7 @@ impl StellarServiceError {
             Self::Timeout { .. } | Self::Network { .. } => true,
             Self::HttpError { status, .. } => {
                 // 429 Too Many Requests and all 5xx server errors are retryable.
-                *status == 429 || *status >= 500
+                *status == 408 || *status == 429 || *status >= 500
             }
             _ => false,
         }
@@ -151,6 +154,14 @@ impl StellarServiceError {
             self,
             Self::Timeout { .. } | Self::Network { .. } | Self::Cancelled { .. }
         )
+    }
+
+    fn affects_circuit(&self) -> bool {
+        match self {
+            Self::Timeout { .. } | Self::Network { .. } | Self::ParseError { .. } => true,
+            Self::HttpError { status, .. } => *status == 408 || *status == 429 || *status >= 500,
+            _ => false,
+        }
     }
 }
 
@@ -296,6 +307,13 @@ impl StellarService {
     ) -> Result<Value, StellarServiceError> {
         let inner = &*self.0;
         let url = &provider.url;
+        let max_attempts = inner.config.max_attempts.max(1);
+
+        if !inner.registry.try_acquire_provider(url).await {
+            return Err(StellarServiceError::CircuitOpen {
+                url: url.clone(),
+            });
+        }
 
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -306,6 +324,9 @@ impl StellarService {
 
         let mut last_error: Option<StellarServiceError> = None;
 
+        for attempt in 1..=max_attempts {
+            if attempt > 1 && !inner.registry.try_acquire_provider(url).await {
+                return Err(StellarServiceError::CircuitOpen {
         for attempt in 1..=inner.config.max_attempts {
             if cancellation.is_cancelled() {
                 return Err(StellarServiceError::Cancelled {
@@ -313,6 +334,7 @@ impl StellarService {
                 });
             }
 
+            // Back-off before every retry (not before the first attempt).
             if attempt > 1 {
                 let delay = Self::backoff_delay(&inner.config, attempt);
                 tracing::debug!(
@@ -358,15 +380,19 @@ impl StellarService {
                     if e.should_record_rtt() {
                         inner.registry.record_rtt(url, rtt_us);
                     }
-                    inner.registry.report_failure(url).await;
+                    if e.affects_circuit() {
+                        inner.registry.report_failure(url).await;
+                    } else {
+                        inner.registry.release_provider(url).await;
+                    }
 
                     let retryable = e.is_retryable();
-                    let has_more = attempt < inner.config.max_attempts;
+                    let has_more = attempt < max_attempts;
 
                     if retryable && has_more {
                         tracing::warn!(
                             attempt,
-                            max = inner.config.max_attempts,
+                            max = max_attempts,
                             error = %e,
                             url = %url,
                             method,
@@ -385,8 +411,7 @@ impl StellarService {
                         "RPC call failed"
                     );
 
-                    if !has_more || retryable {
-                        // Wrap as AllAttemptsFailed on exhaustion.
+                    if retryable && !has_more {
                         let last = e.to_string();
                         return Err(StellarServiceError::AllAttemptsFailed {
                             attempts: attempt,
@@ -406,7 +431,7 @@ impl StellarService {
             .map(|e| e.to_string())
             .unwrap_or_default();
         Err(StellarServiceError::AllAttemptsFailed {
-            attempts: inner.config.max_attempts,
+            attempts: max_attempts,
             url: url.clone(),
             last_error: last,
         })

@@ -53,6 +53,7 @@ struct RpcResponse {
 struct RpcError {
     code: i32,
     message: String,
+    error: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -109,6 +110,7 @@ async fn handle_rpc(
                     error: Some(RpcError {
                         code: -32602,
                         message: "Invalid params".to_string(),
+                        error: "INVALID_PARAMS".to_string(),
                     }),
                     id: req.id,
                 });
@@ -122,6 +124,7 @@ async fn handle_rpc(
                 error: Some(RpcError {
                     code: -32602,
                     message: "Missing transaction params".to_string(),
+                    error: "INVALID_PARAMS".to_string(),
                 }),
                 id: req.id,
             });
@@ -136,6 +139,7 @@ async fn handle_rpc(
                 error: Some(RpcError {
                     code: -32000,
                     message: "Address is blocked".to_string(),
+                    error: "ADDRESS_BLOCKED".to_string(),
                 }),
                 id: req.id,
             });
@@ -166,6 +170,7 @@ async fn handle_rpc(
                         error: Some(RpcError {
                             code: -32000,
                             message: "Transaction would fail".to_string(),
+                            error: "SIMULATION_FAILED".to_string(),
                         }),
                         id: req.id,
                     });
@@ -206,6 +211,7 @@ async fn handle_rpc(
                                     "Gas limit exceeded: {} > {}",
                                     gas_used, state.config.max_gas_limit
                                 ),
+                                error: "GAS_LIMIT_EXCEEDED".to_string(),
                             }),
                             id: req.id,
                         });
@@ -221,6 +227,7 @@ async fn handle_rpc(
                     error: Some(RpcError {
                         code: -32000,
                         message: "Simulation failed".to_string(),
+                        error: "SIMULATION_FAILED".to_string(),
                     }),
                     id: req.id,
                 });
@@ -244,6 +251,7 @@ async fn handle_rpc(
             error: Some(RpcError {
                 code: -32000,
                 message: format!("Upstream error: {}", e),
+                error: "UPSTREAM_ERROR".to_string(),
             }),
             id: req.id,
         }),

@@ -11,6 +11,137 @@ use crate::metrics::Metrics;
 
 const CIRCUIT_BREAKER_THRESHOLD: u64 = 3;
 const CIRCUIT_BREAKER_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CircuitState {
+    Closed,
+    Open,
+    HalfOpen,
+}
+
+impl CircuitState {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Closed => "closed",
+            Self::Open => "open",
+            Self::HalfOpen => "half_open",
+        }
+    }
+}
+
+impl std::fmt::Display for CircuitState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CircuitBreakerConfig {
+    pub failure_threshold: u32,
+    pub recovery_timeout: Duration,
+    pub success_threshold: u32,
+    pub half_open_max_calls: u32,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            failure_threshold: CIRCUIT_BREAKER_THRESHOLD as u32,
+            recovery_timeout: CIRCUIT_BREAKER_COOLDOWN,
+            success_threshold: 1,
+            half_open_max_calls: 1,
+        }
+    }
+}
+
+impl CircuitBreakerConfig {
+    pub fn new(failure_threshold: u32, recovery_timeout: Duration) -> Self {
+        Self {
+            failure_threshold: failure_threshold.max(1),
+            recovery_timeout,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_failure_threshold(mut self, failure_threshold: u32) -> Self {
+        self.failure_threshold = failure_threshold.max(1);
+        self
+    }
+
+    pub fn with_recovery_timeout(mut self, recovery_timeout: Duration) -> Self {
+        self.recovery_timeout = recovery_timeout;
+        self
+    }
+
+    pub fn with_success_threshold(mut self, success_threshold: u32) -> Self {
+        self.success_threshold = success_threshold.max(1);
+        self
+    }
+
+    pub fn with_half_open_max_calls(mut self, half_open_max_calls: u32) -> Self {
+        self.half_open_max_calls = half_open_max_calls.max(1);
+        self
+    }
+
+    pub fn from_env() -> Self {
+        let failure_threshold = read_env_u32(&[
+            "RPC_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+            "CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+        ])
+        .unwrap_or(CIRCUIT_BREAKER_THRESHOLD as u32)
+        .max(1);
+        let recovery_ms = read_env_u64(&[
+            "RPC_CIRCUIT_BREAKER_RECOVERY_TIMEOUT_MS",
+            "CIRCUIT_BREAKER_RECOVERY_TIMEOUT_MS",
+        ]);
+        let recovery_secs = read_env_u64(&[
+            "RPC_CIRCUIT_BREAKER_RECOVERY_TIMEOUT_SECS",
+            "RPC_CIRCUIT_BREAKER_RECOVERY_TIMEOUT_SECONDS",
+            "RPC_CIRCUIT_BREAKER_COOLDOWN_SECS",
+            "RPC_CIRCUIT_BREAKER_TIMEOUT_SECS",
+            "CIRCUIT_BREAKER_RECOVERY_TIMEOUT_SECS",
+        ])
+        .unwrap_or(CIRCUIT_BREAKER_COOLDOWN.as_secs());
+        let success_threshold = read_env_u32(&[
+            "RPC_CIRCUIT_BREAKER_SUCCESS_THRESHOLD",
+            "CIRCUIT_BREAKER_SUCCESS_THRESHOLD",
+        ])
+        .unwrap_or(1)
+        .max(1);
+        let half_open_max_calls = read_env_u32(&[
+            "RPC_CIRCUIT_BREAKER_HALF_OPEN_MAX_CALLS",
+            "CIRCUIT_BREAKER_HALF_OPEN_MAX_CALLS",
+        ])
+        .unwrap_or(1)
+        .max(1);
+
+        Self {
+            failure_threshold,
+            recovery_timeout: recovery_ms
+                .map(Duration::from_millis)
+                .unwrap_or_else(|| Duration::from_secs(recovery_secs)),
+            success_threshold,
+            half_open_max_calls,
+        }
+    }
+}
+
+fn read_env_u32(names: &[&str]) -> Option<u32> {
+    names.iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+    })
+}
+
+fn read_env_u64(names: &[&str]) -> Option<u64> {
+    names.iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    })
+}
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_OBSERVATION_TTL: Duration = Duration::from_secs(5 * 60);
 const PEER_STALE_AFTER: Duration = Duration::from_secs(10 * 60);
@@ -21,8 +152,6 @@ const DISCOVERED_PROVIDER_STARTING_SCORE: i64 = 55;
 const PEER_STARTING_SCORE: i64 = 60;
 const LOCAL_SUCCESS_BONUS: i64 = 12;
 const LOCAL_FAILURE_PENALTY: i64 = 25;
-const PROBE_SUCCESS_BONUS: i64 = 6;
-const PROBE_FAILURE_PENALTY: i64 = 15;
 const PEER_SUCCESS_BONUS: i64 = 8;
 const PEER_FAILURE_PENALTY: i64 = 20;
 const MIN_PROVIDER_SCORE: i64 = 25;
@@ -194,13 +323,37 @@ struct RemoteProviderObservation {
 }
 
 #[derive(Debug)]
+struct ProviderCircuitState {
+    state: CircuitState,
+    opened_at: Option<Instant>,
+    half_open_started_at: Option<Instant>,
+    closed_in_flight: u32,
+    closed_in_flight_since: Option<Instant>,
+    half_open_in_flight: u32,
+    half_open_successes: u32,
+}
+
+impl Default for ProviderCircuitState {
+    fn default() -> Self {
+        Self {
+            state: CircuitState::Closed,
+            opened_at: None,
+            half_open_started_at: None,
+            closed_in_flight: 0,
+            closed_in_flight_since: None,
+            half_open_in_flight: 0,
+            half_open_successes: 0,
+        }
+    }
+}
+
 struct ProviderState {
     provider: RwLock<RpcProvider>,
     source: &'static str,
     stats: ProviderStats,
     local_score: AtomicI64,
     consecutive_failures: AtomicU64,
-    tripped_at: RwLock<Option<Instant>>,
+    circuit: RwLock<ProviderCircuitState>,
     latest_ledger: AtomicU64,
     last_local_observed_at: RwLock<Option<DateTime<Utc>>>,
     remote_observations: RwLock<HashMap<String, RemoteProviderObservation>>,
@@ -214,7 +367,7 @@ impl ProviderState {
             stats: ProviderStats::new(20),
             local_score: AtomicI64::new(local_score),
             consecutive_failures: AtomicU64::new(0),
-            tripped_at: RwLock::new(None),
+            circuit: RwLock::new(ProviderCircuitState::default()),
             latest_ledger: AtomicU64::new(0),
             last_local_observed_at: RwLock::new(None),
             remote_observations: RwLock::new(HashMap::new()),
@@ -254,6 +407,7 @@ pub struct ProviderRegistry {
     instance_id: String,
     public_base_url: Option<String>,
     latency_cursor: AtomicUsize,
+    circuit_breaker_config: CircuitBreakerConfig,
     /// Optional Prometheus metrics handle; absent in tests / CLI paths.
     metrics: Option<Arc<Metrics>>,
 }
@@ -263,7 +417,35 @@ impl ProviderRegistry {
         Self::new_with_config(providers, RegistryConfig::default())
     }
 
+    pub fn new_from_env(providers: Vec<RpcProvider>) -> Arc<Self> {
+        Self::new_with_config_and_circuit_breaker(
+            providers,
+            RegistryConfig::default(),
+            CircuitBreakerConfig::from_env(),
+        )
+    }
+
     pub fn new_with_config(providers: Vec<RpcProvider>, config: RegistryConfig) -> Arc<Self> {
+        Self::new_with_config_and_circuit_breaker(
+            providers,
+            config,
+            CircuitBreakerConfig::default(),
+        )
+    }
+
+    pub fn new_with_config_and_breaker(
+        providers: Vec<RpcProvider>,
+        config: RegistryConfig,
+        circuit_breaker_config: CircuitBreakerConfig,
+    ) -> Arc<Self> {
+        Self::new_with_config_and_circuit_breaker(providers, config, circuit_breaker_config)
+    }
+
+    pub fn new_with_config_and_circuit_breaker(
+        providers: Vec<RpcProvider>,
+        config: RegistryConfig,
+        circuit_breaker_config: CircuitBreakerConfig,
+    ) -> Arc<Self> {
         let mut states = HashMap::new();
 
         for provider in providers {
@@ -291,6 +473,13 @@ impl ProviderRegistry {
             peers.insert(peer.clone(), Arc::new(PeerState::new(peer, None)));
         }
 
+        let circuit_breaker_config = CircuitBreakerConfig {
+            failure_threshold: circuit_breaker_config.failure_threshold.max(1),
+            recovery_timeout: circuit_breaker_config.recovery_timeout,
+            success_threshold: circuit_breaker_config.success_threshold.max(1),
+            half_open_max_calls: circuit_breaker_config.half_open_max_calls.max(1),
+        };
+
         Arc::new(Self {
             states: RwLock::new(states),
             peers: RwLock::new(peers),
@@ -301,6 +490,7 @@ impl ProviderRegistry {
             instance_id: config.instance_id,
             public_base_url: config.public_base_url.map(|url| normalize_base_url(&url)),
             latency_cursor: AtomicUsize::new(0),
+            circuit_breaker_config,
             // Documented as absent on CLI/test paths; the HTTP server attaches
             // its own handle. The field was added to the struct without being
             // threaded through this constructor.
@@ -314,6 +504,126 @@ impl ProviderRegistry {
 
     pub fn public_base_url(&self) -> Option<&str> {
         self.public_base_url.as_deref()
+    }
+
+    pub fn circuit_breaker_config(&self) -> CircuitBreakerConfig {
+        self.circuit_breaker_config
+    }
+
+    pub async fn provider_circuit_state(&self, url: &str) -> Option<CircuitState> {
+        let state = self.find_by_url(url).await?;
+        Some(self.refresh_circuit_state(&state).await)
+    }
+
+    async fn refresh_circuit_state(&self, state: &ProviderState) -> CircuitState {
+        let mut circuit = state.circuit.write().await;
+        let ready = circuit
+            .opened_at
+            .map(|opened_at| opened_at.elapsed() >= self.circuit_breaker_config.recovery_timeout)
+            .unwrap_or(false);
+        let stale_closed = circuit
+            .closed_in_flight_since
+            .map(|started_at| started_at.elapsed() >= self.circuit_breaker_config.recovery_timeout)
+            .unwrap_or(false);
+        if circuit.state == CircuitState::Open && stale_closed {
+            circuit.closed_in_flight = 0;
+            circuit.closed_in_flight_since = None;
+        }
+        if circuit.state == CircuitState::Open
+            && ready
+            && circuit.closed_in_flight == 0
+        {
+            circuit.state = CircuitState::HalfOpen;
+            circuit.opened_at = None;
+            circuit.closed_in_flight_since = None;
+            circuit.half_open_started_at = Some(Instant::now());
+            circuit.half_open_in_flight = 0;
+            circuit.half_open_successes = 0;
+        }
+        circuit.state
+    }
+
+    pub async fn try_acquire_provider(&self, url: &str) -> bool {
+        let Some(state) = self.find_by_url(url).await else {
+            return false;
+        };
+
+        let mut circuit = state.circuit.write().await;
+        match circuit.state {
+            CircuitState::Closed => {
+                if circuit.closed_in_flight == 0 {
+                    circuit.closed_in_flight_since = Some(Instant::now());
+                }
+                circuit.closed_in_flight = circuit.closed_in_flight.saturating_add(1);
+                true
+            }
+            CircuitState::Open => {
+                let ready = circuit
+                    .opened_at
+                    .map(|opened_at| {
+                        opened_at.elapsed() >= self.circuit_breaker_config.recovery_timeout
+                    })
+                    .unwrap_or(true);
+                let stale_closed = circuit
+                    .closed_in_flight_since
+                    .map(|started_at| {
+                        started_at.elapsed() >= self.circuit_breaker_config.recovery_timeout
+                    })
+                    .unwrap_or(false);
+                if stale_closed {
+                    circuit.closed_in_flight = 0;
+                    circuit.closed_in_flight_since = None;
+                }
+                if ready && circuit.closed_in_flight == 0 {
+                    circuit.state = CircuitState::HalfOpen;
+                    circuit.opened_at = None;
+                    circuit.half_open_started_at = Some(Instant::now());
+                    circuit.half_open_in_flight = 1;
+                    circuit.half_open_successes = 0;
+                    true
+                } else {
+                    false
+                }
+            }
+            CircuitState::HalfOpen => {
+                let permit_stale = circuit
+                    .half_open_started_at
+                    .map(|started_at| {
+                        started_at.elapsed() >= self.circuit_breaker_config.recovery_timeout
+                    })
+                    .unwrap_or(true);
+                if permit_stale {
+                    circuit.half_open_started_at = Some(Instant::now());
+                    circuit.half_open_in_flight = 0;
+                    circuit.half_open_successes = 0;
+                }
+                if circuit.half_open_in_flight < self.circuit_breaker_config.half_open_max_calls {
+                    circuit.half_open_in_flight += 1;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    pub async fn try_acquire(&self, url: &str) -> bool {
+        self.try_acquire_provider(url).await
+    }
+
+    pub(crate) async fn release_provider(&self, url: &str) {
+        let Some(state) = self.find_by_url(url).await else {
+            return;
+        };
+        let mut circuit = state.circuit.write().await;
+        if circuit.closed_in_flight > 0 {
+            circuit.closed_in_flight = circuit.closed_in_flight.saturating_sub(1);
+            if circuit.closed_in_flight == 0 {
+                circuit.closed_in_flight_since = None;
+            }
+        } else if circuit.half_open_in_flight > 0 {
+            circuit.half_open_in_flight = circuit.half_open_in_flight.saturating_sub(1);
+        }
     }
 
     /// Return the list of providers that are currently available for requests,
@@ -413,29 +723,77 @@ impl ProviderRegistry {
     }
 
     pub async fn report_success(&self, url: &str) {
-        if let Some(state) = self.find_by_url(url).await {
-            state.consecutive_failures.store(0, Ordering::Relaxed);
-            let recovered_score = clamp_score(
-                state
-                    .local_score
-                    .load(Ordering::Relaxed)
-                    .max(DISCOVERED_PROVIDER_STARTING_SCORE)
-                    + LOCAL_SUCCESS_BONUS,
-            );
-            state.local_score.store(recovered_score, Ordering::Relaxed);
-            state
-                .last_local_observed_at
-                .write()
-                .await
-                .replace(Utc::now());
-            let mut tripped = state.tripped_at.write().await;
-            *tripped = None;
+        let Some(state) = self.find_by_url(url).await else {
+            return;
+        };
+
+        let should_update = {
+            let mut circuit = state.circuit.write().await;
+            let had_closed_permit = circuit.closed_in_flight > 0;
+            let had_half_open_permit = circuit.half_open_in_flight > 0;
+            if had_closed_permit {
+                circuit.closed_in_flight = circuit.closed_in_flight.saturating_sub(1);
+                if circuit.closed_in_flight == 0 {
+                    circuit.closed_in_flight_since = None;
+                }
+            } else if had_half_open_permit {
+                circuit.half_open_in_flight = circuit.half_open_in_flight.saturating_sub(1);
+            }
+
+            match circuit.state {
+                CircuitState::HalfOpen if had_closed_permit => false,
+                CircuitState::HalfOpen => {
+                    circuit.half_open_successes = circuit.half_open_successes.saturating_add(1);
+                    if circuit.half_open_successes >= self.circuit_breaker_config.success_threshold
+                        && circuit.half_open_in_flight == 0
+                    {
+                        circuit.state = CircuitState::Closed;
+                        circuit.opened_at = None;
+                        circuit.half_open_started_at = None;
+                        circuit.closed_in_flight_since = None;
+                        circuit.half_open_in_flight = 0;
+                        circuit.half_open_successes = 0;
+                    }
+                    true
+                }
+                CircuitState::Open if had_closed_permit || had_half_open_permit => false,
+                CircuitState::Open => {
+                    circuit.state = CircuitState::Closed;
+                    circuit.opened_at = None;
+                    circuit.half_open_started_at = None;
+                    circuit.closed_in_flight_since = None;
+                    circuit.half_open_in_flight = 0;
+                    circuit.half_open_successes = 0;
+                    true
+                }
+                CircuitState::Closed => true,
+            }
+        };
+
+        if !should_update {
+            return;
         }
+
+        state.consecutive_failures.store(0, Ordering::Relaxed);
+        let recovered_score = clamp_score(
+            state
+                .local_score
+                .load(Ordering::Relaxed)
+                .max(DISCOVERED_PROVIDER_STARTING_SCORE)
+                + LOCAL_SUCCESS_BONUS,
+        );
+        state.local_score.store(recovered_score, Ordering::Relaxed);
+        state
+            .last_local_observed_at
+            .write()
+            .await
+            .replace(Utc::now());
     }
 
     pub async fn report_failure(&self, url: &str) {
         if let Some(state) = self.find_by_url(url).await {
             let prev = state.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+            let failures = prev.saturating_add(1);
             state.local_score.store(
                 adjust_score(
                     state.local_score.load(Ordering::Relaxed),
@@ -449,24 +807,43 @@ impl ProviderRegistry {
                 .await
                 .replace(Utc::now());
 
-            if prev + 1 >= CIRCUIT_BREAKER_THRESHOLD {
-                let mut tripped = state.tripped_at.write().await;
-                if tripped.is_none() {
+            let mut circuit = state.circuit.write().await;
+            let had_closed_permit = circuit.closed_in_flight > 0;
+            let had_half_open_permit = circuit.half_open_in_flight > 0;
+            if had_closed_permit {
+                circuit.closed_in_flight = circuit.closed_in_flight.saturating_sub(1);
+                if circuit.closed_in_flight == 0 {
+                    circuit.closed_in_flight_since = None;
+                }
+            } else if had_half_open_permit {
+                circuit.half_open_in_flight = circuit.half_open_in_flight.saturating_sub(1);
+            }
+
+            let was_open = circuit.state == CircuitState::Open;
+            let should_open = circuit.state == CircuitState::HalfOpen
+                || (!was_open && failures >= self.circuit_breaker_config.failure_threshold as u64);
+            if should_open {
+                circuit.state = CircuitState::Open;
+                if !was_open {
+                    circuit.opened_at = Some(Instant::now());
+                }
+                circuit.half_open_started_at = None;
+                circuit.half_open_successes = 0;
+                if !was_open {
                     let provider = state.provider.read().await;
                     tracing::warn!(
                         provider = %provider.name,
                         url = %provider.url,
-                        failures = prev + 1,
+                        failures,
                         "Provider circuit breaker tripped"
                     );
                 }
-                *tripped = Some(Instant::now());
             }
         }
     }
 
     pub fn is_retryable_status(status: u16) -> bool {
-        status == 429 || status >= 500
+        status == 408 || status == 429 || status >= 500
     }
 
     pub fn spawn_health_checker(
@@ -517,7 +894,8 @@ impl ProviderRegistry {
         let local_score = state.local_score.load(Ordering::Relaxed);
         let latest_ledger = state.latest_ledger.load(Ordering::Relaxed);
         let consecutive_failures = state.consecutive_failures.load(Ordering::Relaxed);
-        let tripped = self.is_provider_tripped(state).await;
+        let circuit_state = self.refresh_circuit_state(state).await;
+        let tripped = circuit_state == CircuitState::Open;
 
         let remote_observations = state.remote_observations.read().await;
         let fresh_observations = remote_observations
@@ -549,9 +927,11 @@ impl ProviderRegistry {
             .unwrap_or(consecutive_failures);
 
         let effective_score = clamp_score((local_score * 2 + peer_score) / 3);
-        let healthy = !tripped
+        let healthy = circuit_state == CircuitState::Closed
+            && !tripped
             && (effective_score >= MIN_PROVIDER_SCORE || remote_healthy)
-            && (consecutive_failures < CIRCUIT_BREAKER_THRESHOLD || remote_healthy);
+            && (consecutive_failures < self.circuit_breaker_config.failure_threshold as u64
+                || remote_healthy);
 
         ProviderHealthReport {
             name: provider.name.clone(),
@@ -609,54 +989,30 @@ impl ProviderRegistry {
         drop(states);
 
         for state in provider_states {
+            let provider = state.provider.read().await.clone();
+            if !self.try_acquire_provider(&provider.url).await {
+                continue;
+            }
+
             let result = self.probe_provider(&state).await;
             match result {
                 Ok(ledger) => {
                     state.latest_ledger.store(ledger, Ordering::Relaxed);
-                    state.consecutive_failures.store(0, Ordering::Relaxed);
-                    state.local_score.store(
-                        adjust_score(
-                            state.local_score.load(Ordering::Relaxed),
-                            PROBE_SUCCESS_BONUS,
-                        ),
-                        Ordering::Relaxed,
-                    );
-                    state
-                        .last_local_observed_at
-                        .write()
-                        .await
-                        .replace(Utc::now());
-                    let mut tripped = state.tripped_at.write().await;
-                    *tripped = None;
+                    self.report_success(&provider.url).await;
                 }
                 Err(error) => {
-                    let prev = state.consecutive_failures.fetch_add(1, Ordering::Relaxed);
-                    state.local_score.store(
-                        adjust_score(
-                            state.local_score.load(Ordering::Relaxed),
-                            -PROBE_FAILURE_PENALTY,
-                        ),
-                        Ordering::Relaxed,
-                    );
-                    state
-                        .last_local_observed_at
-                        .write()
-                        .await
-                        .replace(Utc::now());
-
-                    let provider = state.provider.read().await;
+                    let consecutive_failures = state
+                        .consecutive_failures
+                        .load(Ordering::Relaxed)
+                        .saturating_add(1);
                     tracing::warn!(
                         provider = %provider.name,
                         url = %provider.url,
-                        consecutive_failures = prev + 1,
+                        consecutive_failures,
                         error = %error,
                         "Provider health check failed"
                     );
-
-                    if prev + 1 >= CIRCUIT_BREAKER_THRESHOLD {
-                        let mut tripped = state.tripped_at.write().await;
-                        *tripped = Some(Instant::now());
-                    }
+                    self.report_failure(&provider.url).await;
                 }
             }
         }
@@ -833,12 +1189,26 @@ impl ProviderRegistry {
     }
 
     async fn is_available(&self, state: Arc<ProviderState>) -> bool {
-        if self.is_provider_tripped(&state).await {
-            return false;
+        match self.refresh_circuit_state(&state).await {
+            CircuitState::Open => false,
+            CircuitState::HalfOpen => {
+                let circuit = state.circuit.read().await;
+                let permit_stale = circuit
+                    .half_open_started_at
+                    .map(|started_at| {
+                        started_at.elapsed() >= self.circuit_breaker_config.recovery_timeout
+                    })
+                    .unwrap_or(true);
+                permit_stale
+                    || circuit.half_open_in_flight
+                        < self.circuit_breaker_config.half_open_max_calls
+            }
+            CircuitState::Closed => {
+                state.local_score.load(Ordering::Relaxed) >= MIN_PROVIDER_SCORE
+                    || state.consecutive_failures.load(Ordering::Relaxed)
+                        < self.circuit_breaker_config.failure_threshold as u64
+            }
         }
-
-        state.local_score.load(Ordering::Relaxed) >= MIN_PROVIDER_SCORE
-            || state.consecutive_failures.load(Ordering::Relaxed) < CIRCUIT_BREAKER_THRESHOLD
     }
 
     pub async fn registry_snapshot(&self) -> RegistrySnapshot {
@@ -921,17 +1291,6 @@ impl ProviderRegistry {
         }
     }
 
-    async fn is_provider_tripped(&self, state: &ProviderState) -> bool {
-        let tripped_at = *state.tripped_at.read().await;
-        match tripped_at {
-            None => false,
-            Some(when) if when.elapsed() >= CIRCUIT_BREAKER_COOLDOWN => {
-                *state.tripped_at.write().await = None;
-                false
-            }
-            Some(_) => true,
-        }
-    }
 }
 
 fn normalize_base_url(url: &str) -> String {

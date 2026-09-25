@@ -5,6 +5,7 @@
     clippy::needless_borrows_for_generic_args
 )]
 
+use crate::error_codes::ErrorCode;
 use crate::input_sanitization::{SanitizedJson, SanitizedPath};
 use crate::insights::InsightsEngine;
 use crate::reconciliation::{FeeReconciler, ReconciliationReport};
@@ -13,6 +14,7 @@ use crate::secret_hash;
 use crate::simulation::{SimulationEngine, SimulationResult, SorobanResources};
 use crate::two_phase_commit::{TransactionParticipant, TwoPhaseCoordinator, TwoPhaseTx};
 use crate::ws::SimulationBus;
+use crate::errors::ApiJson;
 use crate::AppError;
 use axum::{
     async_trait,
@@ -294,6 +296,26 @@ pub enum JobError {
     ProcessingFailed(String),
     #[error("Webhook delivery failed: {0}")]
     WebhookFailed(String),
+}
+
+impl From<JobError> for AppError {
+    fn from(error: JobError) -> Self {
+        match error {
+            JobError::NotFound(id) => {
+                AppError::with_code(ErrorCode::JobNotFound, format!("Job {} not found", id))
+            }
+            JobError::CannotCancel(status) => AppError::with_code(
+                ErrorCode::JobCannotBeCancelled,
+                format!("Job cannot be cancelled in status: {:?}", status),
+            ),
+            JobError::Database(error) => {
+                AppError::with_code(ErrorCode::DatabaseError, error.to_string())
+            }
+            JobError::ProcessingFailed(message) | JobError::WebhookFailed(message) => {
+                AppError::with_code(ErrorCode::InternalServerError, message)
+            }
+        }
+    }
 }
 
 /// Configuration for the job queue
@@ -991,6 +1013,7 @@ pub struct SubmitJobResponse {
 )]
 pub async fn submit_job_handler(
     State(state): State<Arc<crate::AppState>>,
+    ApiJson(payload): ApiJson<SubmitJobRequest>,
     SanitizedJson(payload): SanitizedJson<SubmitJobRequest>,
     Extension(cancellation): Extension<RequestCancellation>,
     Json(payload): Json<SubmitJobRequest>,
@@ -1002,6 +1025,7 @@ pub async fn submit_job_handler(
                 .submit(payload.job_type, payload.payload, payload.webhook),
         )
         .await
+        .map_err(AppError::from)?;
         .map_err(|_| AppError::Internal("Request cancelled".into()))?
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
@@ -1033,6 +1057,15 @@ pub async fn get_job_handler(
     Extension(cancellation): Extension<RequestCancellation>,
     Path(id): Path<String>,
 ) -> Result<Json<Job>, AppError> {
+    let job_id = JobId::from_str(&id).map_err(|_| {
+        AppError::with_code(ErrorCode::InvalidInput, "Invalid job ID")
+    })?;
+    let job = state
+        .job_queue
+        .get(&job_id)
+        .await
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::with_code(ErrorCode::JobNotFound, format!("Job {} not found", id)))?;
     let job_id = JobId::from_str(&id).map_err(|_| AppError::BadRequest("Invalid job ID".into()))?;
     let job = cancellation
         .wait(state.job_queue.get(&job_id))
@@ -1063,6 +1096,14 @@ pub async fn cancel_job_handler(
     Extension(cancellation): Extension<RequestCancellation>,
     Path(id): Path<String>,
 ) -> Result<Json<Job>, AppError> {
+    let job_id = JobId::from_str(&id).map_err(|_| {
+        AppError::with_code(ErrorCode::InvalidInput, "Invalid job ID")
+    })?;
+    let job = state
+        .job_queue
+        .cancel(&job_id)
+        .await
+        .map_err(AppError::from)?;
     let job_id = JobId::from_str(&id).map_err(|_| AppError::BadRequest("Invalid job ID".into()))?;
     let job = cancellation
         .wait(state.job_queue.cancel(&job_id))
