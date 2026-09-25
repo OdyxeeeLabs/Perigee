@@ -4,6 +4,8 @@ pub mod schema;
 
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
+pub use migrations::{Migration, MigrationRunner, MIGRATIONS};
+
 use std::sync::Arc;
 use std::time::Duration;
 

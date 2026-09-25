@@ -6,13 +6,16 @@
 
 use crate::auth::AuthenticatedUser;
 use crate::db;
+use crate::error_codes::ErrorCode;
+use crate::errors::{ApiJson, AppError};
 use crate::errors::AppError;
+use crate::input_sanitization::{SanitizedJson, SanitizedPath, SanitizedQuery};
 use axum::{
-    extract::{Extension, Path, Query, State},
+    extract::{Extension, State},
     Json,
 };
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
 use utoipa::ToSchema;
@@ -56,15 +59,24 @@ impl From<crate::policy_expiry::PolicyExpiryError> for AppError {
 impl From<VaultStoreError> for AppError {
     fn from(err: VaultStoreError) -> Self {
         match err {
-            VaultStoreError::NotFound(msg) => AppError::NotFound(msg),
+            VaultStoreError::NotFound(msg) => {
+                AppError::with_code(ErrorCode::VaultNotFound, msg)
+            }
             VaultStoreError::Conflict {
                 vault_id,
                 expected_version,
-            } => AppError::Conflict(format!(
-                "Vault '{vault_id}' was updated by another request (expected version {expected_version}); reload and retry"
-            )),
-            VaultStoreError::InvalidData(msg) => AppError::BadRequest(msg),
-            VaultStoreError::Database(e) => AppError::Internal(e.to_string()),
+            } => AppError::with_code(
+                ErrorCode::Conflict,
+                format!(
+                    "Vault '{vault_id}' was updated by another request (expected version {expected_version}); reload and retry"
+                ),
+            ),
+            VaultStoreError::InvalidData(msg) => {
+                AppError::with_code(ErrorCode::InvalidInput, msg)
+            }
+            VaultStoreError::Database(e) => {
+                AppError::with_code(ErrorCode::DatabaseError, e.to_string())
+            }
         }
     }
 }
@@ -313,7 +325,7 @@ fn list_vaults_default_page_size() -> u32 {
     50
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct ListVaultsQuery {
     pub manager_id: String,
     #[serde(default = "list_vaults_default_page")]
@@ -346,7 +358,7 @@ pub struct ListVaultsQuery {
 pub async fn list_vaults_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Query(query): Query<ListVaultsQuery>,
+    SanitizedQuery(query): SanitizedQuery<ListVaultsQuery>,
 ) -> Result<Json<crate::db::models::PagedResponse<VaultRecord>>, AppError> {
     user.authorize_vault_read("*")?;
     verify_ownership(&state, &user, &query.manager_id).await?;
@@ -384,7 +396,8 @@ pub async fn list_vaults_handler(
 pub async fn create_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<CreateVaultRequest>,
+    ApiJson(payload): ApiJson<CreateVaultRequest>,
+    SanitizedJson(payload): SanitizedJson<CreateVaultRequest>,
 ) -> Result<Json<VaultRecord>, AppError> {
     if !user.can_manage_vaults() {
         crate::audit_log::log_security_event(
@@ -449,7 +462,7 @@ pub async fn create_vault_handler(
 pub async fn get_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
 ) -> Result<Json<VaultRecord>, AppError> {
     user.authorize_vault_read(&id)?;
     let vault = state.vault_store.get(&id).await?;
@@ -479,7 +492,9 @@ pub async fn update_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
-    Json(payload): Json<UpdateVaultRequest>,
+    ApiJson(payload): ApiJson<UpdateVaultRequest>,
+    SanitizedPath(id): SanitizedPath<String>,
+    SanitizedJson(payload): SanitizedJson<UpdateVaultRequest>,
 ) -> Result<Json<VaultRecord>, AppError> {
     user.authorize_vault_write(&id)?;
     let vault = state.vault_store.get(&id).await?;
@@ -540,7 +555,7 @@ fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
 pub async fn soft_delete_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
 ) -> Result<Json<VaultRecord>, AppError> {
     user.authorize_vault_manage(&id)?;
     // Ownership is checked against the (possibly deleted) vault so the owner can
@@ -571,7 +586,7 @@ pub async fn soft_delete_vault_handler(
 pub async fn restore_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
 ) -> Result<Json<VaultRecord>, AppError> {
     require_admin(&user)?;
     let vault = state.vault_store.restore(&id).await?;
@@ -579,7 +594,7 @@ pub async fn restore_vault_handler(
     Ok(Json(vault))
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct ListDeletedVaultsQuery {
     /// Optional manager to scope the listing to.
     pub manager_id: Option<String>,
@@ -611,7 +626,7 @@ pub struct ListDeletedVaultsQuery {
 pub async fn list_deleted_vaults_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Query(query): Query<ListDeletedVaultsQuery>,
+    SanitizedQuery(query): SanitizedQuery<ListDeletedVaultsQuery>,
 ) -> Result<Json<crate::db::models::PagedResponse<VaultRecord>>, AppError> {
     require_admin(&user)?;
     let pagination = crate::db::models::PaginationParams {

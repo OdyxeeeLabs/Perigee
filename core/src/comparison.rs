@@ -1,6 +1,7 @@
 use crate::simulation::{SimulationEngine, SimulationError, SorobanResources};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use utoipa::ToSchema;
 
@@ -101,6 +102,14 @@ pub async fn run_comparison(
     engine: &SimulationEngine,
     mode: CompareMode,
 ) -> Result<RegressionReport, ComparisonError> {
+    run_comparison_with_cancellation(engine, mode, CancellationToken::new()).await
+}
+
+pub async fn run_comparison_with_cancellation(
+    engine: &SimulationEngine,
+    mode: CompareMode,
+    cancellation: CancellationToken,
+) -> Result<RegressionReport, ComparisonError> {
     let (current_resources, base_resources) = match mode {
         CompareMode::LocalVsLocal {
             current_wasm,
@@ -114,8 +123,24 @@ pub async fn run_comparison(
             let base_id = base_wasm.to_string_lossy().to_string();
 
             let (current_result, base_result) = tokio::join!(
-                engine.simulate_from_contract_id(&current_id, "compare", vec![], None, None, None),
-                engine.simulate_from_contract_id(&base_id, "compare", vec![], None, None, None)
+                engine.simulate_from_contract_id_with_cancellation(
+                    &current_id,
+                    "compare",
+                    vec![],
+                    None,
+                    None,
+                    None,
+                    cancellation.clone(),
+                ),
+                engine.simulate_from_contract_id_with_cancellation(
+                    &base_id,
+                    "compare",
+                    vec![],
+                    None,
+                    None,
+                    None,
+                    cancellation.clone(),
+                )
             );
 
             (current_result?.resources, base_result?.resources)
@@ -129,21 +154,23 @@ pub async fn run_comparison(
             let current_id = current_wasm.to_string_lossy().to_string();
 
             let (current_result, base_result) = tokio::join!(
-                engine.simulate_from_contract_id(
+                engine.simulate_from_contract_id_with_cancellation(
                     &current_id,
                     &function_name,
                     args.clone(),
                     None,
                     None,
                     None,
+                    cancellation.clone(),
                 ),
-                engine.simulate_from_contract_id(
+                engine.simulate_from_contract_id_with_cancellation(
                     &contract_id,
                     &function_name,
                     args,
                     None,
                     None,
-                    None
+                    None,
+                    cancellation,
                 )
             );
 
@@ -325,15 +352,15 @@ fn pct_change(current: u64, base: u64) -> f64 {
 
 /// Pretty-print a `RegressionReport` to stdout (used by the CLI).
 pub fn print_report(report: &RegressionReport) {
-    println!("\n{}", "=".repeat(60));
-    println!("  Perigee — Contract Regression Report");
-    println!("{}\n", "=".repeat(60));
+    tracing::info!("\n{}", "=".repeat(60));
+    tracing::info!("  Perigee — Contract Regression Report");
+    tracing::info!("{}\n", "=".repeat(60));
 
-    println!(
+    tracing::info!(
         "  {:<25} {:>12} {:>12} {:>10}",
         "Metric", "Current", "Base", "Delta"
     );
-    println!("  {}", "-".repeat(59));
+    tracing::info!("  {}", "-".repeat(59));
 
     print_metric_row(
         "CPU Instructions",
@@ -366,17 +393,17 @@ pub fn print_report(report: &RegressionReport) {
         report.deltas.transaction_size_bytes,
     );
 
-    println!();
+    tracing::info!(" ");
 
     if report.regression_flags.is_empty() {
-        println!("  ✓ No regressions detected.");
+        tracing::info!("  ✓ No regressions detected.");
     } else {
-        println!(
+        tracing::info!(
             "  ⚠ {} REGRESSION(S) DETECTED:\n",
             report.regression_flags.len()
         );
         for flag in &report.regression_flags {
-            println!(
+            tracing::info!(
                 "    [{:>8}] {} — {:+.1}%",
                 flag.severity.to_uppercase(),
                 flag.resource,
@@ -385,8 +412,8 @@ pub fn print_report(report: &RegressionReport) {
         }
     }
 
-    println!("\n  Summary: {}", report.summary);
-    println!("{}\n", "=".repeat(60));
+    tracing::info!("\n  Summary: {}", report.summary);
+    tracing::info!("{}\n", "=".repeat(60));
 }
 
 fn print_metric_row(label: &str, current: u64, base: u64, delta: f64) {
@@ -397,7 +424,7 @@ fn print_metric_row(label: &str, current: u64, base: u64, delta: f64) {
     } else {
         "="
     };
-    println!(
+    tracing::info!(
         "  {:<25} {:>12} {:>12} {:>+8.1}% {}",
         label, current, base, delta, arrow,
     );

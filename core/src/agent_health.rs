@@ -77,6 +77,10 @@ impl HealthAttestationService {
             .map(|status| status.is_healthy())
     }
 
+    pub fn remove_agent(&mut self, agent_id: &str) {
+        self.attestations.remove(agent_id);
+    }
+
     /// Async health check for a single agent.
     pub async fn check_health_async(&self, agent_id: String) -> Option<bool> {
         self.check_health(&agent_id)
@@ -269,7 +273,7 @@ impl RetryPolicy {
                     tracing::warn!(
                         attempt,
                         delay_ms = delay.as_millis(),
-                        error = %err,
+                        error = %crate::log_redaction::redact_display(&err),
                         "external call failed; retrying"
                     );
                     tokio::time::sleep(delay).await;

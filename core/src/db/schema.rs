@@ -1,5 +1,7 @@
 use sqlx::sqlite::Sqlite;
 use sqlx::{SqlitePool, Transaction};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use sqlx::SqlitePool;
 use std::sync::Arc;
 
 pub type DbPool = SqlitePool;
@@ -522,6 +524,19 @@ impl VaultsTable {
     }
 }
 
+fn parse_report_timestamp(value: String) -> Result<DateTime<Utc>, sqlx::Error> {
+    DateTime::parse_from_rfc3339(&value)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .or_else(|_| {
+            NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f")
+                .or_else(|_| {
+                    NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S")
+                })
+                .map(|timestamp| timestamp.and_utc())
+        })
+        .map_err(|error| sqlx::Error::Protocol(format!("invalid reconciliation report timestamp: {error}")))
+}
+
 #[derive(Clone)]
 pub struct ReconciliationReportsTable {
     pool: Arc<DbPool>,
@@ -545,17 +560,33 @@ impl ReconciliationReportsTable {
         .fetch_optional(&*self.pool)
         .await?;
 
-        Ok(row.map(|r| crate::db::models::ReconciliationReport {
-            id: r.0,
-            from_ledger: r.1,
-            to_ledger: r.2,
-            tolerance_pct: r.3,
-            total_ledgers: r.4,
-            discrepancies_count: r.5,
-            avg_delta_pct: r.6,
-            max_delta_pct: r.7,
-            summary: r.8.and_then(|v| serde_json::from_value(v).ok()),
-            created_at: r.9,
+        let Some((
+            id,
+            from_ledger,
+            to_ledger,
+            tolerance_pct,
+            total_ledgers,
+            discrepancies_count,
+            avg_delta_pct,
+            max_delta_pct,
+            summary,
+            created_at,
+        )) = row
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(crate::db::models::ReconciliationReport {
+            id,
+            from_ledger,
+            to_ledger,
+            tolerance_pct,
+            total_ledgers,
+            discrepancies_count,
+            avg_delta_pct,
+            max_delta_pct,
+            summary: summary.and_then(|v| serde_json::from_value(v).ok()),
+            created_at: parse_report_timestamp(created_at)?,
         }))
     }
 
@@ -572,9 +603,9 @@ impl ReconciliationReportsTable {
         .fetch_all(&*self.pool)
         .await?;
 
-        Ok(rows
-            .into_iter()
-            .map(|r| crate::db::models::ReconciliationReport {
+        let mut reports = Vec::with_capacity(rows.len());
+        for r in rows {
+            reports.push(crate::db::models::ReconciliationReport {
                 id: r.0,
                 from_ledger: r.1,
                 to_ledger: r.2,
@@ -584,9 +615,10 @@ impl ReconciliationReportsTable {
                 avg_delta_pct: r.6,
                 max_delta_pct: r.7,
                 summary: r.8.and_then(|v| serde_json::from_value(v).ok()),
-                created_at: r.9,
-            })
-            .collect())
+                created_at: parse_report_timestamp(r.9)?,
+            });
+        }
+        Ok(reports)
     }
 
     pub async fn insert(
@@ -600,7 +632,7 @@ impl ReconciliationReportsTable {
         avg_delta_pct: f64,
         max_delta_pct: f64,
         summary: Option<&serde_json::Value>,
-        created_at: &str,
+        created_at: &DateTime<Utc>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO reconciliation_reports (id, from_ledger, to_ledger, tolerance_pct, total_ledgers, discrepancies_count, avg_delta_pct, max_delta_pct, summary, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -614,7 +646,7 @@ impl ReconciliationReportsTable {
         .bind(avg_delta_pct)
         .bind(max_delta_pct)
         .bind(summary)
-        .bind(created_at)
+        .bind(created_at.to_rfc3339())
         .execute(&*self.pool)
         .await?;
 
