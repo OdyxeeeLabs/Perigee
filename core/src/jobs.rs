@@ -22,7 +22,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::any::AnyQueryResult;
-use sqlx::{PgPool, SqlitePool};
+use sqlx::{Executor, PgPool, SqlitePool};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -55,6 +55,19 @@ impl DbPool {
                     last_insert_id: Some(result.last_insert_rowid()),
                 })
             }
+        }
+    }
+
+    pub async fn health_check(&self, timeout: Duration) -> bool {
+        match self {
+            DbPool::Postgres(pool) => {
+                !pool.is_closed()
+                    && matches!(
+                        tokio::time::timeout(timeout, sqlx::query("SELECT 1").execute(pool)).await,
+                        Ok(Ok(_))
+                    )
+            }
+            DbPool::Sqlite(pool) => crate::db::health_check(pool, timeout).await,
         }
     }
 }
@@ -289,6 +302,32 @@ impl Default for JobQueueConfig {
     }
 }
 
+const SQLITE_JOBS_MIGRATION: &str = r#"
+CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    job_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'QUEUED',
+    payload TEXT NOT NULL,
+    result TEXT,
+    progress_percent INTEGER NOT NULL DEFAULT 0,
+    progress_message TEXT NOT NULL DEFAULT 'Queued',
+    webhook_url TEXT,
+    webhook_headers TEXT,
+    webhook_secret TEXT,
+    error_message TEXT,
+    error_type TEXT,
+    timeout_secs INTEGER NOT NULL DEFAULT 300,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_created_at ON jobs(status, created_at);
+"#;
+
 /// SQL-based job queue
 pub struct JobQueue {
     pool: DbPool,
@@ -302,19 +341,37 @@ impl JobQueue {
         redis_url: &str,
         config: JobQueueConfig,
     ) -> Result<Self, JobError> {
-        let pool = if database_url.starts_with("postgres://") {
-            let pool = PgPool::connect(database_url).await?;
-            DbPool::Postgres(pool)
+        Self::new_with_pool_config(
+            database_url,
+            redis_url,
+            config,
+            crate::db::DatabasePoolConfig::from_env(),
+        )
+        .await
+    }
+
+    pub async fn new_with_pool_config(
+        database_url: &str,
+        redis_url: &str,
+        config: JobQueueConfig,
+        pool_config: crate::db::DatabasePoolConfig,
+    ) -> Result<Self, JobError> {
+        let pool = if database_url.starts_with("postgres://")
+            || database_url.starts_with("postgresql://")
+        {
+            DbPool::Postgres(
+                crate::db::connect_postgres_pool(database_url, &pool_config).await?,
+            )
         } else {
-            let pool = SqlitePool::connect(database_url).await?;
-            DbPool::Sqlite(pool)
+            DbPool::Sqlite(
+                crate::db::connect_sqlite_pool(database_url, &pool_config).await?,
+            )
         };
 
         let redis = RedisClient::open(redis_url).map_err(|e| {
             JobError::ProcessingFailed(format!("Failed to connect to Redis: {}", e))
         })?;
 
-        // Run migrations
         Self::run_migrations(&pool).await?;
 
         Ok(Self {
@@ -324,14 +381,48 @@ impl JobQueue {
         })
     }
 
-    async fn run_migrations(pool: &DbPool) -> Result<(), JobError> {
-        let migration_sql = include_str!("../migrations/001_create_jobs_table.sql");
+    pub async fn health_check(&self, timeout: Duration) -> bool {
+        self.pool.health_check(timeout).await
+    }
 
-        // Split and execute each statement
-        for statement in migration_sql.split(";") {
-            let stmt = statement.trim();
-            if !stmt.is_empty() {
-                pool.execute(stmt).await?;
+    pub fn spawn_health_checker(
+        &self,
+        interval: Duration,
+        timeout: Duration,
+    ) -> (crate::db::DatabaseHealth, tokio::task::JoinHandle<()>) {
+        let state = crate::db::DatabaseHealth::default();
+        let task_state = state.clone();
+        let task_pool = self.pool.clone();
+        let interval = interval.max(Duration::from_millis(1));
+        let timeout = timeout.max(Duration::from_millis(1));
+        let handle = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                task_state.set_healthy(task_pool.health_check(timeout).await);
+            }
+        });
+        (state, handle)
+    }
+
+    async fn run_migrations(pool: &DbPool) -> Result<(), JobError> {
+        match pool {
+            DbPool::Postgres(pool) => {
+                let migration_sql = include_str!("../migrations/001_create_jobs_table.sql");
+                let mut tx = pool.begin().await?;
+                if let Err(error) = (&mut *tx).execute(migration_sql).await {
+                    let _ = tx.rollback().await;
+                    return Err(error.into());
+                }
+                tx.commit().await?;
+            }
+            DbPool::Sqlite(pool) => {
+                let mut tx = pool.begin().await?;
+                if let Err(error) = (&mut *tx).execute(SQLITE_JOBS_MIGRATION).await {
+                    let _ = tx.rollback().await;
+                    return Err(error.into());
+                }
+                tx.commit().await?;
             }
         }
 

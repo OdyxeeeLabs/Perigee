@@ -97,25 +97,11 @@ impl VaultStore {
             ));
         }
 
-        // Idempotency: if a key is provided and non-empty, return the existing vault
-        // for the same (manager_id, idempotency_key) pair.
         let idempotency_key = req
             .idempotency_key
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty());
-
-        if let Some(key) = idempotency_key {
-            if let Some(vault) = self
-                .vaults
-                .find_by_idempotency_key(req.manager_id.trim(), key)
-                .await
-                .map_err(VaultStoreError::Database)?
-            {
-                return Ok(vault);
-            }
-        }
-
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let manager_id = req.manager_id.trim();
@@ -124,7 +110,7 @@ impl VaultStore {
         let config_json = req.config_json.trim();
 
         self.vaults
-            .insert(
+            .create_idempotent(
                 &id,
                 manager_id,
                 name,

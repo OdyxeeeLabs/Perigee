@@ -16,8 +16,8 @@
 
 use crate::db;
 use std::str::FromStr;
-use crate::fee_analytics::FeeAnalyticsEngine;
-use crate::fee_store::FeeStore;
+use crate::fee::analytics::FeeAnalyticsEngine;
+use crate::fee::persistence::FeeStore;
 use crate::AppError;
 use axum::{
     extract::{Path, Query, State},
@@ -75,6 +75,12 @@ impl FeeReconciler {
         tolerance_pct: f64,
         progress_callback: Option<Box<dyn Fn(i32, &str) + Send + Sync>>,
     ) -> Result<ReconciliationReport, ReconciliationError> {
+        if from_ledger > to_ledger {
+            return Err(ReconciliationError::InvalidRange(
+                "from_ledger must not exceed to_ledger".to_string(),
+            ));
+        }
+
         let report_id = uuid::Uuid::new_v4().to_string();
         let mut discrepancies: Vec<Discrepancy> = Vec::new();
         let total_ledgers = to_ledger - from_ledger + 1;

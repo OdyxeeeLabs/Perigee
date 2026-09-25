@@ -4,7 +4,6 @@
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
-pub mod billing_service;
 pub mod config;
 pub mod cache;
 pub mod comparison;
@@ -12,9 +11,24 @@ pub mod error_codes;
 pub mod errors;
 pub use error_codes::{ErrorCode, ErrorResponse};
 pub use errors::AppError;
-pub mod fee_analytics;
-pub mod fee_collector;
-pub mod fee_store;
+pub mod fee;
+
+pub mod billing_service {
+    pub use crate::fee::service::*;
+}
+
+pub mod fee_analytics {
+    pub use crate::fee::analytics::*;
+}
+
+pub mod fee_collector {
+    pub use crate::fee::collector::*;
+}
+
+pub mod fee_store {
+    pub use crate::fee::persistence::*;
+}
+
 pub mod gas_golfing;
 pub mod insights;
 pub mod merkle_tree;
