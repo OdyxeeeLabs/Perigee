@@ -6,7 +6,8 @@
 
 use crate::auth::AuthenticatedUser;
 use crate::db;
-use crate::errors::AppError;
+use crate::error_codes::ErrorCode;
+use crate::errors::{ApiJson, AppError};
 use axum::{
     extract::{Extension, Path, Query, State},
     Json,
@@ -56,15 +57,24 @@ impl From<crate::policy_expiry::PolicyExpiryError> for AppError {
 impl From<VaultStoreError> for AppError {
     fn from(err: VaultStoreError) -> Self {
         match err {
-            VaultStoreError::NotFound(msg) => AppError::NotFound(msg),
+            VaultStoreError::NotFound(msg) => {
+                AppError::with_code(ErrorCode::VaultNotFound, msg)
+            }
             VaultStoreError::Conflict {
                 vault_id,
                 expected_version,
-            } => AppError::Conflict(format!(
-                "Vault '{vault_id}' was updated by another request (expected version {expected_version}); reload and retry"
-            )),
-            VaultStoreError::InvalidData(msg) => AppError::BadRequest(msg),
-            VaultStoreError::Database(e) => AppError::Internal(e.to_string()),
+            } => AppError::with_code(
+                ErrorCode::Conflict,
+                format!(
+                    "Vault '{vault_id}' was updated by another request (expected version {expected_version}); reload and retry"
+                ),
+            ),
+            VaultStoreError::InvalidData(msg) => {
+                AppError::with_code(ErrorCode::InvalidInput, msg)
+            }
+            VaultStoreError::Database(e) => {
+                AppError::with_code(ErrorCode::DatabaseError, e.to_string())
+            }
         }
     }
 }
@@ -398,7 +408,7 @@ pub async fn list_vaults_handler(
 pub async fn create_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<CreateVaultRequest>,
+    ApiJson(payload): ApiJson<CreateVaultRequest>,
 ) -> Result<Json<VaultRecord>, AppError> {
     if !user.can_manage_vaults() {
         crate::audit_log::log_security_event(
@@ -493,7 +503,7 @@ pub async fn update_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
-    Json(payload): Json<UpdateVaultRequest>,
+    ApiJson(payload): ApiJson<UpdateVaultRequest>,
 ) -> Result<Json<VaultRecord>, AppError> {
     user.authorize_vault_write(&id)?;
     let vault = state.vault_store.get(&id).await?;

@@ -15,9 +15,11 @@
 //! places) in a future iteration.
 
 use crate::db;
+use crate::error_codes::ErrorCode;
 use std::str::FromStr;
 use crate::fee_analytics::FeeAnalyticsEngine;
 use crate::fee_store::FeeStore;
+use crate::errors::ApiJson;
 use crate::AppError;
 use axum::{
     extract::{Path, Query, State},
@@ -270,11 +272,16 @@ pub enum ReconciliationError {
 impl From<ReconciliationError> for AppError {
     fn from(err: ReconciliationError) -> Self {
         match err {
-            ReconciliationError::InvalidRange(msg) => AppError::BadRequest(msg),
-            ReconciliationError::NoData => {
-                AppError::BadRequest("No data available for the requested ledger range".into())
+            ReconciliationError::InvalidRange(msg) => {
+                AppError::with_code(ErrorCode::InvalidInput, msg)
             }
-            ReconciliationError::StoreError(msg) => AppError::Internal(msg),
+            ReconciliationError::NoData => AppError::with_code(
+                ErrorCode::InvalidInput,
+                "No data available for the requested ledger range",
+            ),
+            ReconciliationError::StoreError(msg) => {
+                AppError::with_code(ErrorCode::DatabaseError, msg)
+            }
         }
     }
 }
@@ -295,17 +302,19 @@ impl From<ReconciliationError> for AppError {
 )]
 pub async fn reconcile_handler(
     State(state): State<Arc<crate::AppState>>,
-    Json(req): Json<ReconcileRequest>,
+    ApiJson(req): ApiJson<ReconcileRequest>,
 ) -> Result<(StatusCode, Json<ReconcileResponse>), AppError> {
     if req.from_ledger >= req.to_ledger {
-        return Err(AppError::BadRequest(
-            "from_ledger must be less than to_ledger".into(),
+        return Err(AppError::with_code(
+            ErrorCode::InvalidInput,
+            "from_ledger must be less than to_ledger",
         ));
     }
 
     if req.tolerance_pct <= 0.0 || req.tolerance_pct > 100.0 {
-        return Err(AppError::BadRequest(
-            "tolerance_pct must be between 0 and 100".into(),
+        return Err(AppError::with_code(
+            ErrorCode::InvalidInput,
+            "tolerance_pct must be between 0 and 100",
         ));
     }
 
@@ -319,7 +328,9 @@ pub async fn reconcile_handler(
         .job_queue
         .submit(crate::jobs::JobType::Reconcile, payload, None)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|error| {
+            AppError::with_code(ErrorCode::ReconciliationFailed, error.to_string())
+        })?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -348,15 +359,21 @@ pub async fn get_reconcile_job_handler(
     State(state): State<Arc<crate::AppState>>,
     Path(job_id): Path<String>,
 ) -> Result<Json<crate::jobs::Job>, AppError> {
-    let id = crate::jobs::JobId::from_str(&job_id)
-        .map_err(|_| AppError::BadRequest("Invalid job ID".into()))?;
+    let id = crate::jobs::JobId::from_str(&job_id).map_err(|_| {
+        AppError::with_code(ErrorCode::InvalidInput, "Invalid job ID")
+    })?;
 
     let job = state
         .job_queue
         .get(&id)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?
-        .ok_or_else(|| AppError::NotFound(format!("Job {} not found", job_id)))?;
+        .map_err(AppError::from)?
+        .ok_or_else(|| {
+            AppError::with_code(
+                ErrorCode::ReconciliationNotFound,
+                format!("Reconciliation job {} not found", job_id),
+            )
+        })?;
 
     Ok(Json(job))
 }
@@ -381,6 +398,6 @@ pub async fn list_reports_handler(
         .reconciliation_repo
         .list(params.limit)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|error| AppError::with_code(ErrorCode::DatabaseError, error.to_string()))?;
     Ok(Json(reports))
 }

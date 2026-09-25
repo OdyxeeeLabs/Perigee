@@ -5,11 +5,13 @@
     clippy::needless_borrows_for_generic_args
 )]
 
+use crate::error_codes::ErrorCode;
 use crate::insights::InsightsEngine;
 use crate::reconciliation::{FeeReconciler, ReconciliationReport};
 use crate::secret_hash;
 use crate::simulation::{SimulationEngine, SimulationResult, SorobanResources};
 use crate::ws::SimulationBus;
+use crate::errors::ApiJson;
 use crate::AppError;
 use axum::{
     extract::{Path, State},
@@ -261,6 +263,26 @@ pub enum JobError {
     ProcessingFailed(String),
     #[error("Webhook delivery failed: {0}")]
     WebhookFailed(String),
+}
+
+impl From<JobError> for AppError {
+    fn from(error: JobError) -> Self {
+        match error {
+            JobError::NotFound(id) => {
+                AppError::with_code(ErrorCode::JobNotFound, format!("Job {} not found", id))
+            }
+            JobError::CannotCancel(status) => AppError::with_code(
+                ErrorCode::JobCannotBeCancelled,
+                format!("Job cannot be cancelled in status: {:?}", status),
+            ),
+            JobError::Database(error) => {
+                AppError::with_code(ErrorCode::DatabaseError, error.to_string())
+            }
+            JobError::ProcessingFailed(message) | JobError::WebhookFailed(message) => {
+                AppError::with_code(ErrorCode::InternalServerError, message)
+            }
+        }
+    }
 }
 
 /// Configuration for the job queue
@@ -792,13 +814,13 @@ pub struct SubmitJobResponse {
 )]
 pub async fn submit_job_handler(
     State(state): State<Arc<crate::AppState>>,
-    Json(payload): Json<SubmitJobRequest>,
+    ApiJson(payload): ApiJson<SubmitJobRequest>,
 ) -> Result<(StatusCode, Json<SubmitJobResponse>), AppError> {
     let job_id = state
         .job_queue
         .submit(payload.job_type, payload.payload, payload.webhook)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(AppError::from)?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -826,13 +848,15 @@ pub async fn get_job_handler(
     State(state): State<Arc<crate::AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Job>, AppError> {
-    let job_id = JobId::from_str(&id).map_err(|_| AppError::BadRequest("Invalid job ID".into()))?;
+    let job_id = JobId::from_str(&id).map_err(|_| {
+        AppError::with_code(ErrorCode::InvalidInput, "Invalid job ID")
+    })?;
     let job = state
         .job_queue
         .get(&job_id)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?
-        .ok_or_else(|| AppError::NotFound(format!("Job {} not found", id)))?;
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::with_code(ErrorCode::JobNotFound, format!("Job {} not found", id)))?;
 
     Ok(Json(job))
 }
@@ -854,12 +878,14 @@ pub async fn cancel_job_handler(
     State(state): State<Arc<crate::AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Job>, AppError> {
-    let job_id = JobId::from_str(&id).map_err(|_| AppError::BadRequest("Invalid job ID".into()))?;
-    let job = state.job_queue.cancel(&job_id).await.map_err(|e| match e {
-        JobError::NotFound(_) => AppError::NotFound(format!("Job {} not found", id)),
-        JobError::CannotCancel(_) => AppError::BadRequest(e.to_string()),
-        _ => AppError::Internal(e.to_string()),
+    let job_id = JobId::from_str(&id).map_err(|_| {
+        AppError::with_code(ErrorCode::InvalidInput, "Invalid job ID")
     })?;
+    let job = state
+        .job_queue
+        .cancel(&job_id)
+        .await
+        .map_err(AppError::from)?;
 
     Ok(Json(job))
 }

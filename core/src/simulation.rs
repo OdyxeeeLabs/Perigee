@@ -31,6 +31,12 @@ pub enum SimulationError {
     #[error("RPC request failed: {0}")]
     RpcRequestFailed(String),
 
+    #[error("All {attempts} RPC attempts failed: {last_error}")]
+    AllAttemptsFailed { attempts: u32, last_error: String },
+
+    #[error("RPC circuit breaker open: {0}")]
+    CircuitBreakerOpen(String),
+
     #[error("RPC node timeout")]
     NodeTimeout,
 
@@ -104,6 +110,34 @@ impl SimulationError {
 impl From<soroban_env_host::HostError> for SimulationError {
     fn from(e: soroban_env_host::HostError) -> Self {
         SimulationError::ExecutionFailed(format!("{e:?}"))
+    }
+}
+
+impl From<StellarServiceError> for SimulationError {
+    fn from(error: StellarServiceError) -> Self {
+        let message = error.to_string();
+        match error {
+            StellarServiceError::CircuitOpen { .. } => {
+                SimulationError::CircuitBreakerOpen(message)
+            }
+            StellarServiceError::NoHealthyProviders => {
+                SimulationError::CircuitBreakerOpen(message)
+            }
+            StellarServiceError::Timeout { .. } => SimulationError::NodeTimeout,
+            StellarServiceError::Network { source, .. } => SimulationError::NetworkError(source),
+            StellarServiceError::HttpError { status, url } => {
+                SimulationError::RpcRequestFailed(format!("HTTP error: {status} from {url}"))
+            }
+            StellarServiceError::AllAttemptsFailed {
+                attempts,
+                last_error,
+                ..
+            } => SimulationError::AllAttemptsFailed {
+                attempts,
+                last_error,
+            },
+            _ => SimulationError::RpcRequestFailed(message),
+        }
     }
 }
 
@@ -1339,7 +1373,7 @@ impl SimulationEngine {
                 .into_iter()
                 .next()
                 .ok_or_else(|| {
-                    SimulationError::RpcRequestFailed("No healthy providers".to_string())
+                    SimulationError::CircuitBreakerOpen("No healthy providers".to_string())
                 })?,
             None => crate::rpc_provider::RpcProvider {
                 name: "default".to_string(),
@@ -1358,7 +1392,7 @@ impl SimulationEngine {
                 serde_json::json!({ "keys": [key_xdr] }),
             )
             .await
-            .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
+            .map_err(SimulationError::from)?;
 
         let response: GetLedgerEntriesResponse = serde_json::from_value(raw1)
             .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
@@ -1420,7 +1454,7 @@ impl SimulationEngine {
                 serde_json::json!({ "keys": [wasm_key_xdr] }),
             )
             .await
-            .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
+            .map_err(SimulationError::from)?;
 
         let response2: GetLedgerEntriesResponse = serde_json::from_value(raw2)
             .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
@@ -1867,7 +1901,10 @@ impl SimulationEngine {
 
     fn is_significant_search_failure(err: &SimulationError) -> bool {
         match err {
-            SimulationError::NodeTimeout | SimulationError::NetworkError(_) => true,
+            SimulationError::NodeTimeout
+            | SimulationError::NetworkError(_)
+            | SimulationError::AllAttemptsFailed { .. }
+            | SimulationError::CircuitBreakerOpen(_) => true,
             SimulationError::RpcRequestFailed(msg) => {
                 msg.starts_with("HTTP error:")
                     || msg.starts_with("Network error:")
@@ -2002,7 +2039,7 @@ impl SimulationEngine {
         let providers = registry.providers_by_latency().await;
 
         if providers.is_empty() {
-            return Err(SimulationError::RpcRequestFailed(
+            return Err(SimulationError::CircuitBreakerOpen(
                 "All RPC providers are unavailable (circuit breaker tripped)".to_string(),
             ));
         }
@@ -2040,7 +2077,6 @@ impl SimulationEngine {
                     // consistently slow provider never leaves the "top
                     // pick" slot even after its EMA should have decayed.
                     registry.record_rtt(&provider.url, rtt_us);
-                    registry.report_success(&provider.url).await;
                     return Ok(result);
                 }
                 Err(e) => {
@@ -2051,28 +2087,31 @@ impl SimulationEngine {
                     // than the provider's own latency.
                     let record_sample = !matches!(
                         &e,
-                        SimulationError::NodeTimeout | SimulationError::NetworkError(_)
+                        SimulationError::NodeTimeout
+                            | SimulationError::NetworkError(_)
+                            | SimulationError::AllAttemptsFailed { .. }
+                            | SimulationError::CircuitBreakerOpen(_)
                     );
                     if record_sample {
                         registry.record_rtt(&provider.url, rtt_us);
                     }
 
                     let should_retry = match &e {
-                        SimulationError::NodeTimeout | SimulationError::NetworkError(_) => true,
+                        SimulationError::NodeTimeout
+                        | SimulationError::NetworkError(_)
+                        | SimulationError::AllAttemptsFailed { .. }
+                        | SimulationError::CircuitBreakerOpen(_) => true,
                         SimulationError::RpcRequestFailed(msg)
                             if msg.starts_with("HTTP error:") =>
                         {
                             // Extract status code from "HTTP error: <code>"
                             msg.split_whitespace()
-                                .last()
-                                .and_then(|s| s.parse::<u16>().ok())
+                                .find_map(|part| part.parse::<u16>().ok())
                                 .map(ProviderRegistry::is_retryable_status)
                                 .unwrap_or(false)
                         }
                         _ => false,
                     };
-
-                    registry.report_failure(&provider.url).await;
 
                     if should_retry {
                         tracing::warn!(
@@ -2172,11 +2211,9 @@ impl SimulationEngine {
         for (provider, result) in provider_results {
             match result {
                 Ok(result) => {
-                    registry.report_success(&provider.url).await;
                     successes.push((provider, result));
                 }
                 Err(error) => {
-                    registry.report_failure(&provider.url).await;
                     failures.push(format!("{}: {}", provider.name, error));
                 }
             }
@@ -2307,16 +2344,7 @@ impl SimulationEngine {
                 serde_json::json!({ "transaction": transaction_xdr }),
             )
             .await
-            .map_err(|e| match e {
-                StellarServiceError::Timeout { .. } => SimulationError::NodeTimeout,
-                StellarServiceError::Network { source, .. } => {
-                    SimulationError::NetworkError(source)
-                }
-                StellarServiceError::HttpError { status, url } => {
-                    SimulationError::RpcRequestFailed(format!("HTTP error: {status} from {url}"))
-                }
-                other => SimulationError::RpcRequestFailed(other.to_string()),
-            })?;
+            .map_err(SimulationError::from)?;
 
         let rpc_response: SimulateTransactionResponse =
             serde_json::from_value(raw).map_err(|e| {
@@ -2560,7 +2588,7 @@ impl SimulationEngine {
                 serde_json::json!({ "keys": missing_keys }),
             )
             .await
-            .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
+            .map_err(SimulationError::from)?;
 
         let rpc_response: GetLedgerEntriesResponse = serde_json::from_value(raw).map_err(|e| {
             SimulationError::RpcRequestFailed(format!("Failed to parse response: {e}"))

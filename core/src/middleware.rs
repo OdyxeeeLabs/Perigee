@@ -45,6 +45,7 @@ use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use tracing::info;
 use uuid::Uuid;
 
+use crate::error_codes::{ErrorCode, ErrorResponse};
 use crate::metrics::Metrics;
 
 // ── Correlation-ID middleware ────────────────────────────────────────────────
@@ -260,11 +261,17 @@ pub async fn method_not_allowed_middleware(request: Request, next: Next) -> Resp
             uri = %uri,
             "Method not allowed"
         );
-        let body = Json(serde_json::json!({
-            "error": "METHOD_NOT_ALLOWED",
-            "message": format!("Method {} is not allowed for {}", method, uri.path())
-        }));
-        return (StatusCode::METHOD_NOT_ALLOWED, body).into_response();
+        let body = Json(ErrorResponse::from_error_code(
+            ErrorCode::MethodNotAllowed,
+            format!("Method {} is not allowed for {}", method, uri.path()),
+        ));
+        let mut normalized = (StatusCode::METHOD_NOT_ALLOWED, body).into_response();
+        for (name, value) in response.headers() {
+            if !normalized.headers().contains_key(name) {
+                normalized.headers_mut().insert(name.clone(), value.clone());
+            }
+        }
+        return normalized;
     }
 
     response
@@ -431,6 +438,7 @@ fn payload_too_large(limit: usize) -> Response {
     use axum::Json;
 
     let body = Json(serde_json::json!({
+        "code": ErrorCode::PayloadTooLarge.as_str(),
         "error": "PAYLOAD_TOO_LARGE",
         "message": format!(
             "Request body exceeds the {limit} byte limit for this route"
@@ -564,6 +572,7 @@ impl CorsConfig {
                 header::AUTHORIZATION,
                 header::HeaderName::from_static("x-request-id"),
                 header::HeaderName::from_static("x-correlation-id"),
+                header::HeaderName::from_static("x-api-key"),
             ]))
             .allow_credentials(self.allow_credentials)
     }
@@ -653,7 +662,8 @@ pub async fn api_version_middleware(request: Request, next: Next) -> Response {
         );
 
         let body = Json(serde_json::json!({
-            "error": "UNSUPPORTED_API_VERSION",
+            "code": ErrorCode::UnsupportedApiVersion.as_str(),
+            "error": ErrorCode::UnsupportedApiVersion.as_str(),
             "message": format!(
                 "API version '{}' is not supported. Supported versions: {}",
                 version,

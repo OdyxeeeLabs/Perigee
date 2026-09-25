@@ -1,4 +1,5 @@
-use crate::errors::AppError;
+use crate::error_codes::ErrorCode;
+use crate::errors::{ApiJson, AppError};
 use crate::db;
 use axum::{
     extract::{Path, State},
@@ -28,10 +29,18 @@ pub enum ManagerStoreError {
 impl From<ManagerStoreError> for AppError {
     fn from(err: ManagerStoreError) -> Self {
         match err {
-            ManagerStoreError::NotFound(msg) => AppError::NotFound(msg),
-            ManagerStoreError::InvalidData(msg) => AppError::BadRequest(msg),
-            ManagerStoreError::DuplicateAddress(msg) => AppError::Conflict(msg),
-            ManagerStoreError::Database(e) => AppError::Internal(e.to_string()),
+            ManagerStoreError::NotFound(msg) => {
+                AppError::with_code(ErrorCode::ManagerNotFound, msg)
+            }
+            ManagerStoreError::InvalidData(msg) => {
+                AppError::with_code(ErrorCode::InvalidInput, msg)
+            }
+            ManagerStoreError::DuplicateAddress(msg) => {
+                AppError::with_code(ErrorCode::ManagerAlreadyExists, msg)
+            }
+            ManagerStoreError::Database(e) => {
+                AppError::with_code(ErrorCode::DatabaseError, e.to_string())
+            }
         }
     }
 }
@@ -170,7 +179,7 @@ impl ManagerStore {
 )]
 pub async fn register_manager_handler(
     State(state): State<Arc<crate::AppState>>,
-    Json(payload): Json<RegisterManagerRequest>,
+    ApiJson(payload): ApiJson<RegisterManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
     let manager = state.manager_store.register(&payload).await?;
     Ok(Json(manager))
@@ -242,7 +251,7 @@ pub async fn get_manager_handler(
 pub async fn approve_manager_handler(
     State(state): State<Arc<crate::AppState>>,
     Path(id): Path<String>,
-    Json(payload): Json<ApproveManagerRequest>,
+    ApiJson(payload): ApiJson<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
     let manager = state.manager_store.approve(&id, &payload).await?;
     Ok(Json(manager))
@@ -263,7 +272,7 @@ pub async fn approve_manager_handler(
 pub async fn reject_manager_handler(
     State(state): State<Arc<crate::AppState>>,
     Path(id): Path<String>,
-    Json(payload): Json<ApproveManagerRequest>,
+    ApiJson(payload): ApiJson<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
     let manager = state.manager_store.reject(&id, &payload).await?;
     Ok(Json(manager))
