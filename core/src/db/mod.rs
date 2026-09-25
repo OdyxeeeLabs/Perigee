@@ -2,6 +2,8 @@ pub mod migrations;
 pub mod models;
 pub mod schema;
 
+pub use migrations::{Migration, MigrationRunner, MIGRATIONS};
+
 use std::sync::Arc;
 use sqlx::SqlitePool;
 use crate::db::schema::{

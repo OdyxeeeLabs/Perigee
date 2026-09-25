@@ -1,5 +1,5 @@
 // core/src/engine/simulation_engine.rs
-use super::traits::{SimulationProvider, StateCache, Parser, SimulationRpcResult};
+use super::traits::{Parser, ProviderError, SimulationProvider, SimulationRpcResult, StateCache};
 use crate::simulation::{SimulationResult, SimulationError, SorobanResources};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use soroban_sdk::xdr::{Limits, SorobanTransactionData, ReadXdr};
@@ -41,7 +41,12 @@ where
         let rpc_result = self.provider
             .simulate_transaction(transaction_xdr)
             .await
-            .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
+            .map_err(|error| match error {
+                ProviderError::CircuitBreakerOpen(message) => {
+                    SimulationError::CircuitBreakerOpen(message)
+                }
+                other => SimulationError::RpcRequestFailed(other.to_string()),
+            })?;
         
         // Parse result
         let result = self.parse_simulation_result(rpc_result)?;

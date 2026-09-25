@@ -6,6 +6,8 @@ use axum::{
     Json, Router,
 };
 use axum::http::{HeaderName, HeaderValue};
+use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
+use Perigee_core::input_sanitization::SanitizedJson;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -61,6 +63,7 @@ struct RpcResponse {
 struct RpcError {
     code: i32,
     message: String,
+    error: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -186,7 +189,7 @@ async fn main() {
 
 async fn handle_rpc(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<RpcRequest>,
+    SanitizedJson(req): SanitizedJson<RpcRequest>,
 ) -> impl IntoResponse {
     if req.method == "eth_sendTransaction" {
         tracing::info!("Intercepting sendTransaction");
@@ -200,6 +203,7 @@ async fn handle_rpc(
                     error: Some(RpcError {
                         code: -32602,
                         message: "Invalid params".to_string(),
+                        error: "INVALID_PARAMS".to_string(),
                     }),
                     id: req.id,
                 });
@@ -213,6 +217,7 @@ async fn handle_rpc(
                 error: Some(RpcError {
                     code: -32602,
                     message: "Missing transaction params".to_string(),
+                    error: "INVALID_PARAMS".to_string(),
                 }),
                 id: req.id,
             });
@@ -227,6 +232,7 @@ async fn handle_rpc(
                 error: Some(RpcError {
                     code: -32000,
                     message: "Address is blocked".to_string(),
+                    error: "ADDRESS_BLOCKED".to_string(),
                 }),
                 id: req.id,
             });
@@ -257,6 +263,7 @@ async fn handle_rpc(
                         error: Some(RpcError {
                             code: -32000,
                             message: "Transaction would fail".to_string(),
+                            error: "SIMULATION_FAILED".to_string(),
                         }),
                         id: req.id,
                     });
@@ -298,6 +305,7 @@ async fn handle_rpc(
                                     "Gas limit exceeded: {} > {}",
                                     gas_used, state.config.max_gas_limit
                                 ),
+                                error: "GAS_LIMIT_EXCEEDED".to_string(),
                             }),
                             id: req.id,
                         });
@@ -313,6 +321,7 @@ async fn handle_rpc(
                     error: Some(RpcError {
                         code: -32000,
                         message: "Simulation failed".to_string(),
+                        error: "SIMULATION_FAILED".to_string(),
                     }),
                     id: req.id,
                 });
@@ -336,6 +345,8 @@ async fn handle_rpc(
             error: Some(RpcError {
                 code: -32000,
                 message: "Upstream request failed".to_string(),
+                message: format!("Upstream error: {}", e),
+                error: "UPSTREAM_ERROR".to_string(),
             }),
             id: req.id,
         }),

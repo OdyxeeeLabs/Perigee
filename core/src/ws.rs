@@ -36,7 +36,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, State,
+        State,
     },
     http::HeaderMap,
     response::IntoResponse,
@@ -49,6 +49,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
+use crate::backpressure::{
+    BackpressurePolicy, BackpressureStats, BoundedEventBus, BoundedSubscription, PublishOutcome,
+};
+use crate::input_sanitization::SanitizedPath;
 use crate::jobs::JobId;
 
 // ── Channel capacity ─────────────────────────────────────────────────────────
@@ -56,6 +60,7 @@ use crate::jobs::JobId;
 /// Number of events that can be buffered per broadcast channel slot before
 /// slow consumers are forced to drop events via `RecvError::Lagged`.
 const BUS_CAPACITY: usize = 256;
+const BUS_PUBLISH_TIMEOUT: Duration = Duration::from_millis(100);
 
 // ── Heartbeat & reconnection (CORE-25) ───────────────────────────────────────
 
@@ -189,25 +194,62 @@ impl SimulationEvent {
 #[derive(Clone)]
 pub struct SimulationBus {
     sender: broadcast::Sender<SimulationEvent>,
+    bounded: BoundedEventBus<SimulationEvent>,
 }
 
 impl SimulationBus {
     /// Create a new bus with the default channel capacity.
     pub fn new() -> Arc<Self> {
         let (sender, _) = broadcast::channel(BUS_CAPACITY);
-        Arc::new(Self { sender })
+        Arc::new(Self {
+            sender,
+            bounded: BoundedEventBus::new(BUS_CAPACITY, BackpressurePolicy::Wait),
+        })
     }
 
-    /// Publish an event.  Returns the number of active subscribers that
-    /// received it (0 if nobody is listening, which is perfectly fine).
     pub fn publish(&self, event: SimulationEvent) -> usize {
+        if self.bounded.is_closed() {
+            return 0;
+        }
+        if event.is_terminal() {
+            self.bounded
+                .publish_with_policy(event.clone(), BackpressurePolicy::DropOldest);
+        } else {
+            self.bounded.publish(event.clone());
+        }
         self.sender.send(event).unwrap_or(0)
     }
 
-    /// Subscribe to the bus.  The returned receiver will lag (and skip events)
-    /// if it cannot keep up with the publication rate.
+    pub async fn publish_async(&self, event: SimulationEvent) -> PublishOutcome {
+        if self.bounded.is_closed() {
+            return PublishOutcome::Closed;
+        }
+        let outcome = if event.is_terminal() {
+            self.bounded
+                .publish_with_policy(event.clone(), BackpressurePolicy::DropOldest)
+        } else {
+            self.bounded
+                .publish_async(event.clone(), Some(BUS_PUBLISH_TIMEOUT))
+                .await
+        };
+        let _ = self.sender.send(event);
+        outcome
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<SimulationEvent> {
         self.sender.subscribe()
+    }
+
+    pub fn subscribe_bounded(&self) -> BoundedSubscription<SimulationEvent> {
+        self.bounded.subscribe()
+    }
+
+    pub fn backpressure_stats(&self) -> BackpressureStats {
+        self.bounded.stats()
+    }
+
+    pub fn close(&self) {
+        self.bounded.close();
     }
 
     // ── Convenience constructors ─────────────────────────────────────────
@@ -295,7 +337,10 @@ impl SimulationBus {
 impl Default for SimulationBus {
     fn default() -> Self {
         let (sender, _) = broadcast::channel(BUS_CAPACITY);
-        Self { sender }
+        Self {
+            sender,
+            bounded: BoundedEventBus::new(BUS_CAPACITY, BackpressurePolicy::Wait),
+        }
     }
 }
 
@@ -475,7 +520,7 @@ pub struct WsState {
 )]
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
-    Path(job_id): Path<String>,
+    SanitizedPath(job_id): SanitizedPath<String>,
     State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -497,6 +542,7 @@ async fn handle_socket(
 
     let mut rx = state.simulation_bus.subscribe();
     let shutdown = state.shutdown.clone();
+    let mut rx = state.simulation_bus.subscribe_bounded();
 
     // CORE-25: heartbeat cadence + liveness window so dead sessions are closed
     // instead of left half-open.
@@ -584,6 +630,7 @@ async fn handle_socket(
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         // Bus was dropped — server shutting down
+                    Err(_) => {
                         connection_state = ConnectionState::Closed;
                         break;
                     }

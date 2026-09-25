@@ -19,6 +19,7 @@
 ///    worst-case and best-case profiles alongside a static branch inventory.
 use crate::simulation::{profile_contract, SimulationError, SorobanResources};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use utoipa::ToSchema;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -713,10 +714,31 @@ pub fn analyze_wasm_branches(
     function_name: String,
     args: Vec<String>,
 ) -> Result<WasmBranchAnalysisResult, SimulationError> {
+    analyze_wasm_branches_with_cancellation(
+        wasm_bytes,
+        function_name,
+        args,
+        CancellationToken::new(),
+    )
+}
+
+pub fn analyze_wasm_branches_with_cancellation(
+    wasm_bytes: Vec<u8>,
+    function_name: String,
+    args: Vec<String>,
+    cancellation: CancellationToken,
+) -> Result<WasmBranchAnalysisResult, SimulationError> {
+    if cancellation.is_cancelled() {
+        return Err(SimulationError::Cancelled);
+    }
     // BE-020: reject malformed input before the Soroban host sees it. The host
     // panics on bad WASM rather than returning an error, so this is the only
     // place a descriptive message can still be produced.
     validate_wasm(&wasm_bytes)?;
+
+    if cancellation.is_cancelled() {
+        return Err(SimulationError::Cancelled);
+    }
 
     // ── 1. Static analysis ────────────────────────────────────────────────────
     let (total_branch_count, max_nesting_depth, branch_type_breakdown, branches) =
@@ -771,6 +793,10 @@ pub fn analyze_wasm_branches(
         }
     };
 
+    if cancellation.is_cancelled() {
+        return Err(SimulationError::Cancelled);
+    }
+
     // ── 3. Multi-path dynamic exploration ────────────────────────────────────
     let variations = generate_arg_variations(&args);
     let total_variations = variations.len();
@@ -779,6 +805,10 @@ pub fn analyze_wasm_branches(
     let mut path_id = 0usize;
 
     for variant_args in &variations {
+        if cancellation.is_cancelled() {
+            return Err(SimulationError::Cancelled);
+        }
+
         // Skip if this permutation is identical to the baseline we already have.
         if *variant_args == args && !simulated_paths.is_empty() {
             continue;

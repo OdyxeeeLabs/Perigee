@@ -3,8 +3,12 @@
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod agent_fleet;
+mod agent_health;
+mod agent_identity;
 mod audit_log;
 mod auth;
+mod backpressure;
 mod benchmarks;
 mod billing_service;
 mod cache;
@@ -13,27 +17,35 @@ mod config;
 mod db;
 mod error_codes;
 mod errors;
+mod namespaced_errors;
 pub mod fee_analytics;
 pub mod fee_collector;
 pub mod fee_store;
+mod failover;
 mod gas_golfing;
 mod middleware;
 pub mod insights;
+mod input_sanitization;
 mod jobs;
 mod log_redaction;
+mod logging;
 mod merkle_tree;
 mod metrics;
 mod parser;
 mod policy_expiry;
 pub mod reconciliation;
+mod reputation;
 mod rounding;
 mod routing;
+mod rate_limiter;
 pub mod rpc_provider;
 mod runner;
 mod secret_hash;
 mod simulation;
 mod simulation_service;
+mod signed_receipt;
 mod stellar_service;
+mod two_phase_commit;
 pub mod vault_store;
 mod manager_store;
 mod wasm_branch_analysis;
@@ -41,9 +53,12 @@ mod ws;
 
 use crate::cache::{ContractCache, SimulationCache};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
+use crate::error_codes::{ErrorCode, ErrorResponse};
+use crate::errors::{ApiJson, AppError, Validate, ValidatedJson};
 use crate::errors::{AppError, Validate, ValidatedJson};
+use crate::input_sanitization::{SanitizedJson, SanitizedQuery};
 use axum::{
-    extract::{Json, Multipart, Query, State},
+    extract::{Json, Multipart, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -64,8 +79,13 @@ use crate::fee_store::FeeStore;
 use crate::gas_golfing::{GasGolfingAnalyzer, GasGolfingReport};
 use crate::insights::InsightsEngine;
 use crate::jobs::{JobQueue, JobQueueConfig, JobWorker};
-use crate::rpc_provider::{ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider};
+use crate::rate_limiter::{ApiRateLimiter, RateLimitConfig, RateLimitLayer};
+use crate::rpc_provider::{
+    CircuitBreakerConfig, ProviderRegistry, RegistryConfig, RegistrySnapshot, RpcProvider,
+};
 use crate::simulation::{SimulationEngine, SimulationMode, SimulationResult, SorobanResources};
+use crate::signed_receipt::ReceiptSigner;
+use crate::logging::{LogLevelSnapshot, LogLevelUpdate, RuntimeLogController};
 use crate::stellar_service::{StellarService, StellarServiceConfig};
 use crate::ws::SimulationBus;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -73,6 +93,14 @@ use tokio_util::sync::CancellationToken;
 use tower_http::trace::{MakeSpan, TraceLayer};
 use tracing::Instrument;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tower_http::trace::TraceLayer;
+use tracing_subscriber::{
+    filter::LevelFilter,
+    layer::SubscriberExt,
+    reload,
+    util::SubscriberInitExt,
+    EnvFilter,
+};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -239,7 +267,7 @@ fn default_max_ledger_age() -> u32 {
 ///
 /// The layer also allows the standard headers and methods needed by the API.
 fn build_cors_layer(cors_allowed_origins: &str) -> CorsLayer {
-    use axum::http::{header, Method};
+    use axum::http::{header, HeaderName, Method};
 
     let base = CorsLayer::new()
         .allow_headers([
@@ -252,6 +280,9 @@ fn build_cors_layer(cors_allowed_origins: &str) -> CorsLayer {
         .expose_headers([
             header::HeaderName::from_static("x-request-id"),
             header::HeaderName::from_static("x-correlation-id"),
+            axum::http::HeaderName::from_static("x-api-key"),
+            axum::http::HeaderName::from_static("x-request-id"),
+            axum::http::HeaderName::from_static("x-correlation-id"),
         ])
         .allow_methods([
             Method::GET,
@@ -260,6 +291,10 @@ fn build_cors_layer(cors_allowed_origins: &str) -> CorsLayer {
             Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
+        ])
+        .expose_headers([
+            HeaderName::from_static("x-perigee-receipt"),
+            HeaderName::from_static("x-perigee-receipt-id"),
         ]);
 
     let trimmed = cors_allowed_origins.trim();
@@ -508,9 +543,12 @@ pub struct AppState {
     reconciliation_repo: db::reconciliation::ReconciliationRepo,
     /// White-label vault records with optimistic locking (API-37).
     vault_store: Arc<vault_store::VaultStore>,
+    agent_fleet: Arc<agent_fleet::DefaultAgentFleet>,
     /// Manager onboarding with approval/KYC gate (API-33).
     manager_store: Arc<manager_store::ManagerStore>,
     shutdown: CancellationToken,
+    receipt_signer: ReceiptSigner,
+    log_levels: RuntimeLogController,
 }
 
 #[derive(Clone)]
@@ -750,7 +788,7 @@ pub struct OptimizeLimitsResponse {
 // ── Fee Market Types ─────────────────────────────────────────────────────
 
 /// Request body for fee recommendation endpoint
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct FeeRecommendationRequest {
     /// Desired inclusion speed: "next_ledger", "next_3_ledgers", "economy", "standard", "priority"
     #[schema(example = "priority")]
@@ -783,7 +821,7 @@ pub struct FeeRecommendationResponse {
 }
 
 /// Request for historical fee data
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct FeeHistoryRequest {
     /// Number of recent ledgers to retrieve (default 50)
     #[schema(example = 50)]
@@ -1019,6 +1057,7 @@ fn to_report(
 )]
 async fn analyze(
     State(state): State<Arc<AppState>>,
+    Extension(cancellation): Extension<RequestCancellation>,
     ValidatedJson(payload): ValidatedJson<AnalyzeRequest>,
 ) -> Result<(HeaderMap, Json<crate::jobs::SubmitJobResponse>), AppError> {
     let span_contract_id = payload.contract_id.clone();
@@ -1030,9 +1069,8 @@ async fn analyze(
     );
     tracing::info!(parent: &span, "Received analyze request, offloading to background task");
 
-    let job_id = state
-        .job_queue
-        .submit(
+    let job_id = cancellation
+        .wait(state.job_queue.submit(
             crate::jobs::JobType::Analyze,
             crate::jobs::JobPayload::Analyze {
                 contract_id: payload.contract_id,
@@ -1043,7 +1081,9 @@ async fn analyze(
             None,
         )
         .instrument(span)
+        ))
         .await
+        .map_err(|_| AppError::Internal("Request cancelled".into()))?
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
     let mut headers = HeaderMap::new();
@@ -1081,6 +1121,7 @@ async fn analyze(
 )]
 async fn analyze_wasm(
     State(state): State<Arc<AppState>>,
+    Extension(cancellation): Extension<RequestCancellation>,
     ValidatedJson(payload): ValidatedJson<AnalyzeWasmRequest>,
 ) -> Result<Json<ResourceReport>, AppError> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -1092,30 +1133,37 @@ async fn analyze_wasm(
 
     let wasm_bytes = BASE64
         .decode(&payload.wasm_bytes)
-        .map_err(|e| AppError::BadRequest(format!("Invalid base64 WASM data: {}", e)))?;
+        .map_err(|e| AppError::with_code(
+            ErrorCode::InvalidBase64,
+            format!("Invalid base64 WASM data: {}", e),
+        ))?;
 
     let function_name = payload.function_name.clone();
     let args = payload.args.clone().unwrap_or_default();
+    let protocol_version = payload.protocol_version;
+    let enable_experimental = payload.enable_experimental;
 
     let start_time = std::time::Instant::now();
-    let resources = tokio::task::spawn_blocking(move || {
-        simulation::profile_contract(
-            wasm_bytes,
-            function_name,
-            args,
-            payload.protocol_version,
-            payload.enable_experimental,
-        )
-    })
-    .await
-    .map_err(|e| {
-        state
-            .metrics
-            .rpc_error_count_total
-            .with_label_values(&["/analyze/wasm", "panic"])
-            .inc();
-        join_error_to_internal("Contract profiling task", e)
-    })?
+    let resources = cancellation
+        .run_blocking(move || {
+            simulation::profile_contract(
+                wasm_bytes,
+                function_name,
+                args,
+                protocol_version,
+                enable_experimental,
+            )
+        })
+        .await
+        .map_err(|_| AppError::Internal("Request cancelled".into()))?
+        .map_err(|e| {
+            state
+                .metrics
+                .rpc_error_count_total
+                .with_label_values(&["/analyze/wasm", "panic"])
+                .inc();
+            join_error_to_internal("Contract profiling task", e)
+        })?
     .map_err(|e| {
         state
             .metrics
@@ -1145,7 +1193,7 @@ async fn analyze_wasm(
         transaction_data: String::new(),
         call_graph: None,
         state_snapshot: None,
-        protocol_version: payload.protocol_version.unwrap_or(20),
+        protocol_version: protocol_version.unwrap_or(20),
     };
 
     let report = to_report(&sim_result, &state.insights_engine, None);
@@ -1178,6 +1226,7 @@ async fn metrics_handler(
 
 async fn analyze_wasm_profile(
     State(state): State<Arc<AppState>>,
+    Extension(cancellation): Extension<RequestCancellation>,
     ValidatedJson(payload): ValidatedJson<ProfileWasmRequest>,
 ) -> Result<Json<ProfileResponse>, AppError> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -1189,14 +1238,17 @@ async fn analyze_wasm_profile(
 
     let wasm_bytes = BASE64
         .decode(&payload.wasm_bytes)
-        .map_err(|e| AppError::BadRequest(format!("Invalid base64 WASM data: {}", e)))?;
+        .map_err(|e| AppError::with_code(
+            ErrorCode::InvalidBase64,
+            format!("Invalid base64 WASM data: {}", e),
+        ))?;
 
     let function_name = payload.function_name.clone();
     let args = payload.args.clone();
 
     let result = tokio::time::timeout(
         state.simulation_timeout,
-        tokio::task::spawn_blocking(move || {
+        cancellation.run_blocking(move || {
             simulation::profile_contract_with_flamegraph(wasm_bytes, function_name, args)
         }),
     )
@@ -1207,6 +1259,7 @@ async fn analyze_wasm_profile(
             state.simulation_timeout.as_secs()
         ))
     })?
+    .map_err(|_| AppError::Internal("Request cancelled".into()))?
     .map_err(|e| join_error_to_internal("Profiling task", e))?
     .map_err(|e| AppError::BadRequest(format!("Profiling failed: {}", e)))?;
 
@@ -1235,9 +1288,10 @@ async fn analyze_wasm_profile(
 )]
 async fn analyze_wasm_branches(
     State(_state): State<Arc<AppState>>,
+    Extension(cancellation): Extension<RequestCancellation>,
     ValidatedJson(payload): ValidatedJson<AnalyzeWasmBranchesRequest>,
 ) -> Result<Json<WasmBranchAnalysisResponse>, AppError> {
-    use crate::wasm_branch_analysis::analyze_wasm_branches as run_analysis;
+    use crate::wasm_branch_analysis::analyze_wasm_branches_with_cancellation as run_analysis;
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
     tracing::info!(
@@ -1247,13 +1301,21 @@ async fn analyze_wasm_branches(
 
     let wasm_bytes = BASE64
         .decode(&payload.wasm_bytes)
-        .map_err(|e| AppError::BadRequest(format!("Invalid base64 WASM data: {}", e)))?;
+        .map_err(|e| AppError::with_code(
+            ErrorCode::InvalidBase64,
+            format!("Invalid base64 WASM data: {}", e),
+        ))?;
 
     let function_name = payload.function_name.clone();
     let args = payload.args.clone().unwrap_or_default();
 
-    let report = tokio::task::spawn_blocking(move || run_analysis(wasm_bytes, function_name, args))
+    let cancellation_token = cancellation.token();
+    let report = cancellation
+        .run_blocking(move || {
+            run_analysis(wasm_bytes, function_name, args, cancellation_token)
+        })
         .await
+        .map_err(|_| AppError::Internal("Request cancelled".into()))?
         .map_err(|e| join_error_to_internal("Branch analysis task", e))?
         .map_err(|e| AppError::Internal(format!("Branch analysis failed: {}", e)))?;
 
@@ -1300,6 +1362,7 @@ async fn analyze_wasm_branches(
 )]
 async fn optimize_limits(
     State(state): State<Arc<AppState>>,
+    Extension(cancellation): Extension<RequestCancellation>,
     ValidatedJson(payload): ValidatedJson<OptimizeLimitsRequest>,
 ) -> Result<Json<OptimizeLimitsResponse>, AppError> {
     tracing::info!(
@@ -1310,11 +1373,12 @@ async fn optimize_limits(
 
     let report = state
         .engine
-        .optimize_limits(
+        .optimize_limits_with_cancellation(
             &payload.contract_id,
             &payload.function_name,
             payload.args,
             payload.safety_margin,
+            cancellation.token(),
         )
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -1357,6 +1421,7 @@ pub struct CompareApiResponse {
 )]
 async fn compare_handler(
     State(state): State<Arc<AppState>>,
+    Extension(cancellation): Extension<RequestCancellation>,
     mut multipart: Multipart,
 ) -> Result<Json<CompareApiResponse>, AppError> {
     let mut mode_str: Option<String> = None;
@@ -1366,26 +1431,34 @@ async fn compare_handler(
     let mut function_name: Option<String> = None;
     let mut args: Vec<String> = Vec::new();
 
-    while let Some(field) = multipart
-        .next_field()
+    while let Some(field) = cancellation
+        .wait(multipart.next_field())
         .await
+        .map_err(|_| AppError::Internal("Request cancelled".into()))?
         .map_err(|e| AppError::BadRequest(format!("Failed to read multipart field: {}", e)))?
     {
         let name = field.name().unwrap_or_default().to_string();
         match name.as_str() {
             "mode" => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("Invalid mode field: {}", e)))?;
+                mode_str = Some(input_sanitization::sanitize_multipart_text(&value, "mode")?);
                 mode_str = Some(
-                    field
-                        .text()
+                    cancellation
+                        .wait(field.text())
                         .await
+                        .map_err(|_| AppError::Internal("Request cancelled".into()))?
                         .map_err(|e| AppError::BadRequest(format!("Invalid mode field: {}", e)))?,
                 );
             }
             "current_wasm" => {
                 current_wasm_bytes = Some(
-                    field
-                        .bytes()
+                    cancellation
+                        .wait(field.bytes())
                         .await
+                        .map_err(|_| AppError::Internal("Request cancelled".into()))?
                         .map_err(|e| {
                             AppError::BadRequest(format!("Failed to read current_wasm: {}", e))
                         })?
@@ -1394,9 +1467,10 @@ async fn compare_handler(
             }
             "base_wasm" => {
                 base_wasm_bytes = Some(
-                    field
-                        .bytes()
+                    cancellation
+                        .wait(field.bytes())
                         .await
+                        .map_err(|_| AppError::Internal("Request cancelled".into()))?
                         .map_err(|e| {
                             AppError::BadRequest(format!("Failed to read base_wasm: {}", e))
                         })?
@@ -1404,29 +1478,64 @@ async fn compare_handler(
                 );
             }
             "contract_id" => {
-                contract_id =
-                    Some(field.text().await.map_err(|e| {
-                        AppError::BadRequest(format!("Invalid contract_id: {}", e))
-                    })?);
+                let value = field.text().await.map_err(|e| {
+                    AppError::BadRequest(format!("Invalid contract_id: {}", e))
+                })?;
+                contract_id = Some(input_sanitization::sanitize_multipart_text(
+                    &value,
+                    "contract_id",
+                )?);
             }
             "function_name" => {
-                function_name =
-                    Some(field.text().await.map_err(|e| {
-                        AppError::BadRequest(format!("Invalid function_name: {}", e))
-                    })?);
+                let value = field.text().await.map_err(|e| {
+                    AppError::BadRequest(format!("Invalid function_name: {}", e))
+                })?;
+                function_name = Some(input_sanitization::sanitize_multipart_text(
+                    &value,
+                    "function_name",
+                )?);
+                contract_id = Some(
+                    cancellation
+                        .wait(field.text())
+                        .await
+                        .map_err(|_| AppError::Internal("Request cancelled".into()))?
+                        .map_err(|e| {
+                            AppError::BadRequest(format!("Invalid contract_id: {}", e))
+                        })?,
+                );
+            }
+            "function_name" => {
+                function_name = Some(
+                    cancellation
+                        .wait(field.text())
+                        .await
+                        .map_err(|_| AppError::Internal("Request cancelled".into()))?
+                        .map_err(|e| {
+                            AppError::BadRequest(format!("Invalid function_name: {}", e))
+                        })?,
+                );
             }
             "args" => {
-                let args_json = field
-                    .text()
+                let args_json = cancellation
+                    .wait(field.text())
                     .await
+                    .map_err(|_| AppError::Internal("Request cancelled".into()))?
                     .map_err(|e| AppError::BadRequest(format!("Invalid args: {}", e)))?;
-                args = serde_json::from_str(&args_json).unwrap_or_default();
+                let args_value: serde_json::Value = serde_json::from_str(&args_json)
+                    .map_err(|e| AppError::BadRequest(format!("Invalid args JSON: {}", e)))?;
+                let args_value = input_sanitization::sanitize_json(&args_value)
+                    .map_err(input_sanitization::sanitization_error)?;
+                args = serde_json::from_value(args_value)
+                    .map_err(|e| AppError::BadRequest(format!("Invalid args: {}", e)))?;
             }
             _ => { /* ignore unknown fields */ }
         }
     }
 
     let mode = mode_str.unwrap_or_else(|| "local_vs_local".to_string());
+    if cancellation.is_cancelled() {
+        return Err(AppError::Internal("Request cancelled".into()));
+    }
 
     let compare_mode = match mode.as_str() {
         "local_vs_local" => {
@@ -1436,7 +1545,13 @@ async fn compare_handler(
                 .ok_or_else(|| AppError::BadRequest("Missing base_wasm file".to_string()))?;
 
             let current_tmp = write_temp_wasm(&current_bytes)?;
-            let base_tmp = write_temp_wasm(&base_bytes)?;
+            let base_tmp = match write_temp_wasm(&base_bytes) {
+                Ok(path) => path,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&current_tmp);
+                    return Err(error);
+                }
+            };
 
             CompareMode::LocalVsLocal {
                 current_wasm: current_tmp,
@@ -1467,10 +1582,24 @@ async fn compare_handler(
             )));
         }
     };
+    let cleanup_paths = match &compare_mode {
+        CompareMode::LocalVsLocal {
+            current_wasm,
+            base_wasm,
+        } => vec![current_wasm.clone(), base_wasm.clone()],
+        CompareMode::LocalVsDeployed { current_wasm, .. } => vec![current_wasm.clone()],
+    };
+    let _cleanup = TempWasmCleanup {
+        paths: cleanup_paths,
+    };
 
-    let report = comparison::run_comparison(&state.engine, compare_mode)
-        .await
-        .map_err(|e| AppError::Internal(format!("Comparison failed: {}", e)))?;
+    let report = comparison::run_comparison_with_cancellation(
+        &state.engine,
+        compare_mode,
+        cancellation.token(),
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("Comparison failed: {}", e)))?;
 
     Ok(Json(CompareApiResponse { report }))
 }
@@ -1513,6 +1642,18 @@ fn write_temp_wasm(bytes: &[u8]) -> Result<std::path::PathBuf, AppError> {
         .keep()
         .map_err(|e| AppError::Internal(format!("Failed to persist temp file: {}", e)))?;
     Ok(path)
+}
+
+struct TempWasmCleanup {
+    paths: Vec<PathBuf>,
+}
+
+impl Drop for TempWasmCleanup {
+    fn drop(&mut self) {
+        for path in &self.paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 // ── Gas Golfing Types ─────────────────────────────────────────────────────
@@ -1569,6 +1710,7 @@ pub struct GasGolfingResponse {
 )]
 async fn analyze_gas_golfing(
     State(state): State<Arc<AppState>>,
+    Extension(cancellation): Extension<RequestCancellation>,
     ValidatedJson(payload): ValidatedJson<GasGolfingRequest>,
 ) -> Result<Json<GasGolfingResponse>, AppError> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -1580,7 +1722,10 @@ async fn analyze_gas_golfing(
 
     let wasm_bytes = BASE64
         .decode(&payload.wasm_bytes)
-        .map_err(|e| AppError::BadRequest(format!("Invalid base64 WASM data: {}", e)))?;
+        .map_err(|e| AppError::with_code(
+            ErrorCode::InvalidBase64,
+            format!("Invalid base64 WASM data: {}", e),
+        ))?;
 
     let contract_name = payload.contract_name.clone();
 
@@ -1591,15 +1736,17 @@ async fn analyze_gas_golfing(
     };
     let measured_resources = payload.measured_resources;
 
-    let report = tokio::task::spawn_blocking(move || {
-        analyzer.analyze_wasm_with_measurement(
-            &wasm_bytes,
-            &contract_name,
-            measured_resources.as_ref(),
-        )
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("Gas golfing analysis task panicked: {}", e)))?;
+    let report = cancellation
+        .run_blocking(move || {
+            analyzer.analyze_wasm_with_measurement(
+                &wasm_bytes,
+                &contract_name,
+                measured_resources.as_ref(),
+            )
+        })
+        .await
+        .map_err(|_| AppError::Internal("Request cancelled".into()))?
+        .map_err(|e| AppError::Internal(format!("Gas golfing analysis task panicked: {}", e)))?;
 
     Ok(Json(GasGolfingResponse { report }))
 }
@@ -1621,6 +1768,8 @@ async fn analyze_gas_golfing(
 )]
 async fn fee_recommend(
     State(state): State<Arc<AppState>>,
+    SanitizedQuery(req): SanitizedQuery<FeeRecommendationRequest>,
+    Extension(cancellation): Extension<RequestCancellation>,
     Query(req): Query<FeeRecommendationRequest>,
 ) -> Result<Json<FeeRecommendationResponse>, AppError> {
     tracing::info!("Generating fee recommendation");
@@ -1634,7 +1783,10 @@ async fn fee_recommend(
         inclusion_speed,
         safety_margin_bps,
     };
-    let result = state.fee_service.recommend(inputs).await?;
+    let result = cancellation
+        .wait(state.fee_service.recommend(inputs))
+        .await
+        .map_err(|_| AppError::Internal("Request cancelled".into()))??;
     Ok(Json(FeeRecommendationResponse {
         recommended_bid: result.recommended_bid,
         resource_fee_estimate: result.resource_fee_estimate,
@@ -1663,18 +1815,20 @@ async fn fee_recommend(
 )]
 async fn fee_history(
     State(state): State<Arc<AppState>>,
+    SanitizedQuery(req): SanitizedQuery<FeeHistoryRequest>,
+    Extension(cancellation): Extension<RequestCancellation>,
     Query(req): Query<FeeHistoryRequest>,
 ) -> Result<Json<FeeHistoryResponse>, AppError> {
     tracing::info!("Fetching fee history");
 
-    let result = state
-        .fee_service
-        .history(billing_service::FeeHistoryQuery {
+    let result = cancellation
+        .wait(state.fee_service.history(billing_service::FeeHistoryQuery {
             limit: req.limit,
             from_ledger: req.from_ledger,
             to_ledger: req.to_ledger,
-        })
-        .await?;
+        }))
+        .await
+        .map_err(|_| AppError::Internal("Request cancelled".into()))??;
     Ok(Json(FeeHistoryResponse {
         samples: result.samples,
         total_count: result.total_count,
@@ -1692,10 +1846,14 @@ async fn fee_history(
 )]
 async fn fee_analytics(
     State(state): State<Arc<AppState>>,
+    Extension(cancellation): Extension<RequestCancellation>,
 ) -> Result<Json<FeeAnalyticsEnvelope>, AppError> {
     tracing::info!("Fetching fee analytics");
 
-    let result = state.fee_service.analytics().await?;
+    let result = cancellation
+        .wait(state.fee_service.analytics())
+        .await
+        .map_err(|_| AppError::Internal("Request cancelled".into()))??;
     Ok(Json(FeeAnalyticsEnvelope {
         current_ledger: result.current_ledger,
         prediction: result.prediction,
@@ -1815,6 +1973,65 @@ impl utoipa::Modify for SecurityAddon {
 )]
 struct ApiDoc;
 
+async fn get_log_levels(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<auth::AuthenticatedUser>,
+) -> Result<Json<LogLevelSnapshot>, AppError> {
+    if !user.is_admin() {
+        return Err(AppError::Forbidden("Admin privileges are required".into()));
+    }
+    state
+        .log_levels
+        .snapshot()
+        .map(Json)
+        .map_err(|error| AppError::Internal(error.to_string()))
+}
+
+async fn set_log_level(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<auth::AuthenticatedUser>,
+    Json(update): Json<LogLevelUpdate>,
+) -> Result<Json<LogLevelSnapshot>, AppError> {
+    if !user.is_admin() {
+        return Err(AppError::Forbidden("Admin privileges are required".into()));
+    }
+    let module = update.module.trim();
+    let result = if module == "*" {
+        state.log_levels.set_global_level(&update.level)
+    } else {
+        state.log_levels.set_module(module, &update.level)
+    };
+    if result.is_ok() {
+        crate::audit_log::log_audit_event(
+            &user.stellar_address,
+            "runtime_log_level_update",
+            &format!("module={module};level={}", update.level),
+        );
+    }
+    result
+        .map(Json)
+        .map_err(|error| AppError::BadRequest(error.to_string()))
+}
+
+async fn remove_log_level(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<auth::AuthenticatedUser>,
+    axum::extract::Path(module): axum::extract::Path<String>,
+) -> Result<Json<LogLevelSnapshot>, AppError> {
+    if !user.is_admin() {
+        return Err(AppError::Forbidden("Admin privileges are required".into()));
+    }
+    let module = module.trim();
+    let result = if module == "*" {
+        state.log_levels.clear_global_level()
+    } else {
+        state.log_levels.remove_module(module)
+    };
+    result
+        .map(Json)
+        .map_err(|error| AppError::BadRequest(error.to_string()))
+}
+
 async fn health_check() -> &'static str {
     "OK"
 }
@@ -1830,20 +2047,32 @@ async fn not_found_handler(request: axum::extract::Request) -> impl IntoResponse
     AppError::NotFound(format!("No route for {}", path))
 }
 
-async fn ready_check(State(state): State<Arc<AppState>>) -> axum::response::Response {
+async fn ready_check(
+    State(state): State<Arc<AppState>>,
+    Extension(cancellation): Extension<RequestCancellation>,
+) -> axum::response::Response {
     use axum::response::IntoResponse;
     
-    let db_ok = sqlx::query("SELECT 1")
-        .execute(state.reconciliation_repo.pool())
+    let db_ok = cancellation
+        .wait(sqlx::query("SELECT 1").execute(state.reconciliation_repo.pool()))
         .await
-        .is_ok();
+        .is_ok_and(|result| result.is_ok());
         
     let rpc_ok = !state.provider_registry.healthy_providers().await.is_empty();
+    let agents_ok = state.agent_fleet.is_operational("server");
+    let rpc_ok = cancellation
+        .wait(state.provider_registry.healthy_providers())
+        .await
+        .is_ok_and(|providers| !providers.is_empty());
 
-    if db_ok && rpc_ok {
+    if db_ok && rpc_ok && agents_ok {
         (axum::http::StatusCode::OK, "OK").into_response()
     } else {
-        (axum::http::StatusCode::SERVICE_UNAVAILABLE, "Service Unavailable").into_response()
+        let body = Json(ErrorResponse::from_error_code(
+            ErrorCode::ServiceUnavailable,
+            "Service is not ready",
+        ));
+        (axum::http::StatusCode::SERVICE_UNAVAILABLE, body).into_response()
     }
 }
 
@@ -1861,7 +2090,7 @@ async fn registry_peers(
 
 async fn registry_gossip(
     State(state): State<Arc<AppState>>,
-    Json(snapshot): Json<RegistrySnapshot>,
+    ApiJson(snapshot): ApiJson<RegistrySnapshot>,
 ) -> Json<RegistrySnapshot> {
     state.provider_registry.merge_snapshot(snapshot).await;
     Json(state.provider_registry.registry_snapshot().await)
@@ -1938,23 +2167,33 @@ async fn shutdown_background_tasks(
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
     if env::var("RUST_LOG").is_err() {
         env::set_var("RUST_LOG", "info");
     }
-
-    // Structured logging: `LOG_FORMAT=json` emits line-delimited JSON for
-    // log aggregators; otherwise the default pretty text format is used
-    // (Closes API-29: No structured logging library).
+    let base_log_directives = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    let initial_filter = EnvFilter::builder()
+        .with_regex(false)
+        .with_default_directive(LevelFilter::INFO.into())
+        .parse(&base_log_directives)
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let base_filter_directives = initial_filter.to_string();
+    let (filter_layer, filter_handle) =
+        reload::Layer::<EnvFilter, tracing_subscriber::Registry>::new(initial_filter);
     if env::var("LOG_FORMAT").as_deref() == Ok("json") {
         tracing_subscriber::registry()
-            .with(EnvFilter::from_default_env())
+            .with(filter_layer)
             .with(tracing_subscriber::fmt::layer().json())
             .init();
     } else {
         tracing_subscriber::registry()
-            .with(EnvFilter::from_default_env())
+            .with(filter_layer)
             .with(tracing_subscriber::fmt::layer())
             .init();
+    }
+    let log_levels = RuntimeLogController::new(filter_handle, base_filter_directives);
+    if let Err(error) = log_levels.load_file() {
+        panic!("Invalid log level configuration: {error}");
     }
 
     tracing::info!("Perigee Starting...");
@@ -2287,6 +2526,8 @@ async fn main() {
         return;
     }
 
+    let receipt_signer = ReceiptSigner::from_env_with_app_env(Some(&config.app_env))
+        .unwrap_or_else(|error| panic!("Failed to configure receipt signing: {error}"));
     tracing::info!("Starting Perigee API Server...");
     let runtime_shutdown = CancellationToken::new();
     let mut background_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
@@ -2297,7 +2538,19 @@ async fn main() {
     let provider_names: Vec<&str> = providers.iter().map(|p| p.name.as_str()).collect();
     tracing::info!(providers = ?provider_names, "RPC provider pool");
 
-    let registry = ProviderRegistry::new_with_config(providers, build_registry_config(&config));
+    let circuit_breaker_config = CircuitBreakerConfig::from_env();
+    tracing::info!(
+        failure_threshold = circuit_breaker_config.failure_threshold,
+        recovery_timeout_secs = circuit_breaker_config.recovery_timeout.as_secs(),
+        success_threshold = circuit_breaker_config.success_threshold,
+        half_open_max_calls = circuit_breaker_config.half_open_max_calls,
+        "RPC circuit breaker configured"
+    );
+    let registry = ProviderRegistry::new_with_config_and_circuit_breaker(
+        providers,
+        build_registry_config(&config),
+        circuit_breaker_config,
+    );
     tracing::info!(
         instance_id = registry.instance_id(),
         public_url = %registry
@@ -2405,15 +2658,9 @@ async fn main() {
         "Initializing database"
     );
 
-    let db_pool = sqlx::SqlitePool::connect(database_url)
+    let db_pool = db::init_pool(database_url)
         .await
-        .expect("Failed to connect to database");
-
-    // Run migrations (idempotent; tracked in sqlx's _sqlx_migrations table).
-    crate::db::migrations::run_migrations(&db_pool)
-        .await
-        .expect("Failed to run database migrations");
-
+        .expect("Failed to initialize database");
     tracing::info!("Database migrations completed");
 
     // Initialize typed DB schema for the managers, vaults, and reconciliation records.
@@ -2450,6 +2697,13 @@ async fn main() {
         .expect("Failed to initialize job queue");
     // ── WebSocket event bus ─────────────────────────────────────────────
     let simulation_bus = SimulationBus::new();
+    let agent_fleet = Arc::new(agent_fleet::DefaultAgentFleet::new());
+    if agent_fleet
+        .register_with_threshold(agent_fleet::AgentIdentity::new("api-server".to_string()), 0)
+        .is_ok()
+    {
+        agent_fleet.record_self_report("api-server");
+    }
 
     let insights_cache = crate::cache::InsightsCache::new();
     let job_worker = JobWorker::new(
@@ -2594,8 +2848,11 @@ async fn main() {
         reconciler,
         reconciliation_repo,
         vault_store,
+        agent_fleet,
         manager_store,
         shutdown: runtime_shutdown.clone(),
+        receipt_signer: receipt_signer.clone(),
+        log_levels: log_levels.clone(),
     });
 
     let cors = build_cors_layer(&config.cors_allowed_origins);
@@ -2609,6 +2866,14 @@ async fn main() {
         .route("/analyze/gas-golfing", post(analyze_gas_golfing))
         // Scoped token issuance for role- and vault-scoped delegation
         .route("/auth/scoped-token", post(auth::issue_scoped_token_handler))
+        .route(
+            "/admin/log-levels",
+            get(get_log_levels).post(set_log_level),
+        )
+        .route(
+            "/admin/log-levels/:module",
+            axum::routing::delete(remove_log_level),
+        )
         // Vault records with tenant-scoped access (API-37)
         .route("/vaults", get(vault_store::list_vaults_handler).post(vault_store::create_vault_handler))
         .route(
@@ -2625,7 +2890,18 @@ async fn main() {
         )
         .route_layer(axum::middleware::from_fn(auth::auth_middleware));
 
-    let api_routes = Router::new()
+    let public_rate_limit_config = RateLimitConfig::from_env();
+    tracing::info!(
+        enabled = public_rate_limit_config.enabled,
+        default_requests = public_rate_limit_config.default.max_requests,
+        default_window_secs = public_rate_limit_config.default.window.as_secs(),
+        endpoint_overrides = public_rate_limit_config.endpoints.len(),
+        "Public API rate limiter configured"
+    );
+    let public_rate_limiter = ApiRateLimiter::new(public_rate_limit_config);
+    let public_rate_limit_layer = RateLimitLayer::new(public_rate_limiter);
+
+    let public_routes = Router::new()
         .route("/health", get(health_check))
         .route("/ready", get(ready_check))
         .route("/metrics", get(metrics_handler))
@@ -2635,11 +2911,9 @@ async fn main() {
         .route("/auth/revoke", post(auth::revoke_handler))
         .route("/auth/emergency-pause", post(auth::emergency_pause_handler))
         .route("/auth/jwks", get(auth::jwks_handler))
-        // Fee market routes (public access)
         .route("/fees/recommend", get(fee_recommend))
         .route("/fees/history", get(fee_history))
         .route("/fees/analytics", get(fee_analytics))
-        // Manager onboarding with approval/KYC gate (API-33)
         .route("/managers/register", post(manager_store::register_manager_handler))
         .route("/managers", get(manager_store::list_managers_handler))
         .route(
@@ -2658,7 +2932,6 @@ async fn main() {
             "/managers/status/:stellar_address",
             get(manager_store::check_manager_status_handler),
         )
-        // Reconciliation routes (async via job queue)
         .route("/reconcile", post(reconciliation::reconcile_handler))
         .route(
             "/reconcile/reports",
@@ -2668,9 +2941,11 @@ async fn main() {
             "/reconcile/:job_id",
             get(reconciliation::get_reconcile_job_handler),
         )
-        // WebSocket streaming (Issue #105) — no auth required on the upgrade;
-        // the client passes the job_id in the path.
         .route("/ws/jobs/:job_id", get(ws::ws_handler))
+        .layer(public_rate_limit_layer);
+
+    let api_routes = Router::new()
+        .merge(public_routes)
         .merge(protected);
 
     let app = Router::new()
@@ -2688,7 +2963,6 @@ async fn main() {
         // version strings or routing internals.
         .fallback(not_found_handler)
         .layer(Extension(auth_state))
-        .layer(cors)
         .layer(axum::middleware::from_fn(
             crate::middleware::method_not_allowed_middleware,
         ))
@@ -2719,11 +2993,27 @@ async fn main() {
                 version = ?request.version()
             )
         }))
+        ))
+        .layer(cors)
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 2)) // 2 MB limit
+        .layer(axum::middleware::from_fn(
+            crate::middleware::correlation_id_middleware,
+        ))
+        .layer(TraceLayer::new_for_http())
+            crate::middleware::request_cancellation_middleware,
+        ))
         .layer(axum::middleware::from_fn(
             crate::middleware::correlation_id_middleware,
         ))
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 2))
         .with_state(app_state);
+        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(
+            input_sanitization::sanitize_request_middleware,
+        ))
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 2)) // 2 MB limit
+        .layer(Extension(receipt_signer.clone()))
+        .with_state(app_state); // ← thread AppState through all handlers
 
     let bind_addr = format!("0.0.0.0:{}", config.server_port);
     let listener = tokio::net::TcpListener::bind(&bind_addr)
@@ -3240,7 +3530,8 @@ mod tests {
 
 async fn analyze_simulation(
     State(simulation_service): State<Arc<SimulationService>>,
-    Json(metric): Json<SimulationMetric>,
+    ApiJson(metric): ApiJson<SimulationMetric>,
+    SanitizedJson(metric): SanitizedJson<SimulationMetric>,
 ) -> Result<Json<AnalysisResult>, AppError> {
     let result = simulation_service.record_and_analyze(metric).await?;
     Ok(Json(result))

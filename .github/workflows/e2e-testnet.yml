@@ -65,6 +65,9 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      - name: Validate database migrations
+        run: cargo test --package Perigee-core db::migrations
+
       # ── Build backend ─────────────────────────────────────────────────────
       - name: Build Perigee core
         run: cargo build --package Perigee-core --release

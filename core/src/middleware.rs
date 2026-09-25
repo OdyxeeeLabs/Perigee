@@ -34,8 +34,8 @@ use std::{
 };
 
 use axum::{
-    body::Body,
-    extract::Request,
+    body::{Body, Bytes},
+    extract::{Extension, Request},
     http::{header, HeaderName, HeaderValue, Method},
     middleware::Next,
     response::Response,
@@ -45,7 +45,12 @@ use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use tracing::{info, Instrument};
 use uuid::Uuid;
 
+use crate::error_codes::{ErrorCode, ErrorResponse};
+use sha2::{Digest, Sha256};
+
 use crate::metrics::Metrics;
+use crate::runner::RequestCancellation;
+use crate::signed_receipt::{ApiReceipt, ReceiptSigner, RECEIPT_HEADER, RECEIPT_ID_HEADER};
 
 const CORRELATION_ID_HEADER: &str = "x-correlation-id";
 const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -72,6 +77,129 @@ fn normalized_id(value: Option<&HeaderValue>) -> Option<String> {
 fn response_header(value: &str) -> HeaderValue {
     HeaderValue::from_str(value).unwrap_or_else(|_| HeaderValue::from_static("unknown"))
 }
+pub async fn receipt_middleware(
+    Extension(signer): Extension<ReceiptSigner>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let request_id = request
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    let (mut parts, body) = next.run(request).await.into_parts();
+    let write_request = matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE");
+    if !write_request {
+        return Response::from_parts(parts, body);
+    }
+
+    let bytes = match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            parts.status = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+            for header in [
+                axum::http::header::CONTENT_ENCODING,
+                axum::http::header::CONTENT_RANGE,
+                axum::http::header::ETAG,
+                axum::http::header::CONTENT_DISPOSITION,
+                axum::http::header::CONTENT_LANGUAGE,
+                axum::http::header::CACHE_CONTROL,
+                axum::http::header::EXPIRES,
+                axum::http::header::LAST_MODIFIED,
+                axum::http::header::ACCEPT_RANGES,
+                axum::http::header::LOCATION,
+                axum::http::header::SET_COOKIE,
+                axum::http::header::WWW_AUTHENTICATE,
+                axum::http::header::ALLOW,
+                axum::http::header::LINK,
+            ] {
+                parts.headers.remove(header);
+            }
+            parts.headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            Bytes::from(
+                serde_json::json!({
+                    "error": "RECEIPT_BODY_TOO_LARGE",
+                    "message": "The response could not be buffered for receipt signing"
+                })
+                .to_string(),
+            )
+        }
+    };
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    parts.headers.remove(axum::http::header::TRANSFER_ENCODING);
+    parts.headers.remove(axum::http::header::TRAILER);
+    let response_digest = hex::encode(Sha256::digest(bytes.as_ref()));
+    let receipt = ApiReceipt::new(
+        format!("{} {}", method.as_str(), path),
+        path.clone(),
+        request_id,
+        method.as_str(),
+        path,
+        parts.status.as_u16(),
+        response_digest,
+        chrono::Utc::now().timestamp(),
+    );
+
+    let mut response = Response::from_parts(parts, Body::from(bytes));
+    if !attach_receipt_headers(&mut response, &signer, &receipt) {
+        tracing::error!(
+            method = %method,
+            path = %receipt.path,
+            "Failed to attach API receipt"
+        );
+    }
+    response
+}
+
+fn attach_receipt_headers(
+    response: &mut Response,
+    signer: &ReceiptSigner,
+    receipt: &ApiReceipt,
+) -> bool {
+    let Ok(signed) = signer.sign_api(receipt) else {
+        return false;
+    };
+    let Ok(serialized) = serde_json::to_vec(&signed) else {
+        return false;
+    };
+    let Ok(value) = HeaderValue::from_bytes(&serialized) else {
+        return false;
+    };
+    let Ok(receipt_id) = HeaderValue::from_str(&signed.receipt_id) else {
+        return false;
+    };
+    response.headers_mut().insert(HeaderName::from_static(RECEIPT_HEADER), value);
+    response
+        .headers_mut()
+        .insert(HeaderName::from_static(RECEIPT_ID_HEADER), receipt_id);
+    true
+}
+
+pub async fn request_cancellation_middleware(mut request: Request, next: Next) -> Response {
+    let cancellation = RequestCancellation::new();
+    request.extensions_mut().insert(cancellation.clone());
+    let guard = cancellation.guard();
+    let mut response = next.run(request).await;
+    response.extensions_mut().insert(Arc::new(guard));
+    response
+}
+
+pub async fn correlation_id_middleware(request: Request, next: Next) -> Response {
+    let correlation_id = request
+        .headers()
+        .get(CORRELATION_ID_HEADER)
+        .and_then(|h| h.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
 
 pub async fn correlation_id_middleware(mut request: Request, next: Next) -> Response {
     let incoming_request_id = normalized_id(request.headers().get(REQUEST_ID_HEADER));
@@ -99,6 +227,13 @@ pub async fn correlation_id_middleware(mut request: Request, next: Next) -> Resp
     request.headers_mut().insert(
         HeaderName::from_static(REQUEST_ID_HEADER),
         response_header(&request_id),
+        HeaderValue::from_str(&correlation_id)
+            .unwrap_or_else(|_| HeaderValue::from_static("invalid-correlation-id")),
+    );
+    request.headers_mut().insert(
+        HeaderName::from_static(REQUEST_ID_HEADER),
+        HeaderValue::from_str(&request_id)
+            .unwrap_or_else(|_| HeaderValue::from_static("invalid-request-id")),
     );
     request.extensions_mut().insert(RequestContext {
         request_id: request_id.clone(),
@@ -128,6 +263,13 @@ pub async fn correlation_id_middleware(mut request: Request, next: Next) -> Resp
     response.headers_mut().insert(
         HeaderName::from_static(REQUEST_ID_HEADER),
         response_header(&request_id),
+        HeaderValue::from_str(&correlation_id)
+            .unwrap_or_else(|_| HeaderValue::from_static("invalid-correlation-id")),
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static(REQUEST_ID_HEADER),
+        HeaderValue::from_str(&request_id)
+            .unwrap_or_else(|_| HeaderValue::from_static("invalid-request-id")),
     );
 
     response
@@ -285,6 +427,17 @@ pub async fn method_not_allowed_middleware(request: Request, next: Next) -> Resp
             "message": format!("Method {} is not allowed for {}", method, path)
         }));
         return (StatusCode::METHOD_NOT_ALLOWED, body).into_response();
+        let body = Json(ErrorResponse::from_error_code(
+            ErrorCode::MethodNotAllowed,
+            format!("Method {} is not allowed for {}", method, uri.path()),
+        ));
+        let mut normalized = (StatusCode::METHOD_NOT_ALLOWED, body).into_response();
+        for (name, value) in response.headers() {
+            if !normalized.headers().contains_key(name) {
+                normalized.headers_mut().insert(name.clone(), value.clone());
+            }
+        }
+        return normalized;
     }
 
     response
@@ -451,6 +604,7 @@ fn payload_too_large(limit: usize) -> Response {
     use axum::Json;
 
     let body = Json(serde_json::json!({
+        "code": ErrorCode::PayloadTooLarge.as_str(),
         "error": "PAYLOAD_TOO_LARGE",
         "message": format!(
             "Request body exceeds the {limit} byte limit for this route"
@@ -584,7 +738,12 @@ impl CorsConfig {
                 header::AUTHORIZATION,
                 header::HeaderName::from_static("x-request-id"),
                 header::HeaderName::from_static("x-correlation-id"),
+                header::HeaderName::from_static("x-api-key"),
             ]))
+            .expose_headers([
+                header::HeaderName::from_static(RECEIPT_HEADER),
+                header::HeaderName::from_static(RECEIPT_ID_HEADER),
+            ])
             .allow_credentials(self.allow_credentials)
     }
 }
@@ -674,7 +833,8 @@ pub async fn api_version_middleware(request: Request, next: Next) -> Response {
         );
 
         let body = Json(serde_json::json!({
-            "error": "UNSUPPORTED_API_VERSION",
+            "code": ErrorCode::UnsupportedApiVersion.as_str(),
+            "error": ErrorCode::UnsupportedApiVersion.as_str(),
             "message": format!(
                 "API version '{}' is not supported. Supported versions: {}",
                 version,
@@ -861,4 +1021,4 @@ mod body_size_and_cors_tests {
         // Empty global allowlist falls back to nothing (layer uses Allow-Any).
         assert!(CorsConfig::new(vec![], false).origins_for("/anything").is_empty());
     }
-}
+}

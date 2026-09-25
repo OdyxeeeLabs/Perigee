@@ -1,5 +1,6 @@
 use crate::log_redaction::{redact_display, redact_endpoint};
 use crate::parser::ArgParser;
+use crate::runner::cancellation::wait_for_cancellation;
 use crate::rpc_provider::ProviderRegistry;
 use crate::stellar_service::{StellarService, StellarServiceConfig, StellarServiceError};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -32,8 +33,17 @@ pub enum SimulationError {
     #[error("RPC request failed: {0}")]
     RpcRequestFailed(String),
 
+    #[error("All {attempts} RPC attempts failed: {last_error}")]
+    AllAttemptsFailed { attempts: u32, last_error: String },
+
+    #[error("RPC circuit breaker open: {0}")]
+    CircuitBreakerOpen(String),
+
     #[error("RPC node timeout")]
     NodeTimeout,
+
+    #[error("Request cancelled")]
+    Cancelled,
 
     #[error("Node returned an error: {0}")]
     NodeError(String),
@@ -105,6 +115,34 @@ impl SimulationError {
 impl From<soroban_env_host::HostError> for SimulationError {
     fn from(e: soroban_env_host::HostError) -> Self {
         SimulationError::ExecutionFailed(format!("{e:?}"))
+    }
+}
+
+impl From<StellarServiceError> for SimulationError {
+    fn from(error: StellarServiceError) -> Self {
+        let message = error.to_string();
+        match error {
+            StellarServiceError::CircuitOpen { .. } => {
+                SimulationError::CircuitBreakerOpen(message)
+            }
+            StellarServiceError::NoHealthyProviders => {
+                SimulationError::CircuitBreakerOpen(message)
+            }
+            StellarServiceError::Timeout { .. } => SimulationError::NodeTimeout,
+            StellarServiceError::Network { source, .. } => SimulationError::NetworkError(source),
+            StellarServiceError::HttpError { status, url } => {
+                SimulationError::RpcRequestFailed(format!("HTTP error: {status} from {url}"))
+            }
+            StellarServiceError::AllAttemptsFailed {
+                attempts,
+                last_error,
+                ..
+            } => SimulationError::AllAttemptsFailed {
+                attempts,
+                last_error,
+            },
+            _ => SimulationError::RpcRequestFailed(message),
+        }
     }
 }
 
@@ -1340,7 +1378,7 @@ impl SimulationEngine {
                 .into_iter()
                 .next()
                 .ok_or_else(|| {
-                    SimulationError::RpcRequestFailed("No healthy providers".to_string())
+                    SimulationError::CircuitBreakerOpen("No healthy providers".to_string())
                 })?,
             None => crate::rpc_provider::RpcProvider {
                 name: "default".to_string(),
@@ -1359,7 +1397,7 @@ impl SimulationEngine {
                 serde_json::json!({ "keys": [key_xdr] }),
             )
             .await
-            .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
+            .map_err(SimulationError::from)?;
 
         let response: GetLedgerEntriesResponse = serde_json::from_value(raw1)
             .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
@@ -1421,7 +1459,7 @@ impl SimulationEngine {
                 serde_json::json!({ "keys": [wasm_key_xdr] }),
             )
             .await
-            .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
+            .map_err(SimulationError::from)?;
 
         let response2: GetLedgerEntriesResponse = serde_json::from_value(raw2)
             .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
@@ -1477,6 +1515,32 @@ impl SimulationEngine {
         protocol_version: Option<u32>,
         enable_experimental: Option<bool>,
     ) -> Result<SimulationResult, SimulationError> {
+        self.simulate_from_contract_id_with_cancellation(
+            contract_id,
+            function_name,
+            args,
+            ledger_overrides,
+            protocol_version,
+            enable_experimental,
+            CancellationToken::new(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn simulate_from_contract_id_with_cancellation(
+        &self,
+        contract_id: &str,
+        function_name: &str,
+        args: Vec<String>,
+        ledger_overrides: Option<HashMap<String, String>>,
+        protocol_version: Option<u32>,
+        enable_experimental: Option<bool>,
+        cancellation: CancellationToken,
+    ) -> Result<SimulationResult, SimulationError> {
+        if cancellation.is_cancelled() {
+            return Err(SimulationError::Cancelled);
+        }
         if contract_id.is_empty() {
             return Err(SimulationError::NodeError(
                 "Contract ID cannot be empty".to_string(),
@@ -1486,16 +1550,19 @@ impl SimulationEngine {
         if let Some(overrides) = ledger_overrides {
             if !overrides.is_empty() || protocol_version.is_some() || enable_experimental.is_some()
             {
-                return self
-                    .simulate_locally(
+                return wait_for_cancellation(
+                    &cancellation,
+                    self.simulate_locally(
                         contract_id,
                         function_name,
                         args,
                         overrides,
                         protocol_version,
                         enable_experimental,
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .map_err(|_| SimulationError::Cancelled)?;
             }
         }
 
@@ -1507,7 +1574,10 @@ impl SimulationEngine {
             let contract_hash = self.parse_contract_id(contract_id)?;
             let invocation =
                 crate::runner::ContractInvocation::new(contract_hash, function_name, args.clone());
-            match runner.simulate(&invocation).await {
+            match runner
+                .simulate_with_cancellation(&invocation, cancellation.clone())
+                .await
+            {
                 Ok(result) => {
                     tracing::debug!(
                         contract_id = %contract_id,
@@ -1529,7 +1599,12 @@ impl SimulationEngine {
         }
 
         let transaction_xdr = self.create_invoke_transaction(contract_id, function_name, args)?;
-        self.simulate_transaction(&transaction_xdr).await
+        wait_for_cancellation(
+            &cancellation,
+            self.simulate_transaction(&transaction_xdr),
+        )
+        .await
+        .map_err(|_| SimulationError::Cancelled)?
     }
 
     /// Optimized limit discovery via binary search
@@ -1541,9 +1616,35 @@ impl SimulationEngine {
         args: Vec<String>,
         safety_margin: f64,
     ) -> Result<OptimizationReport, SimulationError> {
+        self.optimize_limits_with_cancellation(
+            contract_id,
+            function_name,
+            args,
+            safety_margin,
+            CancellationToken::new(),
+        )
+        .await
+    }
+
+    pub async fn optimize_limits_with_cancellation(
+        &self,
+        contract_id: &str,
+        function_name: &str,
+        args: Vec<String>,
+        safety_margin: f64,
+        cancellation: CancellationToken,
+    ) -> Result<OptimizationReport, SimulationError> {
         // 1. Get initial estimate
         let initial_result = self
-            .simulate_from_contract_id(contract_id, function_name, args.clone(), None, None, None)
+            .simulate_from_contract_id_with_cancellation(
+                contract_id,
+                function_name,
+                args.clone(),
+                None,
+                None,
+                None,
+                cancellation.clone(),
+            )
             .await?;
         let estimate = initial_result.resources;
         let contract_id = contract_id.to_string();
@@ -1586,6 +1687,7 @@ impl SimulationEngine {
             estimate,
             &transaction_data,
             cancellation,
+            cancellation.clone(),
         );
 
         let (cpu_search, ram_search, ledger_read_search, ledger_write_search) = tokio::join!(
@@ -1786,26 +1888,35 @@ impl SimulationEngine {
         _resource_type: ResourceSearchKind,
     ) -> Result<u64, SimulationError> {
         result
+        resource_type: ResourceSearchKind,
+    ) -> Result<u64, SimulationError> {
+        result.map_err(|err| {
+            if Self::is_cancelled_search_error(&err) {
+                err
+            } else {
+                SimulationError::RpcRequestFailed(format!(
+                    "{} optimization search failed: {}",
+                    resource_type.label(),
+                    err
+                ))
+            }
+        })
     }
 
-    fn cancelled_search_error(resource_type: ResourceSearchKind) -> SimulationError {
-        SimulationError::RpcRequestFailed(format!(
-            "Optimization search cancelled while {} search was running",
-            resource_type.label()
-        ))
+    fn cancelled_search_error(_resource_type: ResourceSearchKind) -> SimulationError {
+        SimulationError::Cancelled
     }
 
     fn is_cancelled_search_error(err: &SimulationError) -> bool {
-        matches!(
-            err,
-            SimulationError::RpcRequestFailed(msg)
-                if msg.starts_with("Optimization search cancelled")
-        )
+        matches!(err, SimulationError::Cancelled)
     }
 
     fn is_significant_search_failure(err: &SimulationError) -> bool {
         match err {
-            SimulationError::NodeTimeout | SimulationError::NetworkError(_) => true,
+            SimulationError::NodeTimeout
+            | SimulationError::NetworkError(_)
+            | SimulationError::AllAttemptsFailed { .. }
+            | SimulationError::CircuitBreakerOpen(_) => true,
             SimulationError::RpcRequestFailed(msg) => {
                 msg.starts_with("HTTP error:")
                     || msg.starts_with("Network error:")
@@ -1940,7 +2051,7 @@ impl SimulationEngine {
         let providers = registry.providers_by_latency().await;
 
         if providers.is_empty() {
-            return Err(SimulationError::RpcRequestFailed(
+            return Err(SimulationError::CircuitBreakerOpen(
                 "All RPC providers are unavailable (circuit breaker tripped)".to_string(),
             ));
         }
@@ -1978,7 +2089,6 @@ impl SimulationEngine {
                     // consistently slow provider never leaves the "top
                     // pick" slot even after its EMA should have decayed.
                     registry.record_rtt(&provider.url, rtt_us);
-                    registry.report_success(&provider.url).await;
                     return Ok(result);
                 }
                 Err(e) => {
@@ -1989,28 +2099,31 @@ impl SimulationEngine {
                     // than the provider's own latency.
                     let record_sample = !matches!(
                         &e,
-                        SimulationError::NodeTimeout | SimulationError::NetworkError(_)
+                        SimulationError::NodeTimeout
+                            | SimulationError::NetworkError(_)
+                            | SimulationError::AllAttemptsFailed { .. }
+                            | SimulationError::CircuitBreakerOpen(_)
                     );
                     if record_sample {
                         registry.record_rtt(&provider.url, rtt_us);
                     }
 
                     let should_retry = match &e {
-                        SimulationError::NodeTimeout | SimulationError::NetworkError(_) => true,
+                        SimulationError::NodeTimeout
+                        | SimulationError::NetworkError(_)
+                        | SimulationError::AllAttemptsFailed { .. }
+                        | SimulationError::CircuitBreakerOpen(_) => true,
                         SimulationError::RpcRequestFailed(msg)
                             if msg.starts_with("HTTP error:") =>
                         {
                             // Extract status code from "HTTP error: <code>"
                             msg.split_whitespace()
-                                .last()
-                                .and_then(|s| s.parse::<u16>().ok())
+                                .find_map(|part| part.parse::<u16>().ok())
                                 .map(ProviderRegistry::is_retryable_status)
                                 .unwrap_or(false)
                         }
                         _ => false,
                     };
-
-                    registry.report_failure(&provider.url).await;
 
                     if should_retry {
                         tracing::warn!(
@@ -2110,11 +2223,9 @@ impl SimulationEngine {
         for (provider, result) in provider_results {
             match result {
                 Ok(result) => {
-                    registry.report_success(&provider.url).await;
                     successes.push((provider, result));
                 }
                 Err(error) => {
-                    registry.report_failure(&provider.url).await;
                     failures.push(format!("{}: {}", provider.name, error));
                 }
             }
@@ -2245,8 +2356,10 @@ impl SimulationEngine {
                 serde_json::json!({ "transaction": transaction_xdr }),
             )
             .await
+            .map_err(SimulationError::from)?;
             .map_err(|e| match e {
                 StellarServiceError::Timeout { .. } => SimulationError::NodeTimeout,
+                StellarServiceError::Cancelled { .. } => SimulationError::Cancelled,
                 StellarServiceError::Network { source, .. } => {
                     SimulationError::NetworkError(source)
                 }
@@ -2508,7 +2621,7 @@ impl SimulationEngine {
                 serde_json::json!({ "keys": missing_keys }),
             )
             .await
-            .map_err(|e| SimulationError::RpcRequestFailed(e.to_string()))?;
+            .map_err(SimulationError::from)?;
 
         let rpc_response: GetLedgerEntriesResponse = serde_json::from_value(raw).map_err(|e| {
             SimulationError::RpcRequestFailed(format!("Failed to parse response: {e}"))
