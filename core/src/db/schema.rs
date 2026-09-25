@@ -1,4 +1,8 @@
 use crate::db::MonitoredPool;
+use sqlx::sqlite::Sqlite;
+use sqlx::{SqlitePool, Transaction};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use sqlx::SqlitePool;
 use std::sync::Arc;
 
 pub type DbPool = MonitoredPool;
@@ -243,6 +247,34 @@ impl VaultsTable {
         .await
     }
 
+    pub async fn find_by_id_in_transaction(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        id: &str,
+    ) -> Result<Option<crate::db::models::VaultRecord>, sqlx::Error> {
+        sqlx::query_as::<_, crate::db::models::VaultRecord>(
+            "SELECT id, manager_id, name, status, config_json, version, idempotency_key, created_at, updated_at, deleted_at FROM vaults WHERE id = ?1 AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+    }
+
+    pub async fn find_by_idempotency_key_in_transaction(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        manager_id: &str,
+        key: &str,
+    ) -> Result<Option<crate::db::models::VaultRecord>, sqlx::Error> {
+        sqlx::query_as::<_, crate::db::models::VaultRecord>(
+            "SELECT id, manager_id, name, status, config_json, version, idempotency_key, created_at, updated_at, deleted_at FROM vaults WHERE manager_id = ?1 AND idempotency_key = ?2 AND deleted_at IS NULL",
+        )
+        .bind(manager_id)
+        .bind(key)
+        .fetch_optional(&mut *tx)
+        .await
+    }
+
     pub async fn insert(
         &self,
         id: &str,
@@ -270,6 +302,96 @@ impl VaultsTable {
         drop(connection);
 
         self.find_by_id(id).await?.ok_or(sqlx::Error::RowNotFound)
+    }
+
+    pub async fn insert_in_transaction(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        id: &str,
+        manager_id: &str,
+        name: &str,
+        status: &str,
+        config_json: &str,
+        idempotency_key: Option<&str>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO vaults (id, manager_id, name, status, config_json, version, idempotency_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8)",
+        )
+        .bind(id)
+        .bind(manager_id)
+        .bind(name)
+        .bind(status)
+        .bind(config_json)
+        .bind(idempotency_key)
+        .bind(now)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn create_idempotent(
+        &self,
+        id: &str,
+        manager_id: &str,
+        name: &str,
+        status: &str,
+        config_json: &str,
+        idempotency_key: Option<&str>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<crate::db::models::VaultRecord, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        if let Some(key) = idempotency_key {
+            match self
+                .find_by_idempotency_key_in_transaction(&mut tx, manager_id, key)
+                .await
+            {
+                Ok(Some(existing)) => {
+                    tx.commit().await?;
+                    return Ok(existing);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = tx.rollback().await;
+                    return Err(error);
+                }
+            }
+        }
+
+        if let Err(error) = self
+            .insert_in_transaction(
+                &mut tx,
+                id,
+                manager_id,
+                name,
+                status,
+                config_json,
+                idempotency_key,
+                now,
+            )
+            .await
+        {
+            let _ = tx.rollback().await;
+            return Err(error);
+        }
+
+        let record = match self.find_by_id_in_transaction(&mut tx, id).await {
+            Ok(Some(record)) => record,
+            Ok(None) => {
+                let _ = tx.rollback().await;
+                return Err(sqlx::Error::RowNotFound);
+            }
+            Err(error) => {
+                let _ = tx.rollback().await;
+                return Err(error);
+            }
+        };
+
+        tx.commit().await?;
+        Ok(record)
     }
 
     /// Paginated list of vaults for a given manager, ordered newest-first.
@@ -422,6 +544,19 @@ impl VaultsTable {
     }
 }
 
+fn parse_report_timestamp(value: String) -> Result<DateTime<Utc>, sqlx::Error> {
+    DateTime::parse_from_rfc3339(&value)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .or_else(|_| {
+            NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S%.f")
+                .or_else(|_| {
+                    NaiveDateTime::parse_from_str(&value, "%Y-%m-%d %H:%M:%S")
+                })
+                .map(|timestamp| timestamp.and_utc())
+        })
+        .map_err(|error| sqlx::Error::Protocol(format!("invalid reconciliation report timestamp: {error}")))
+}
+
 #[derive(Clone)]
 pub struct ReconciliationReportsTable {
     pool: Arc<DbPool>,
@@ -446,17 +581,33 @@ impl ReconciliationReportsTable {
         .fetch_optional(&mut *connection)
         .await?;
 
-        Ok(row.map(|r| crate::db::models::ReconciliationReport {
-            id: r.0,
-            from_ledger: r.1,
-            to_ledger: r.2,
-            tolerance_pct: r.3,
-            total_ledgers: r.4,
-            discrepancies_count: r.5,
-            avg_delta_pct: r.6,
-            max_delta_pct: r.7,
-            summary: r.8.and_then(|v| serde_json::from_value(v).ok()),
-            created_at: r.9,
+        let Some((
+            id,
+            from_ledger,
+            to_ledger,
+            tolerance_pct,
+            total_ledgers,
+            discrepancies_count,
+            avg_delta_pct,
+            max_delta_pct,
+            summary,
+            created_at,
+        )) = row
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(crate::db::models::ReconciliationReport {
+            id,
+            from_ledger,
+            to_ledger,
+            tolerance_pct,
+            total_ledgers,
+            discrepancies_count,
+            avg_delta_pct,
+            max_delta_pct,
+            summary: summary.and_then(|v| serde_json::from_value(v).ok()),
+            created_at: parse_report_timestamp(created_at)?,
         }))
     }
 
@@ -474,9 +625,9 @@ impl ReconciliationReportsTable {
         .fetch_all(&mut *connection)
         .await?;
 
-        Ok(rows
-            .into_iter()
-            .map(|r| crate::db::models::ReconciliationReport {
+        let mut reports = Vec::with_capacity(rows.len());
+        for r in rows {
+            reports.push(crate::db::models::ReconciliationReport {
                 id: r.0,
                 from_ledger: r.1,
                 to_ledger: r.2,
@@ -486,13 +637,47 @@ impl ReconciliationReportsTable {
                 avg_delta_pct: r.6,
                 max_delta_pct: r.7,
                 summary: r.8.and_then(|v| serde_json::from_value(v).ok()),
-                created_at: r.9,
-            })
-            .collect())
+                created_at: parse_report_timestamp(r.9)?,
+            });
+        }
+        Ok(reports)
     }
 
     pub async fn insert(
         &self,
+        id: &str,
+        from_ledger: i64,
+        to_ledger: i64,
+        tolerance_pct: f64,
+        total_ledgers: i32,
+        discrepancies_count: i32,
+        avg_delta_pct: f64,
+        max_delta_pct: f64,
+        summary: Option<&serde_json::Value>,
+        created_at: &DateTime<Utc>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO reconciliation_reports (id, from_ledger, to_ledger, tolerance_pct, total_ledgers, discrepancies_count, avg_delta_pct, max_delta_pct, summary, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )
+        .bind(id)
+        .bind(from_ledger)
+        .bind(to_ledger)
+        .bind(tolerance_pct)
+        .bind(total_ledgers)
+        .bind(discrepancies_count)
+        .bind(avg_delta_pct)
+        .bind(max_delta_pct)
+        .bind(summary)
+        .bind(created_at.to_rfc3339())
+        .execute(&*self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn insert_in_transaction(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
         id: &str,
         from_ledger: i64,
         to_ledger: i64,
@@ -519,6 +704,7 @@ impl ReconciliationReportsTable {
         .bind(summary)
         .bind(created_at)
         .execute(&mut *connection)
+        .execute(&mut *tx)
         .await?;
 
         Ok(())
@@ -542,7 +728,24 @@ impl ReconciliationDiscrepanciesTable {
     ) -> Result<(), sqlx::Error> {
         let mut connection = self.pool.acquire().await?;
         let mut tx = sqlx::Connection::begin(&mut *connection).await?;
+        let mut tx = self.pool.begin().await?;
+        if let Err(error) = self
+            .insert_for_report_in_transaction(&mut tx, report_id, discrepancies)
+            .await
+        {
+            let _ = tx.rollback().await;
+            return Err(error);
+        }
+        tx.commit().await?;
+        Ok(())
+    }
 
+    pub async fn insert_for_report_in_transaction(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        report_id: &str,
+        discrepancies: &[crate::db::models::Discrepancy],
+    ) -> Result<(), sqlx::Error> {
         for disc in discrepancies {
             sqlx::query(
                 "INSERT INTO reconciliation_discrepancies (id, report_id, ledger_sequence, expected_fee, actual_fee, delta, delta_pct, severity) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -559,7 +762,6 @@ impl ReconciliationDiscrepanciesTable {
             .await?;
         }
 
-        tx.commit().await?;
         Ok(())
     }
 

@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 use utoipa::ToSchema;
 
 /// Structured, machine-readable error codes for the Perigee platform.
@@ -31,11 +32,17 @@ pub enum ErrorCode {
     InvalidXdr,
     PayloadTooLarge,
     UnsupportedMediaType,
+    NotAcceptable,
     ParseError,
     ValidationFailed,
 
     // ── Resource Lifecycle & Conflict (404 / 409 / 429) ──────────────────────
     NotFound,
+    VaultNotFound,
+    ManagerAlreadyExists,
+    JobNotFound,
+    JobCannotBeCancelled,
+    ReconciliationNotFound,
     AlreadyExists,
     Conflict,
     StateMismatch,
@@ -51,6 +58,7 @@ pub enum ErrorCode {
     RpcRequestFailed,
     RpcTimeout,
     NodeTimeout,
+    NoHealthyRpcProviders,
     LocalUnavailable,
     ConsensusMismatch,
     InsufficientConsensus,
@@ -72,6 +80,10 @@ pub enum ErrorCode {
     SerializationError,
     ServiceUnavailable,
     ConfigurationError,
+    ReconciliationFailed,
+    MethodNotAllowed,
+    UnsupportedApiVersion,
+    RequestBodyReadFailed,
 }
 
 impl ErrorCode {
@@ -96,10 +108,16 @@ impl ErrorCode {
             Self::InvalidXdr => "INVALID_XDR",
             Self::PayloadTooLarge => "PAYLOAD_TOO_LARGE",
             Self::UnsupportedMediaType => "UNSUPPORTED_MEDIA_TYPE",
+            Self::NotAcceptable => "NOT_ACCEPTABLE",
             Self::ParseError => "PARSE_ERROR",
             Self::ValidationFailed => "VALIDATION_FAILED",
 
             Self::NotFound => "NOT_FOUND",
+            Self::VaultNotFound => "VAULT_NOT_FOUND",
+            Self::ManagerAlreadyExists => "MANAGER_ALREADY_EXISTS",
+            Self::JobNotFound => "JOB_NOT_FOUND",
+            Self::JobCannotBeCancelled => "JOB_CANNOT_BE_CANCELLED",
+            Self::ReconciliationNotFound => "RECONCILIATION_NOT_FOUND",
             Self::AlreadyExists => "ALREADY_EXISTS",
             Self::Conflict => "CONFLICT",
             Self::StateMismatch => "STATE_MISMATCH",
@@ -114,6 +132,7 @@ impl ErrorCode {
             Self::RpcRequestFailed => "RPC_REQUEST_FAILED",
             Self::RpcTimeout => "RPC_TIMEOUT",
             Self::NodeTimeout => "NODE_TIMEOUT",
+            Self::NoHealthyRpcProviders => "NO_HEALTHY_RPC_PROVIDERS",
             Self::LocalUnavailable => "LOCAL_UNAVAILABLE",
             Self::ConsensusMismatch => "CONSENSUS_MISMATCH",
             Self::InsufficientConsensus => "INSUFFICIENT_CONSENSUS",
@@ -134,6 +153,10 @@ impl ErrorCode {
             Self::SerializationError => "SERIALIZATION_ERROR",
             Self::ServiceUnavailable => "SERVICE_UNAVAILABLE",
             Self::ConfigurationError => "CONFIGURATION_ERROR",
+            Self::ReconciliationFailed => "RECONCILIATION_FAILED",
+            Self::MethodNotAllowed => "METHOD_NOT_ALLOWED",
+            Self::UnsupportedApiVersion => "UNSUPPORTED_API_VERSION",
+            Self::RequestBodyReadFailed => "REQUEST_BODY_READ_FAILED",
         }
     }
 
@@ -145,7 +168,7 @@ impl ErrorCode {
             | Self::TokenExpired
             | Self::InvalidSignature => StatusCode::UNAUTHORIZED,
 
-            Self::Forbidden | Self::PolicyExpired | Self::ManagerNotFound => StatusCode::FORBIDDEN,
+            Self::Forbidden | Self::PolicyExpired => StatusCode::FORBIDDEN,
 
             Self::BadRequest
             | Self::InvalidInput
@@ -167,17 +190,33 @@ impl ErrorCode {
             | Self::InsufficientAllowance
             | Self::SlippageExceeded
             | Self::InvalidFee
+            | Self::JobCannotBeCancelled
             | Self::ContractPaused => StatusCode::BAD_REQUEST,
 
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::NotAcceptable => StatusCode::NOT_ACCEPTABLE,
 
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::AlreadyExists | Self::Conflict | Self::StateMismatch => StatusCode::CONFLICT,
+            Self::RequestBodyReadFailed | Self::UnsupportedApiVersion => StatusCode::BAD_REQUEST,
+            Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
+
+            Self::NotFound
+            | Self::ManagerNotFound
+            | Self::VaultNotFound
+            | Self::JobNotFound
+            | Self::ReconciliationNotFound => StatusCode::NOT_FOUND,
+            Self::AlreadyExists
+            | Self::ManagerAlreadyExists
+            | Self::Conflict
+            | Self::StateMismatch => StatusCode::CONFLICT,
             Self::RateLimitExceeded | Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
 
             Self::RpcTimeout | Self::NodeTimeout => StatusCode::GATEWAY_TIMEOUT,
-            Self::ServiceUnavailable | Self::CircuitBreakerOpen => StatusCode::SERVICE_UNAVAILABLE,
+            Self::ServiceUnavailable
+            | Self::CircuitBreakerOpen
+            | Self::NoHealthyRpcProviders => StatusCode::SERVICE_UNAVAILABLE,
 
             Self::InternalServerError
             | Self::DatabaseError
@@ -185,6 +224,7 @@ impl ErrorCode {
             | Self::IoError
             | Self::SerializationError
             | Self::ConfigurationError
+            | Self::ReconciliationFailed
             | Self::LocalUnavailable
             | Self::ConsensusMismatch
             | Self::InsufficientConsensus
@@ -192,6 +232,54 @@ impl ErrorCode {
             | Self::OracleNotConfigured
             | Self::InvalidOraclePrice => StatusCode::INTERNAL_SERVER_ERROR,
         }
+    }
+
+    pub fn legacy_code(&self) -> ErrorCode {
+        crate::namespaced_errors::legacy_code(*self)
+    }
+
+    pub fn is_sensitive(&self) -> bool {
+        matches!(
+            *self,
+            Self::InternalServerError
+                | Self::InvalidApiKey
+                | Self::InvalidSignature
+                | Self::CircuitBreakerOpen
+                | Self::NoHealthyRpcProviders
+                | Self::RpcTimeout
+                | Self::NodeTimeout
+                | Self::DatabaseError
+                | Self::NetworkError
+                | Self::IoError
+                | Self::SerializationError
+                | Self::ConfigurationError
+                | Self::ReconciliationFailed
+                | Self::RpcRequestFailed
+                | Self::LocalUnavailable
+                | Self::ConsensusMismatch
+                | Self::InsufficientConsensus
+                | Self::OracleNotConfigured
+                | Self::InvalidOraclePrice
+        )
+    }
+}
+
+impl FromStr for ErrorCode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        serde_json::from_value(serde_json::Value::String(
+            value.trim().to_ascii_uppercase(),
+        ))
+        .map_err(|_| format!("unknown error code: {value}"))
+    }
+}
+
+impl TryFrom<&str> for ErrorCode {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.parse()
     }
 }
 
@@ -260,6 +348,19 @@ impl ErrorResponse {
     /// Create an error response from an [`ErrorCode`].
     pub fn from_error_code(code: ErrorCode, message: impl Into<String>) -> Self {
         Self::new(code.as_str(), message)
+    }
+
+    pub fn from_error_code_with_legacy(
+        code: ErrorCode,
+        legacy_code: ErrorCode,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: code.as_str().to_string(),
+            error: legacy_code.as_str().to_string(),
+            message: message.into(),
+            details: None,
+        }
     }
 
     /// Create an error response from an [`ErrorCode`] with structured details.

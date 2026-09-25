@@ -1,6 +1,9 @@
 use crate::audit_log::{log_audit_event, log_security_event, SecurityEventType};
 use crate::config::{SecretKeyring, SecretKeyringError, SecretVersion};
+use crate::error_codes::ErrorCode;
+use crate::errors::{ApiJson, AppError};
 use crate::errors::AppError;
+use crate::input_sanitization::SanitizedJson;
 use axum::{extract::Request, http::header, middleware::Next, response::Response, Extension, Json};
 use base64::{
     engine::general_purpose::STANDARD as BASE64,
@@ -850,7 +853,10 @@ pub(crate) fn rotate_refresh_token(
     refresh_token: &str,
 ) -> Result<VerifyResponse, AppError> {
     if refresh_token.is_empty() {
-        return Err(AppError::Unauthorized("Missing refresh token".into()));
+        return Err(AppError::with_code(
+            ErrorCode::InvalidSignature,
+            "Missing refresh token",
+        ));
     }
 
     let token_hash = hash_refresh_token(refresh_token);
@@ -884,7 +890,10 @@ pub(crate) fn rotate_refresh_token(
                         None,
                         Some("Refresh token expired"),
                     );
-                    return Err(AppError::Unauthorized("Refresh token expired".into()));
+                    return Err(AppError::with_code(
+                        ErrorCode::TokenExpired,
+                        "Refresh token expired",
+                    ));
                 }
                 // Leave a tombstone so reuse can be detected.
                 store.insert(
@@ -912,8 +921,9 @@ pub(crate) fn rotate_refresh_token(
                     None,
                     Some("Refresh token reuse detected; revoked rotation family"),
                 );
-                return Err(AppError::Unauthorized(
-                    "Refresh token reuse detected; re-authenticate".into(),
+                return Err(AppError::with_code(
+                    ErrorCode::InvalidSignature,
+                    "Refresh token reuse detected; re-authenticate",
                 ));
             }
             None => {
@@ -924,8 +934,9 @@ pub(crate) fn rotate_refresh_token(
                     None,
                     Some("Invalid or already-rotated refresh token"),
                 );
-                return Err(AppError::Unauthorized(
-                    "Invalid or already-rotated refresh token".into(),
+                return Err(AppError::with_code(
+                    ErrorCode::InvalidSignature,
+                    "Invalid or already-rotated refresh token",
                 ));
             }
         }
@@ -1060,10 +1071,10 @@ pub(crate) fn build_challenge_envelope(
 pub(crate) fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str) -> Result<String, AppError> {
     let raw = BASE64
         .decode(signed_xdr_b64)
-        .map_err(|_| AppError::BadRequest("Invalid base64".into()))?;
+        .map_err(|_| AppError::with_code(ErrorCode::InvalidBase64, "Invalid base64"))?;
 
     let envelope = TransactionEnvelope::from_xdr(&raw, Limits::none())
-        .map_err(|_| AppError::BadRequest("Invalid transaction XDR".into()))?;
+        .map_err(|_| AppError::with_code(ErrorCode::InvalidXdr, "Invalid transaction XDR"))?;
 
     let inner = match envelope {
         TransactionEnvelope::Tx(inner) => inner,
@@ -1193,16 +1204,18 @@ pub(crate) fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str)
 )]
 pub async fn challenge_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<ChallengeRequest>,
+    ApiJson(payload): ApiJson<ChallengeRequest>,
+    SanitizedJson(payload): SanitizedJson<ChallengeRequest>,
 ) -> Result<Json<ChallengeResponse>, AppError> {
     if state.is_verification_paused() {
-        return Err(AppError::Internal(
-            "Message verification is temporarily paused for emergency maintenance".into(),
+        return Err(AppError::with_code(
+            ErrorCode::ServiceUnavailable,
+            "Message verification is temporarily paused for emergency maintenance",
         ));
     }
 
     let strkey = Strkey::from_string(&payload.account)
-        .map_err(|_| AppError::BadRequest("Invalid Stellar address".into()))?;
+        .map_err(|_| AppError::with_code(ErrorCode::InvalidInput, "Invalid Stellar address"))?;
 
     let pubkey = match strkey {
         Strkey::PublicKeyEd25519(pk) => pk.0,
@@ -1230,7 +1243,8 @@ pub async fn challenge_handler(
 )]
 pub async fn verify_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<VerifyRequest>,
+    ApiJson(payload): ApiJson<VerifyRequest>,
+    SanitizedJson(payload): SanitizedJson<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
     if state.is_verification_paused() {
         log_security_event(
@@ -1240,8 +1254,9 @@ pub async fn verify_handler(
             None,
             Some("Verification paused for emergency maintenance"),
         );
-        return Err(AppError::Internal(
-            "Message verification is temporarily paused for emergency maintenance".into(),
+        return Err(AppError::with_code(
+            ErrorCode::ServiceUnavailable,
+            "Message verification is temporarily paused for emergency maintenance",
         ));
     }
 
@@ -1333,8 +1348,16 @@ pub async fn verify_handler(
 )]
 pub async fn refresh_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<RefreshRequest>,
+    ApiJson(payload): ApiJson<RefreshRequest>,
+    SanitizedJson(payload): SanitizedJson<RefreshRequest>,
 ) -> Result<Json<VerifyResponse>, AppError> {
+    if state.is_verification_paused() {
+        return Err(AppError::with_code(
+            ErrorCode::ServiceUnavailable,
+            "Authentication is temporarily paused for emergency maintenance",
+        ));
+    }
+
     let tokens = rotate_refresh_token(&state, &payload.refresh_token)?;
     Ok(Json(tokens))
 }
@@ -1355,8 +1378,16 @@ pub struct RevokeResponse {
 )]
 pub async fn revoke_handler(
     Extension(state): Extension<Arc<AuthState>>,
-    Json(payload): Json<RefreshRequest>,
+    ApiJson(payload): ApiJson<RefreshRequest>,
+    SanitizedJson(payload): SanitizedJson<RefreshRequest>,
 ) -> Result<Json<RevokeResponse>, AppError> {
+    if state.is_verification_paused() {
+        return Err(AppError::with_code(
+            ErrorCode::ServiceUnavailable,
+            "Authentication is temporarily paused for emergency maintenance",
+        ));
+    }
+
     revoke_refresh_token(&state, &payload.refresh_token)?;
     Ok(Json(RevokeResponse { revoked: true }))
 }
@@ -1377,6 +1408,8 @@ pub async fn emergency_pause_handler(
     Extension(state): Extension<Arc<AuthState>>,
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<EmergencyPauseRequest>,
+    ApiJson(payload): ApiJson<EmergencyPauseRequest>,
+    SanitizedJson(payload): SanitizedJson<EmergencyPauseRequest>,
 ) -> Result<Json<EmergencyPauseResponse>, AppError> {
     if !user.is_admin() {
         return Err(AppError::Forbidden(
@@ -1418,6 +1451,11 @@ pub async fn auth_middleware(
     if state.is_verification_paused() && !emergency_path {
         return Err(AppError::Internal(
             "Authentication is temporarily paused for emergency maintenance".into(),
+    // Check if verification is paused — deny all requests during emergency maintenance
+    if state.is_verification_paused() {
+        return Err(AppError::with_code(
+            ErrorCode::ServiceUnavailable,
+            "Authentication is temporarily paused for emergency maintenance",
         ));
     }
 
@@ -1536,13 +1574,18 @@ pub async fn auth_middleware(
                 .map(|error| error.to_string())
                 .unwrap_or_else(|| "no active verification key matched".to_string());
             return Err(AppError::Unauthorized(format!("Invalid token: {detail}")));
+            return Err(AppError::with_code(
+                ErrorCode::InvalidSignature,
+                format!("Invalid token: {e}"),
+            ));
         }
     };
 
     // Validate JWT expiry claim (BE-030: verify token has not expired)
     if token_data.claims.exp <= now {
-        return Err(AppError::Unauthorized(
-            "Token has expired".into(),
+        return Err(AppError::with_code(
+            ErrorCode::TokenExpired,
+            "Token has expired",
         ));
     }
 
@@ -1578,10 +1621,10 @@ pub async fn auth_middleware(
                 None,
                 Some(&format!("Rate limit exceeded for tenant {}", tenant)),
             );
-            return Err(AppError::TooManyRequests(format!(
-                "Rate limit exceeded for tenant {}",
-                tenant
-            )));
+            return Err(AppError::with_code(
+                ErrorCode::RateLimitExceeded,
+                format!("Rate limit exceeded for tenant {}", tenant),
+            ));
         }
     }
 
@@ -1676,11 +1719,13 @@ pub struct ScopedTokenResponse {
 pub async fn issue_scoped_token_handler(
     Extension(state): Extension<Arc<AuthState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<ScopedTokenRequest>,
+    ApiJson(payload): ApiJson<ScopedTokenRequest>,
+    SanitizedJson(payload): SanitizedJson<ScopedTokenRequest>,
 ) -> Result<Json<ScopedTokenResponse>, AppError> {
     if state.is_verification_paused() {
-        return Err(AppError::Internal(
-            "Authentication is temporarily paused for emergency maintenance".into(),
+        return Err(AppError::with_code(
+            ErrorCode::ServiceUnavailable,
+            "Authentication is temporarily paused for emergency maintenance",
         ));
     }
 

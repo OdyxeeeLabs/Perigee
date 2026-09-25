@@ -5,6 +5,7 @@ use reqwest::Client;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tokio_util::sync::CancellationToken;
 
 const DEFAULT_ZSCORE_THRESHOLD: f64 = 2.0;
 const DEFAULT_SHIFT_THRESHOLD: f64 = 0.10;
@@ -297,9 +298,12 @@ impl SimulationService {
     }
 
     async fn emit_alert(&self, metric: &SimulationMetric, outliers: &[DriftDetail]) {
-        eprintln!(
-            "[ALERT] Resource shift detected for {}/{} on unchanged code hash {}: {:?}",
-            metric.contract, metric.method, metric.code_hash, outliers
+        tracing::warn!(
+            contract = %crate::log_redaction::redact_sensitive_text(&metric.contract),
+            method = %metric.method,
+            code_hash = %metric.code_hash,
+            outliers = ?outliers,
+            "Resource shift alert"
         );
 
         let Some(url) = &self.webhook_url else {
@@ -324,7 +328,10 @@ impl SimulationService {
         let event_id = match self.enqueue_webhook_event(url, &payload) {
             Ok(id) => id,
             Err(err) => {
-                eprintln!("[ALERT] Failed to persist webhook event, notification lost: {err}");
+                tracing::error!(
+                    error = %crate::log_redaction::redact_display(&err),
+                    "Failed to persist webhook alert"
+                );
                 return;
             }
         };
@@ -335,8 +342,10 @@ impl SimulationService {
         // already durably queued and `dispatch_due_events` will retry it
         // with backoff.
         if let Err(err) = self.deliver_event(event_id, url, &payload).await {
-            eprintln!(
-                "[ALERT] Immediate webhook delivery failed for event {event_id}, queued for retry: {err}"
+            tracing::warn!(
+                event_id,
+                error = %crate::log_redaction::redact_display(&err),
+                "Immediate webhook delivery failed; event queued for retry"
             );
         }
     }
@@ -381,8 +390,10 @@ impl SimulationService {
         match result {
             Ok(resp) if resp.status().is_success() => {
                 if let Err(err) = self.mark_event_delivered(event_id) {
-                    eprintln!(
-                        "[ALERT] Delivered webhook event {event_id} but failed to update status: {err}"
+                    tracing::error!(
+                        event_id,
+                        error = %crate::log_redaction::redact_display(&err),
+                        "Delivered webhook event but failed to update its status"
                     );
                 }
                 Ok(())
@@ -420,7 +431,11 @@ impl SimulationService {
         let conn = match self.connect() {
             Ok(conn) => conn,
             Err(err) => {
-                eprintln!("[ALERT] Failed to open database while rescheduling event {event_id}: {err}");
+                tracing::error!(
+                    event_id,
+                    error = %crate::log_redaction::redact_display(&err),
+                    "Failed to open database while rescheduling webhook event"
+                );
                 return;
             }
         };
@@ -434,7 +449,11 @@ impl SimulationService {
         let (attempts, max_attempts) = match row {
             Ok(row) => row,
             Err(err) => {
-                eprintln!("[ALERT] Failed to load webhook event {event_id} for reschedule: {err}");
+                tracing::error!(
+                    event_id,
+                    error = %crate::log_redaction::redact_display(&err),
+                    "Failed to load webhook event for reschedule"
+                );
                 return;
             }
         };
@@ -461,7 +480,11 @@ impl SimulationService {
         };
 
         if let Err(err) = update_result {
-            eprintln!("[ALERT] Failed to reschedule webhook event {event_id}: {err}");
+            tracing::error!(
+                event_id,
+                error = %crate::log_redaction::redact_display(&err),
+                "Failed to reschedule webhook event"
+            );
         }
     }
 
@@ -470,20 +493,39 @@ impl SimulationService {
     /// to call repeatedly / from multiple places: delivered or still-future
     /// events are simply skipped.
     pub async fn dispatch_due_events(&self) -> Result<usize, AppError> {
+        self.dispatch_due_events_with_cancellation(CancellationToken::new())
+            .await
+    }
+
+    pub async fn dispatch_due_events_with_cancellation(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<usize, AppError> {
+        if cancellation.is_cancelled() {
+            return Ok(0);
+        }
         let due = self.load_due_events()?;
         let count = due.len();
         for (event_id, url, payload_json) in due {
+            if cancellation.is_cancelled() {
+                break;
+            }
             let payload: serde_json::Value = match serde_json::from_str(&payload_json) {
                 Ok(payload) => payload,
                 Err(err) => {
-                    eprintln!(
-                        "[ALERT] Corrupt payload for webhook event {event_id}, marking dead_letter: {err}"
+                    tracing::error!(
+                        event_id,
+                        error = %crate::log_redaction::redact_display(&err),
+                        "Corrupt webhook payload; event marked dead-letter"
                     );
                     self.reschedule_event(event_id, &format!("corrupt payload: {err}"));
                     continue;
                 }
             };
-            let _ = self.deliver_event(event_id, &url, &payload).await;
+            let _ = tokio::select! {
+                _ = cancellation.cancelled() => break,
+                result = self.deliver_event(event_id, &url, &payload) => result,
+            };
         }
         Ok(count)
     }
@@ -514,15 +556,33 @@ impl SimulationService {
     /// survive process restarts: on startup, any events left `pending`
     /// from before a crash are picked up again on the very first sweep.
     pub fn spawn_dispatcher(self: std::sync::Arc<Self>) -> tokio::task::JoinHandle<()> {
+        self.spawn_dispatcher_with_cancellation(CancellationToken::new())
+    }
+
+    pub fn spawn_dispatcher_with_cancellation(
+        self: std::sync::Arc<Self>,
+        cancellation: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(std::time::Duration::from_secs(WEBHOOK_DISPATCH_POLL_SECS));
             loop {
-                interval.tick().await;
-                if let Err(err) = self.dispatch_due_events().await {
-                    eprintln!("[ALERT] Webhook dispatcher sweep failed: {err}");
+                tokio::select! {
+                    _ = cancellation.cancelled() => break,
+                    _ = interval.tick() => {
+                        if let Err(err) = self
+                            .dispatch_due_events_with_cancellation(cancellation.clone())
+                            .await
+                        {
+                            tracing::error!(
+                                error = %crate::log_redaction::redact_display(&err),
+                                "Webhook dispatcher sweep failed"
+                            );
+                        }
+                    }
                 }
             }
+            tracing::debug!("Webhook dispatcher stopped");
         })
     }
 }
