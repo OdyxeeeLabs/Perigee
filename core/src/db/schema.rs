@@ -1,7 +1,7 @@
-use sqlx::SqlitePool;
+use crate::db::MonitoredPool;
 use std::sync::Arc;
 
-pub type DbPool = SqlitePool;
+pub type DbPool = MonitoredPool;
 
 /// Shared typed schema that provides table-level typed repositories.
 pub struct TypedSchema {
@@ -51,11 +51,12 @@ impl ManagersTable {
         &self,
         id: &str,
     ) -> Result<Option<crate::db::models::ManagerRecord>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         sqlx::query_as::<_, crate::db::models::ManagerRecord>(
             "SELECT id, stellar_address, name, email, status, kyc_document_ref, notes, created_at, updated_at FROM managers WHERE id = ?1",
         )
         .bind(id)
-        .fetch_optional(&*self.pool)
+        .fetch_optional(&mut *connection)
         .await
     }
 
@@ -63,11 +64,12 @@ impl ManagersTable {
         &self,
         address: &str,
     ) -> Result<Option<crate::db::models::ManagerRecord>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         sqlx::query_as::<_, crate::db::models::ManagerRecord>(
             "SELECT id, stellar_address, name, email, status, kyc_document_ref, notes, created_at, updated_at FROM managers WHERE stellar_address = ?1",
         )
         .bind(address)
-        .fetch_optional(&*self.pool)
+        .fetch_optional(&mut *connection)
         .await
     }
 
@@ -75,18 +77,19 @@ impl ManagersTable {
         &self,
         status_filter: Option<&str>,
     ) -> Result<Vec<crate::db::models::ManagerRecord>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         if let Some(status) = status_filter {
             sqlx::query_as::<_, crate::db::models::ManagerRecord>(
                 "SELECT id, stellar_address, name, email, status, kyc_document_ref, notes, created_at, updated_at FROM managers WHERE status = ?1 ORDER BY created_at DESC",
             )
             .bind(status)
-            .fetch_all(&*self.pool)
+            .fetch_all(&mut *connection)
             .await
         } else {
             sqlx::query_as::<_, crate::db::models::ManagerRecord>(
                 "SELECT id, stellar_address, name, email, status, kyc_document_ref, notes, created_at, updated_at FROM managers ORDER BY created_at DESC",
             )
-            .fetch_all(&*self.pool)
+            .fetch_all(&mut *connection)
             .await
         }
     }
@@ -99,6 +102,7 @@ impl ManagersTable {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<crate::db::models::ManagerRecord>, i64), sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         let (rows, total) = if let Some(status) = status_filter {
             let rows = sqlx::query_as::<_, crate::db::models::ManagerRecord>(
                 "SELECT id, stellar_address, name, email, status, kyc_document_ref, notes, created_at, updated_at \
@@ -107,13 +111,13 @@ impl ManagersTable {
             .bind(status)
             .bind(limit)
             .bind(offset)
-            .fetch_all(&*self.pool)
+            .fetch_all(&mut *connection)
             .await?;
 
             let (count,): (i64,) =
                 sqlx::query_as("SELECT COUNT(*) FROM managers WHERE status = ?1")
                     .bind(status)
-                    .fetch_one(&*self.pool)
+                    .fetch_one(&mut *connection)
                     .await?;
 
             (rows, count)
@@ -124,11 +128,11 @@ impl ManagersTable {
             )
             .bind(limit)
             .bind(offset)
-            .fetch_all(&*self.pool)
+            .fetch_all(&mut *connection)
             .await?;
 
             let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM managers")
-                .fetch_one(&*self.pool)
+                .fetch_one(&mut *connection)
                 .await?;
 
             (rows, count)
@@ -146,6 +150,7 @@ impl ManagersTable {
         kyc_document_ref: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::db::models::ManagerRecord, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         sqlx::query(
             "INSERT INTO managers (id, stellar_address, name, email, status, kyc_document_ref, notes, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, '', ?6, ?7)",
         )
@@ -156,8 +161,9 @@ impl ManagersTable {
         .bind(kyc_document_ref)
         .bind(now)
         .bind(now)
-        .execute(&*self.pool)
+        .execute(&mut *connection)
         .await?;
+        drop(connection);
 
         self.find_by_id(id).await?.ok_or(sqlx::Error::RowNotFound)
     }
@@ -169,6 +175,7 @@ impl ManagersTable {
         notes: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::db::models::ManagerRecord, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         sqlx::query(
             "UPDATE managers SET status = ?1, notes = ?2, updated_at = ?3 WHERE id = ?4 AND status = 'pending'",
         )
@@ -176,8 +183,9 @@ impl ManagersTable {
         .bind(notes)
         .bind(now)
         .bind(id)
-        .execute(&*self.pool)
+        .execute(&mut *connection)
         .await?;
+        drop(connection);
 
         self.find_by_id(id).await?.ok_or(sqlx::Error::RowNotFound)
     }
@@ -196,12 +204,12 @@ impl VaultsTable {
         &self,
         id: &str,
     ) -> Result<Option<crate::db::models::VaultRecord>, sqlx::Error> {
-        // Default queries exclude soft-deleted vaults (BE-044 / issue #281).
+        let mut connection = self.pool.acquire().await?;
         sqlx::query_as::<_, crate::db::models::VaultRecord>(
             "SELECT id, manager_id, name, status, config_json, version, idempotency_key, created_at, updated_at, deleted_at FROM vaults WHERE id = ?1 AND deleted_at IS NULL",
         )
         .bind(id)
-        .fetch_optional(&*self.pool)
+        .fetch_optional(&mut *connection)
         .await
     }
 
@@ -211,11 +219,12 @@ impl VaultsTable {
         &self,
         id: &str,
     ) -> Result<Option<crate::db::models::VaultRecord>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         sqlx::query_as::<_, crate::db::models::VaultRecord>(
             "SELECT id, manager_id, name, status, config_json, version, idempotency_key, created_at, updated_at, deleted_at FROM vaults WHERE id = ?1",
         )
         .bind(id)
-        .fetch_optional(&*self.pool)
+        .fetch_optional(&mut *connection)
         .await
     }
 
@@ -224,12 +233,13 @@ impl VaultsTable {
         manager_id: &str,
         key: &str,
     ) -> Result<Option<crate::db::models::VaultRecord>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         sqlx::query_as::<_, crate::db::models::VaultRecord>(
             "SELECT id, manager_id, name, status, config_json, version, idempotency_key, created_at, updated_at, deleted_at FROM vaults WHERE manager_id = ?1 AND idempotency_key = ?2 AND deleted_at IS NULL",
         )
         .bind(manager_id)
         .bind(key)
-        .fetch_optional(&*self.pool)
+        .fetch_optional(&mut *connection)
         .await
     }
 
@@ -243,6 +253,7 @@ impl VaultsTable {
         idempotency_key: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::db::models::VaultRecord, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         sqlx::query(
             "INSERT INTO vaults (id, manager_id, name, status, config_json, version, idempotency_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8)",
         )
@@ -254,8 +265,9 @@ impl VaultsTable {
         .bind(idempotency_key)
         .bind(now)
         .bind(now)
-        .execute(&*self.pool)
+        .execute(&mut *connection)
         .await?;
+        drop(connection);
 
         self.find_by_id(id).await?.ok_or(sqlx::Error::RowNotFound)
     }
@@ -269,6 +281,7 @@ impl VaultsTable {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<crate::db::models::VaultRecord>, i64), sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         let rows = sqlx::query_as::<_, crate::db::models::VaultRecord>(
             "SELECT id, manager_id, name, status, config_json, version, idempotency_key, created_at, updated_at, deleted_at \
              FROM vaults WHERE manager_id = ?1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
@@ -276,14 +289,14 @@ impl VaultsTable {
         .bind(manager_id)
         .bind(limit)
         .bind(offset)
-        .fetch_all(&*self.pool)
+        .fetch_all(&mut *connection)
         .await?;
 
         let (total,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM vaults WHERE manager_id = ?1 AND deleted_at IS NULL",
         )
         .bind(manager_id)
-        .fetch_one(&*self.pool)
+        .fetch_one(&mut *connection)
         .await?;
 
         Ok((rows, total))
@@ -296,11 +309,12 @@ impl VaultsTable {
         id: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         let result =
             sqlx::query("UPDATE vaults SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL")
                 .bind(now)
                 .bind(id)
-                .execute(&*self.pool)
+                .execute(&mut *connection)
                 .await?;
         Ok(result.rows_affected())
     }
@@ -311,11 +325,12 @@ impl VaultsTable {
         id: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         let result =
             sqlx::query("UPDATE vaults SET deleted_at = NULL, updated_at = ?1 WHERE id = ?2")
                 .bind(now)
                 .bind(id)
-                .execute(&*self.pool)
+                .execute(&mut *connection)
                 .await?;
         Ok(result.rows_affected())
     }
@@ -327,6 +342,7 @@ impl VaultsTable {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<crate::db::models::VaultRecord>, i64), sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         let rows = sqlx::query_as::<_, crate::db::models::VaultRecord>(
             "SELECT id, manager_id, name, status, config_json, version, idempotency_key, created_at, updated_at, deleted_at \
              FROM vaults WHERE manager_id = ?1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT ?2 OFFSET ?3",
@@ -334,14 +350,14 @@ impl VaultsTable {
         .bind(manager_id)
         .bind(limit)
         .bind(offset)
-        .fetch_all(&*self.pool)
+        .fetch_all(&mut *connection)
         .await?;
 
         let (total,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM vaults WHERE manager_id = ?1 AND deleted_at IS NOT NULL",
         )
         .bind(manager_id)
-        .fetch_one(&*self.pool)
+        .fetch_one(&mut *connection)
         .await?;
 
         Ok((rows, total))
@@ -353,18 +369,19 @@ impl VaultsTable {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<crate::db::models::VaultRecord>, i64), sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         let rows = sqlx::query_as::<_, crate::db::models::VaultRecord>(
             "SELECT id, manager_id, name, status, config_json, version, idempotency_key, created_at, updated_at, deleted_at \
              FROM vaults WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT ?1 OFFSET ?2",
         )
         .bind(limit)
         .bind(offset)
-        .fetch_all(&*self.pool)
+        .fetch_all(&mut *connection)
         .await?;
 
         let (total,): (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM vaults WHERE deleted_at IS NOT NULL")
-                .fetch_one(&*self.pool)
+                .fetch_one(&mut *connection)
                 .await?;
 
         Ok((rows, total))
@@ -379,6 +396,7 @@ impl VaultsTable {
         config_json: Option<&str>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::db::models::VaultRecord, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         let result = sqlx::query(
             "UPDATE vaults SET name = COALESCE(?1, name), status = COALESCE(?2, status), config_json = COALESCE(?3, config_json), version = version + 1, updated_at = ?4 WHERE id = ?5 AND version = ?6",
         )
@@ -388,8 +406,9 @@ impl VaultsTable {
         .bind(now)
         .bind(id)
         .bind(expected_version)
-        .execute(&*self.pool)
+        .execute(&mut *connection)
         .await?;
+        drop(connection);
 
         // The `AND version = ?6` clause is what enforces optimistic locking,
         // but only if the outcome is read. Discarding `rows_affected` meant a
@@ -417,13 +436,14 @@ impl ReconciliationReportsTable {
         &self,
         id: &str,
     ) -> Result<Option<crate::db::models::ReconciliationReport>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         let row = sqlx::query_as::<_, (
             String, i64, i64, f64, i32, i32, f64, f64, Option<serde_json::Value>, String,
         )>(
             "SELECT id, from_ledger, to_ledger, tolerance_pct, total_ledgers, discrepancies_count, avg_delta_pct, max_delta_pct, summary, created_at FROM reconciliation_reports WHERE id = ?1",
         )
         .bind(id)
-        .fetch_optional(&*self.pool)
+        .fetch_optional(&mut *connection)
         .await?;
 
         Ok(row.map(|r| crate::db::models::ReconciliationReport {
@@ -444,13 +464,14 @@ impl ReconciliationReportsTable {
         &self,
         limit: i64,
     ) -> Result<Vec<crate::db::models::ReconciliationReport>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         let rows = sqlx::query_as::<_, (
             String, i64, i64, f64, i32, i32, f64, f64, Option<serde_json::Value>, String,
         )>(
             "SELECT id, from_ledger, to_ledger, tolerance_pct, total_ledgers, discrepancies_count, avg_delta_pct, max_delta_pct, summary, created_at FROM reconciliation_reports ORDER BY created_at DESC LIMIT ?1",
         )
         .bind(limit)
-        .fetch_all(&*self.pool)
+        .fetch_all(&mut *connection)
         .await?;
 
         Ok(rows
@@ -483,6 +504,7 @@ impl ReconciliationReportsTable {
         summary: Option<&serde_json::Value>,
         created_at: &str,
     ) -> Result<(), sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         sqlx::query(
             "INSERT INTO reconciliation_reports (id, from_ledger, to_ledger, tolerance_pct, total_ledgers, discrepancies_count, avg_delta_pct, max_delta_pct, summary, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )
@@ -496,7 +518,7 @@ impl ReconciliationReportsTable {
         .bind(max_delta_pct)
         .bind(summary)
         .bind(created_at)
-        .execute(&*self.pool)
+        .execute(&mut *connection)
         .await?;
 
         Ok(())
@@ -518,7 +540,8 @@ impl ReconciliationDiscrepanciesTable {
         report_id: &str,
         discrepancies: &[crate::db::models::Discrepancy],
     ) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
+        let mut connection = self.pool.acquire().await?;
+        let mut tx = sqlx::Connection::begin(&mut *connection).await?;
 
         for disc in discrepancies {
             sqlx::query(
@@ -544,11 +567,12 @@ impl ReconciliationDiscrepanciesTable {
         &self,
         report_id: &str,
     ) -> Result<Vec<crate::db::models::Discrepancy>, sqlx::Error> {
+        let mut connection = self.pool.acquire().await?;
         sqlx::query_as::<_, crate::db::models::Discrepancy>(
             "SELECT id, report_id, ledger_sequence, expected_fee, actual_fee, delta, delta_pct, severity FROM reconciliation_discrepancies WHERE report_id = ?1 ORDER BY ledger_sequence",
         )
         .bind(report_id)
-        .fetch_all(&*self.pool)
+        .fetch_all(&mut *connection)
         .await
     }
 }

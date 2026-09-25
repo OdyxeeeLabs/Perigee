@@ -36,7 +36,317 @@
 //!             .expect("policy vault contract ID must be set");
 //! ```
 
-use std::env;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{env, sync::RwLock};
+use thiserror::Error;
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SecretKeyringError {
+    #[error("secret key id must not be empty")]
+    EmptyKeyId,
+    #[error("secret key id must contain only letters, digits, '.', '_' or '-'")]
+    InvalidKeyId,
+    #[error("secret key id is duplicated")]
+    DuplicateKeyId,
+    #[error("secret key overlap must be greater than zero")]
+    InvalidOverlap,
+    #[error("secret key is not valid for verification")]
+    InactiveKey,
+    #[error("secret keyring lock is unavailable")]
+    LockPoisoned,
+}
+
+#[derive(Clone)]
+pub struct SecretVersion<T> {
+    id: String,
+    value: T,
+    expires_at: Option<u64>,
+}
+
+impl<T> SecretVersion<T> {
+    pub fn new(id: impl Into<String>, value: T) -> Self {
+        Self {
+            id: id.into(),
+            value,
+            expires_at: None,
+        }
+    }
+
+    pub fn with_expiry(mut self, expires_at: Option<u64>) -> Self {
+        self.expires_at = expires_at;
+        self
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+
+    pub fn expires_at(&self) -> Option<u64> {
+        self.expires_at
+    }
+}
+
+struct SecretKeyringState<T> {
+    current: SecretVersion<T>,
+    previous: HashMap<String, SecretVersion<T>>,
+    overlap_secs: u64,
+}
+
+pub struct SecretKeyring<T> {
+    state: RwLock<SecretKeyringState<T>>,
+}
+
+fn validate_secret_id(id: &str) -> Result<(), SecretKeyringError> {
+    if id.is_empty() {
+        return Err(SecretKeyringError::EmptyKeyId);
+    }
+    if !id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(SecretKeyringError::InvalidKeyId);
+    }
+    Ok(())
+}
+
+fn secret_is_active<T>(version: &SecretVersion<T>, now: u64) -> bool {
+    version.expires_at.map_or(true, |expires_at| expires_at > now)
+}
+
+impl<T: Clone> SecretKeyring<T> {
+    pub fn new(
+        current: SecretVersion<T>,
+        previous: Vec<SecretVersion<T>>,
+        now: u64,
+        overlap_secs: u64,
+    ) -> Result<Self, SecretKeyringError> {
+        if overlap_secs == 0 {
+            return Err(SecretKeyringError::InvalidOverlap);
+        }
+        validate_secret_id(current.id())?;
+        if current.expires_at.is_some() {
+            return Err(SecretKeyringError::InactiveKey);
+        }
+
+        let default_expiry = now.saturating_add(overlap_secs);
+        let mut ids = HashSet::new();
+        ids.insert(current.id().to_string());
+        let mut previous_map = HashMap::with_capacity(previous.len());
+
+        for mut version in previous {
+            validate_secret_id(version.id())?;
+            if !ids.insert(version.id().to_string()) {
+                return Err(SecretKeyringError::DuplicateKeyId);
+            }
+            if version.expires_at.is_none() {
+                version.expires_at = Some(default_expiry);
+            }
+            if !secret_is_active(&version, now) {
+                return Err(SecretKeyringError::InactiveKey);
+            }
+            previous_map.insert(version.id().to_string(), version);
+        }
+
+        Ok(Self {
+            state: RwLock::new(SecretKeyringState {
+                current,
+                previous: previous_map,
+                overlap_secs,
+            }),
+        })
+    }
+
+    pub fn current(&self) -> Result<SecretVersion<T>, SecretKeyringError> {
+        self.state
+            .read()
+            .map(|state| state.current.clone())
+            .map_err(|_| SecretKeyringError::LockPoisoned)
+    }
+
+    pub fn verification_keys(&self, now: u64) -> Result<Vec<SecretVersion<T>>, SecretKeyringError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| SecretKeyringError::LockPoisoned)?;
+        let mut keys = Vec::with_capacity(state.previous.len() + 1);
+        keys.push(state.current.clone());
+        keys.extend(
+            state
+                .previous
+                .values()
+                .filter(|version| secret_is_active(version, now))
+                .cloned(),
+        );
+        Ok(keys)
+    }
+
+    pub fn verification_key(
+        &self,
+        id: &str,
+        now: u64,
+    ) -> Result<Option<SecretVersion<T>>, SecretKeyringError> {
+        Ok(self
+            .verification_keys(now)?
+            .into_iter()
+            .find(|version| version.id() == id))
+    }
+
+    pub fn rotate(
+        &self,
+        version: SecretVersion<T>,
+        now: u64,
+    ) -> Result<(), SecretKeyringError> {
+        validate_secret_id(version.id())?;
+        if version.expires_at.is_some() {
+            return Err(SecretKeyringError::InactiveKey);
+        }
+
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| SecretKeyringError::LockPoisoned)?;
+        if state.current.id() == version.id() || state.previous.contains_key(version.id()) {
+            return Err(SecretKeyringError::DuplicateKeyId);
+        }
+
+        let retired = std::mem::replace(&mut state.current, version);
+        let retired_expiry = now.saturating_add(state.overlap_secs);
+        state
+            .previous
+            .insert(retired.id().to_string(), retired.with_expiry(Some(retired_expiry)));
+        state
+            .previous
+            .retain(|_, previous| secret_is_active(previous, now));
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureFlag {
+    EnableVaultV2,
+    EnableNewFeeModel,
+}
+
+impl FeatureFlag {
+    pub const ALL: [Self; 2] = [Self::EnableVaultV2, Self::EnableNewFeeModel];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::EnableVaultV2 => "enable_vault_v2",
+            Self::EnableNewFeeModel => "enable_new_fee_model",
+        }
+    }
+
+    pub fn env_name(&self) -> String {
+        self.as_str().to_ascii_uppercase()
+    }
+
+    pub fn from_key(value: &str) -> Result<Self, FeatureFlagConfigError> {
+        Self::ALL
+            .into_iter()
+            .find(|flag| flag.as_str() == value.trim())
+            .ok_or_else(|| FeatureFlagConfigError::UnknownFlag(value.trim().to_string()))
+    }
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum FeatureFlagConfigError {
+    #[error("FEATURE_FLAGS is not valid JSON: {0}")]
+    InvalidJson(String),
+    #[error("unknown backend feature flag '{0}'")]
+    UnknownFlag(String),
+    #[error("backend feature flag '{name}' must be true or false, got '{value}'")]
+    InvalidValue { name: String, value: String },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FeatureFlagService {
+    values: BTreeMap<FeatureFlag, bool>,
+}
+
+impl FeatureFlagService {
+    pub fn from_config(source: &str) -> Result<Self, FeatureFlagConfigError> {
+        let mut values = Self::default();
+        let trimmed = source.trim();
+        if !trimmed.is_empty() {
+            if trimmed.starts_with('{') {
+                let raw = serde_json::from_str::<BTreeMap<String, bool>>(trimmed)
+                    .map_err(|error| FeatureFlagConfigError::InvalidJson(error.to_string()))?;
+                for (key, value) in raw {
+                    values.insert(FeatureFlag::from_key(&key)?, value);
+                }
+            } else if trimmed.starts_with('[') {
+                let enabled = serde_json::from_str::<Vec<String>>(trimmed)
+                    .map_err(|error| FeatureFlagConfigError::InvalidJson(error.to_string()))?;
+                for key in enabled {
+                    values.insert(FeatureFlag::from_key(&key)?, true);
+                }
+            } else {
+                for item in trimmed.split(',') {
+                    let item = item.trim();
+                    if item.is_empty() {
+                        continue;
+                    }
+                    let (key, value) = item.split_once('=').unwrap_or((item, "true"));
+                    let key = key.trim();
+                    let value = value.trim();
+                    let flag = FeatureFlag::from_key(key)?;
+                    let enabled = match value {
+                        "true" => true,
+                        "false" => false,
+                        _ => {
+                            return Err(FeatureFlagConfigError::InvalidValue {
+                                name: key.to_string(),
+                                value: value.to_string(),
+                            })
+                        }
+                    };
+                    values.insert(flag, enabled);
+                }
+            }
+        }
+
+        for flag in FeatureFlag::ALL {
+            if let Ok(raw) = env::var(flag.env_name()) {
+                let value = raw.trim();
+                let enabled = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => {
+                        return Err(FeatureFlagConfigError::InvalidValue {
+                            name: flag.as_str().to_string(),
+                            value: value.to_string(),
+                        })
+                    }
+                };
+                values.insert(flag, enabled);
+            }
+        }
+
+        Ok(Self { values })
+    }
+
+    pub fn from_env() -> Result<Self, FeatureFlagConfigError> {
+        Self::from_config(&env::var("FEATURE_FLAGS").unwrap_or_default())
+    }
+
+    pub fn is_enabled(&self, flag: FeatureFlag) -> bool {
+        self.values.get(&flag).copied().unwrap_or(false)
+    }
+
+    pub fn snapshot(&self) -> BTreeMap<&'static str, bool> {
+        FeatureFlag::ALL
+            .into_iter()
+            .map(|flag| (flag.as_str(), self.is_enabled(flag)))
+            .collect()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Testnet defaults
@@ -270,5 +580,44 @@ mod tests {
         assert!(cfg.hello_soroban.is_none());
 
         unsafe { env::remove_var("STELLAR_NETWORK"); }
+    }
+
+    #[test]
+    fn secret_keyring_rotates_without_dropping_previous_key() {
+        let ring = SecretKeyring::new(
+            SecretVersion::new("current", "old".to_string()),
+            Vec::new(),
+            100,
+            60,
+        )
+        .unwrap();
+        ring.rotate(SecretVersion::new("next", "new".to_string()), 110)
+            .unwrap();
+        assert_eq!(
+            ring.verification_key("current", 150).unwrap().unwrap().value(),
+            "old"
+        );
+        assert!(ring.verification_key("current", 171).unwrap().is_none());
+        assert_eq!(ring.current().unwrap().value(), "new");
+    }
+
+    #[test]
+    fn feature_flags_are_typed_and_disabled_by_default() {
+        let _env = env_guard();
+        let flags = FeatureFlagService::from_config("{}").unwrap();
+        assert!(!flags.is_enabled(FeatureFlag::EnableVaultV2));
+        assert!(!flags.is_enabled(FeatureFlag::EnableNewFeeModel));
+    }
+
+    #[test]
+    fn feature_flags_accept_json_and_reject_unknown_names() {
+        let _env = env_guard();
+        let flags = FeatureFlagService::from_config(
+            r#"{"enable_vault_v2":true,"enable_new_fee_model":false}"#,
+        )
+        .unwrap();
+        assert!(flags.is_enabled(FeatureFlag::EnableVaultV2));
+        assert!(!flags.is_enabled(FeatureFlag::EnableNewFeeModel));
+        assert!(FeatureFlagService::from_config(r#"{"enable_unknown":true}"#).is_err());
     }
 }

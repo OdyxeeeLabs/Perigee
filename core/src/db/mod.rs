@@ -2,27 +2,192 @@ pub mod migrations;
 pub mod models;
 pub mod schema;
 
-use std::sync::Arc;
-use sqlx::SqlitePool;
 use crate::db::schema::{
-    ManagersTable,
-    ReconciliationDiscrepanciesTable,
-    ReconciliationReportsTable,
-    TypedSchema,
+    ManagersTable, ReconciliationDiscrepanciesTable, ReconciliationReportsTable, TypedSchema,
     VaultsTable,
 };
 use chrono::Utc;
+use sqlx::pool::PoolConnection;
+use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{Sqlite, SqlitePool};
+use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use thiserror::Error;
 use uuid::Uuid;
 
-pub type Pool = SqlitePool;
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum PoolConfigError {
+    #[error("database pool max connections must be greater than zero")]
+    InvalidMaxConnections,
+    #[error("database pool min connections must not exceed max connections")]
+    InvalidMinConnections,
+    #[error("database pool acquire timeout must be greater than zero")]
+    InvalidAcquireTimeout,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PoolConfig {
+    pub max_connections: u32,
+    pub min_connections: u32,
+    pub acquire_timeout: Duration,
+}
+
+impl Default for PoolConfig {
+    fn default() -> Self {
+        Self {
+            max_connections: 10,
+            min_connections: 1,
+            acquire_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+impl PoolConfig {
+    pub fn new(
+        max_connections: u32,
+        min_connections: u32,
+        acquire_timeout: Duration,
+    ) -> Result<Self, PoolConfigError> {
+        if max_connections == 0 {
+            return Err(PoolConfigError::InvalidMaxConnections);
+        }
+        if min_connections > max_connections {
+            return Err(PoolConfigError::InvalidMinConnections);
+        }
+        if acquire_timeout.is_zero() {
+            return Err(PoolConfigError::InvalidAcquireTimeout);
+        }
+        Ok(Self {
+            max_connections,
+            min_connections,
+            acquire_timeout,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolSnapshot {
+    pub size: u32,
+    pub active: u32,
+    pub idle: u32,
+    pub waiting: usize,
+    pub max_connections: u32,
+}
+
+impl PoolSnapshot {
+    pub fn utilization_percent(&self) -> f64 {
+        if self.max_connections == 0 {
+            return 0.0;
+        }
+        (self.active as f64 / self.max_connections as f64) * 100.0
+    }
+}
+
+struct WaitingGuard {
+    waiting: Arc<AtomicUsize>,
+}
+
+impl Drop for WaitingGuard {
+    fn drop(&mut self) {
+        self.waiting.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+pub struct MonitoredPool {
+    inner: SqlitePool,
+    waiting: Arc<AtomicUsize>,
+}
+
+impl Clone for MonitoredPool {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            waiting: Arc::clone(&self.waiting),
+        }
+    }
+}
+
+impl fmt::Debug for MonitoredPool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MonitoredPool")
+            .field("snapshot", &self.snapshot())
+            .finish()
+    }
+}
+
+impl MonitoredPool {
+    pub async fn connect(
+        database_url: &str,
+        config: PoolConfig,
+    ) -> Result<Self, sqlx::Error> {
+        let inner = SqlitePoolOptions::new()
+            .max_connections(config.max_connections)
+            .min_connections(config.min_connections)
+            .acquire_timeout(config.acquire_timeout)
+            .connect(database_url)
+            .await?;
+        Ok(Self::from_inner(inner))
+    }
+
+    pub fn from_inner(inner: SqlitePool) -> Self {
+        Self {
+            inner,
+            waiting: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub(crate) fn inner(&self) -> &SqlitePool {
+        &self.inner
+    }
+
+    pub async fn acquire(&self) -> Result<PoolConnection<Sqlite>, sqlx::Error> {
+        match self.inner.try_acquire() {
+            Ok(connection) => return Ok(connection),
+            Err(_) => {
+                self.waiting.fetch_add(1, Ordering::AcqRel);
+                let _guard = WaitingGuard {
+                    waiting: Arc::clone(&self.waiting),
+                };
+                self.inner.acquire().await
+            }
+        }
+    }
+
+    pub fn snapshot(&self) -> PoolSnapshot {
+        let size = self.inner.size();
+        let idle = self.inner.num_idle().min(u32::MAX as usize) as u32;
+        PoolSnapshot {
+            size,
+            active: size.saturating_sub(idle),
+            idle,
+            waiting: self.waiting.load(Ordering::Acquire),
+            max_connections: self.inner.options().get_max_connections(),
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+}
+
+pub type Pool = MonitoredPool;
 
 pub async fn init_pool(database_url: &str) -> Result<Pool, sqlx::Error> {
-    let pool = SqlitePool::connect(database_url).await?;
-    migrations::run_migrations(&pool).await?;
+    init_pool_with_config(database_url, PoolConfig::default()).await
+}
+
+pub async fn init_pool_with_config(
+    database_url: &str,
+    config: PoolConfig,
+) -> Result<Pool, sqlx::Error> {
+    let pool = MonitoredPool::connect(database_url, config).await?;
+    migrations::run_migrations(pool.inner()).await?;
     Ok(pool)
 }
 
-pub fn make_typed_schema(pool: Arc<SqlitePool>) -> TypedSchema {
+pub fn make_typed_schema(pool: Arc<Pool>) -> TypedSchema {
     TypedSchema::new(pool)
 }
 

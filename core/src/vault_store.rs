@@ -696,7 +696,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        VaultStore::new(db::schema::TypedSchema::new(std::sync::Arc::new(pool)).vaults())
+        VaultStore::new(
+            db::schema::TypedSchema::new(std::sync::Arc::new(db::MonitoredPool::from_inner(pool)))
+                .vaults(),
+        )
     }
 
     #[tokio::test]
@@ -895,9 +898,10 @@ mod tests {
         assert_eq!(first.name, second.name);
 
         // Only one vault should exist for this manager.
+        let mut connection = store.vaults.pool().acquire().await.unwrap();
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vaults WHERE manager_id = ?1")
             .bind("mgr-1")
-            .fetch_one(store.vaults.pool())
+            .fetch_one(&mut *connection)
             .await
             .unwrap();
         assert_eq!(count.0, 1);
@@ -933,9 +937,10 @@ mod tests {
         assert_eq!(a.name, "Alpha");
         assert_eq!(b.name, "Beta");
 
+        let mut connection = store.vaults.pool().acquire().await.unwrap();
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vaults WHERE manager_id = ?1")
             .bind("mgr-1")
-            .fetch_one(store.vaults.pool())
+            .fetch_one(&mut *connection)
             .await
             .unwrap();
         assert_eq!(count.0, 2);
@@ -969,9 +974,10 @@ mod tests {
 
         assert_ne!(a.id, b.id);
 
+        let mut connection = store.vaults.pool().acquire().await.unwrap();
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vaults WHERE manager_id = ?1")
             .bind("mgr-1")
-            .fetch_one(store.vaults.pool())
+            .fetch_one(&mut *connection)
             .await
             .unwrap();
         assert_eq!(count.0, 2);

@@ -1,7 +1,8 @@
+use crate::auth::AuthenticatedUser;
 use crate::errors::AppError;
 use crate::db;
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     Json,
 };
 use chrono::Utc;
@@ -157,6 +158,16 @@ impl ManagerStore {
     }
 }
 
+fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
+    if user.is_admin() {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "Administrator role is required".to_string(),
+        ))
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/managers/register",
@@ -191,8 +202,10 @@ pub async fn register_manager_handler(
 )]
 pub async fn list_managers_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<crate::db::models::PagedResponse<ManagerRecord>>, AppError> {
+    require_admin(&user)?;
     let status_filter = params.get("status").map(|s| s.as_str());
 
     let page: u32 = params
@@ -221,8 +234,10 @@ pub async fn list_managers_handler(
 )]
 pub async fn get_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
 ) -> Result<Json<ManagerRecord>, AppError> {
+    require_admin(&user)?;
     let manager = state.manager_store.get(&id).await?;
     Ok(Json(manager))
 }
@@ -241,9 +256,11 @@ pub async fn get_manager_handler(
 )]
 pub async fn approve_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
     Json(payload): Json<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
+    require_admin(&user)?;
     let manager = state.manager_store.approve(&id, &payload).await?;
     Ok(Json(manager))
 }
@@ -262,9 +279,11 @@ pub async fn approve_manager_handler(
 )]
 pub async fn reject_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
     Json(payload): Json<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
+    require_admin(&user)?;
     let manager = state.manager_store.reject(&id, &payload).await?;
     Ok(Json(manager))
 }
@@ -340,7 +359,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        ManagerStore::new(db::schema::TypedSchema::new(std::sync::Arc::new(pool)).managers())
+        ManagerStore::new(
+            db::schema::TypedSchema::new(std::sync::Arc::new(db::MonitoredPool::from_inner(pool)))
+                .managers(),
+        )
     }
 
     #[tokio::test]

@@ -39,6 +39,7 @@ mod wasm_branch_analysis;
 mod ws;
 
 use crate::cache::{ContractCache, SimulationCache};
+use crate::config::{FeatureFlag, FeatureFlagService};
 use crate::comparison::{CompareMode, RegressionFlag, RegressionReport, ResourceDelta};
 use crate::errors::{AppError, Validate, ValidatedJson};
 use axum::{
@@ -49,7 +50,10 @@ use axum::{
     Extension, Router,
 };
 use ::config::{Config, ConfigError};
-use prometheus::{Encoder, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder};
+use prometheus::{
+    Encoder, HistogramVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+    TextEncoder,
+};
 use serde::{Deserialize, Serialize};
 use simulation_service::{AnalysisResult, SimulationMetric, SimulationService};
 use std::collections::HashMap;
@@ -73,7 +77,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[allow(dead_code)]
 struct AppConfig {
     /// Deployment environment. Set to `"production"` to enable
@@ -91,6 +95,12 @@ struct AppConfig {
     soroban_rpc_url: String,
     /// Optional RSA Private Key PEM for RS256 JWTs. If missing, a dev key is generated.
     jwt_private_key: Option<String>,
+    #[serde(default)]
+    jwt_key_ring: String,
+    #[serde(default)]
+    jwt_current_key_id: String,
+    #[serde(default = "default_jwt_key_overlap_secs")]
+    jwt_key_overlap_secs: u64,
     /// Stellar network passphrase
     network_passphrase: String,
     /// Redis URL reserved for the distributed cache migration (issue #65).
@@ -131,6 +141,16 @@ struct AppConfig {
     /// Database URL for job queue (PostgreSQL or SQLite)
     #[serde(default = "default_database_url")]
     database_url: String,
+    #[serde(default = "default_database_max_connections")]
+    database_max_connections: u32,
+    #[serde(default = "default_database_min_connections")]
+    database_min_connections: u32,
+    #[serde(default = "default_database_acquire_timeout_secs")]
+    database_acquire_timeout_secs: u64,
+    #[serde(default = "default_database_pool_monitor_interval_secs")]
+    database_pool_monitor_interval_secs: u64,
+    #[serde(default = "default_database_pool_alert_threshold_percent")]
+    database_pool_alert_threshold_percent: f64,
     /// Job timeout in seconds (default 300).
     #[serde(default = "default_job_timeout_secs")]
     job_timeout_secs: u64,
@@ -150,6 +170,8 @@ struct AppConfig {
     /// When true, all verification endpoints return an error.
     #[serde(default = "default_emergency_verification_paused")]
     emergency_verification_paused: bool,
+    #[serde(default)]
+    feature_flags: String,
     /// Filesystem path that backs the disk-persistent L2 cache. When
     /// empty the L2 tier is disabled and the service runs L1-only (same
     /// behaviour as before #104).
@@ -191,6 +213,30 @@ fn default_database_url() -> String {
     "sqlite://Perigee.db".to_string()
 }
 
+fn default_database_max_connections() -> u32 {
+    10
+}
+
+fn default_database_min_connections() -> u32 {
+    1
+}
+
+fn default_database_acquire_timeout_secs() -> u64 {
+    30
+}
+
+fn default_database_pool_monitor_interval_secs() -> u64 {
+    15
+}
+
+fn default_database_pool_alert_threshold_percent() -> f64 {
+    80.0
+}
+
+fn default_jwt_key_overlap_secs() -> u64 {
+    1_800
+}
+
 fn default_job_timeout_secs() -> u64 {
     300
 }
@@ -223,6 +269,23 @@ fn default_disk_cache_path() -> String {
 
 fn default_max_ledger_age() -> u32 {
     100
+}
+
+fn is_valid_cors_origin(origin: &str) -> bool {
+    if origin.parse::<axum::http::HeaderValue>().is_err() {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(origin) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && !origin.ends_with('/')
 }
 
 /// Build a [`CorsLayer`] from the `cors_allowed_origins` config value.
@@ -268,13 +331,17 @@ fn build_cors_layer(cors_allowed_origins: &str) -> CorsLayer {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .filter_map(|origin| {
+            if !is_valid_cors_origin(origin) {
+                tracing::warn!("CORS: skipping invalid configured origin");
+                return None;
+            }
             match origin.parse::<axum::http::HeaderValue>() {
-                Ok(v) => {
+                Ok(value) => {
                     tracing::info!(origin, "CORS: allowing origin");
-                    Some(v)
+                    Some(value)
                 }
-                Err(e) => {
-                    tracing::warn!(origin, error = %e, "CORS: skipping invalid origin");
+                Err(error) => {
+                    tracing::warn!(error = %error, "CORS: skipping invalid configured origin");
                     None
                 }
             }
@@ -354,6 +421,99 @@ fn validate_config_secrets(config: &AppConfig) -> Result<(), String> {
         }
     }
 
+    if config.database_url.trim().is_empty() {
+        return Err("DATABASE_URL must not be empty".to_string());
+    }
+    db::PoolConfig::new(
+        config.database_max_connections,
+        config.database_min_connections,
+        std::time::Duration::from_secs(config.database_acquire_timeout_secs),
+    )
+    .map_err(|error| error.to_string())?;
+    if config.database_pool_monitor_interval_secs == 0 {
+        return Err("DATABASE_POOL_MONITOR_INTERVAL_SECS must be greater than zero".to_string());
+    }
+    if !config.database_pool_alert_threshold_percent.is_finite()
+        || config.database_pool_alert_threshold_percent <= 0.0
+        || config.database_pool_alert_threshold_percent > 100.0
+    {
+        return Err(
+            "DATABASE_POOL_ALERT_THRESHOLD_PERCENT must be greater than 0 and at most 100"
+                .to_string(),
+        );
+    }
+    if config.jwt_key_overlap_secs < auth::ACCESS_TOKEN_EXPIRY_SECS {
+        return Err(format!(
+            "JWT_KEY_OVERLAP_SECS must be at least {}",
+            auth::ACCESS_TOKEN_EXPIRY_SECS
+        ));
+    }
+
+    let production = config.app_env.trim().eq_ignore_ascii_case("production");
+    if production {
+        if config.cors_allowed_origins.trim().is_empty() {
+            return Err("CORS_ALLOWED_ORIGINS is required in production".to_string());
+        }
+        for origin in config.cors_allowed_origins.split(',') {
+            let origin = origin.trim();
+            if origin.is_empty() || !is_valid_cors_origin(origin) {
+                return Err(
+                    "CORS_ALLOWED_ORIGINS contains an invalid production origin".to_string(),
+                );
+            }
+        }
+        if config.jwt_private_key.as_deref().unwrap_or_default().trim().is_empty()
+            && config.jwt_key_ring.trim().is_empty()
+        {
+            return Err(
+                "JWT_PRIVATE_KEY or JWT_KEY_RING is required in production".to_string(),
+            );
+        }
+        let audit_key = env::var(audit_log::SIGNING_KEY_ENV).unwrap_or_default();
+        match hex::decode(audit_key.trim()) {
+            Ok(key) if key.len() >= 32 => {}
+            Ok(_) => {
+                return Err(format!(
+                    "{} must contain at least 32 bytes of hex in production",
+                    audit_log::SIGNING_KEY_ENV
+                ))
+            }
+            Err(error) => {
+                return Err(format!(
+                    "{} must be valid hex in production: {}",
+                    audit_log::SIGNING_KEY_ENV,
+                    error
+                ))
+            }
+        }
+        let mut has_valid_admin = false;
+        for (index, address) in env::var("PERIGEE_ADMIN_STELLAR_ADDRESSES")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .enumerate()
+        {
+            if address.is_empty() {
+                continue;
+            }
+            if !matches!(
+                stellar_strkey::Strkey::from_string(address),
+                Ok(stellar_strkey::Strkey::PublicKeyEd25519(_))
+            ) {
+                return Err(format!(
+                    "PERIGEE_ADMIN_STELLAR_ADDRESSES contains an invalid address at index {index}"
+                ));
+            }
+            has_valid_admin = true;
+        }
+        if !has_valid_admin {
+            return Err(
+                "PERIGEE_ADMIN_STELLAR_ADDRESSES requires a valid Stellar account in production"
+                    .to_string(),
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -376,6 +536,15 @@ fn load_config() -> Result<AppConfig, ConfigError> {
         .set_default("simulation_timeout_secs", 30)?
         .set_default("simulation_mode", "failover")?
         .set_default("database_url", "sqlite://Perigee.db")?
+        .set_default("database_max_connections", 10)?
+        .set_default("database_min_connections", 1)?
+        .set_default("database_acquire_timeout_secs", 30)?
+        .set_default("database_pool_monitor_interval_secs", 15)?
+        .set_default("database_pool_alert_threshold_percent", 80.0)?
+        .set_default("jwt_key_ring", "")?
+        .set_default("jwt_current_key_id", "")?
+        .set_default("jwt_key_overlap_secs", 1_800)?
+        .set_default("feature_flags", "")?
         .set_default("job_timeout_secs", 300)?
         .set_default("max_concurrent_jobs", 10)?
         .set_default("fee_collection_interval_secs", 5)?
@@ -490,6 +659,8 @@ pub struct AppState {
     fee_service: billing_service::FeeService,
     /// Prometheus metrics collectors.
     metrics: Arc<AppMetrics>,
+    database_pool: db::Pool,
+    feature_flags: FeatureFlagService,
     /// WebSocket event bus for simulation jobs.
     simulation_bus: Arc<SimulationBus>,
     /// Fee reconciler for async reconciliation jobs
@@ -503,6 +674,12 @@ pub struct AppState {
     manager_store: Arc<manager_store::ManagerStore>,
 }
 
+#[derive(Clone, Copy)]
+struct DatabasePoolMonitorConfig {
+    interval: std::time::Duration,
+    alert_threshold_percent: f64,
+}
+
 #[derive(Clone)]
 struct AppMetrics {
     registry: Registry,
@@ -510,6 +687,11 @@ struct AppMetrics {
     rpc_error_count_total: IntCounterVec,
     simulation_requests_total: IntCounterVec,
     resource_utilization_percent: prometheus::GaugeVec,
+    database_pool_connections: IntGaugeVec,
+    database_pool_max_connections: IntGauge,
+    database_pool_utilization_percent: prometheus::GaugeVec,
+    database_pool_alerting: IntGaugeVec,
+    database_pool_alerts_total: IntCounter,
 }
 
 impl AppMetrics {
@@ -544,11 +726,45 @@ impl AppMetrics {
             ),
             &["resource"],
         )?;
+        let database_pool_connections = IntGaugeVec::new(
+            Opts::new(
+                "database_pool_connections",
+                "Database connections by state",
+            ),
+            &["pool", "state"],
+        )?;
+        let database_pool_max_connections = IntGauge::new(
+            "database_pool_max_connections",
+            "Configured maximum database connections",
+        )?;
+        let database_pool_utilization_percent = prometheus::GaugeVec::new(
+            Opts::new(
+                "database_pool_utilization_percent",
+                "Database pool active connection utilization",
+            ),
+            &["pool"],
+        )?;
+        let database_pool_alerting = IntGaugeVec::new(
+            Opts::new(
+                "database_pool_alerting",
+                "Whether the database pool alert threshold is active",
+            ),
+            &["pool"],
+        )?;
+        let database_pool_alerts_total = IntCounter::new(
+            "database_pool_alerts_total",
+            "Database pool threshold alert transitions",
+        )?;
 
         registry.register(Box::new(simulation_latency_seconds.clone()))?;
         registry.register(Box::new(rpc_error_count_total.clone()))?;
         registry.register(Box::new(simulation_requests_total.clone()))?;
         registry.register(Box::new(resource_utilization_percent.clone()))?;
+        registry.register(Box::new(database_pool_connections.clone()))?;
+        registry.register(Box::new(database_pool_max_connections.clone()))?;
+        registry.register(Box::new(database_pool_utilization_percent.clone()))?;
+        registry.register(Box::new(database_pool_alerting.clone()))?;
+        registry.register(Box::new(database_pool_alerts_total.clone()))?;
 
         Ok(Self {
             registry,
@@ -556,7 +772,29 @@ impl AppMetrics {
             rpc_error_count_total,
             simulation_requests_total,
             resource_utilization_percent,
+            database_pool_connections,
+            database_pool_max_connections,
+            database_pool_utilization_percent,
+            database_pool_alerting,
+            database_pool_alerts_total,
         })
+    }
+
+    fn record_database_pool(&self, snapshot: db::PoolSnapshot) {
+        self.database_pool_connections
+            .with_label_values(&["application", "active"])
+            .set(snapshot.active as i64);
+        self.database_pool_connections
+            .with_label_values(&["application", "idle"])
+            .set(snapshot.idle as i64);
+        self.database_pool_connections
+            .with_label_values(&["application", "waiting"])
+            .set(snapshot.waiting as i64);
+        self.database_pool_max_connections
+            .set(snapshot.max_connections as i64);
+        self.database_pool_utilization_percent
+            .with_label_values(&["application"])
+            .set(snapshot.utilization_percent());
     }
 }
 
@@ -1146,9 +1384,52 @@ async fn analyze_wasm(
     Ok(Json(report))
 }
 
+fn spawn_database_pool_monitor(
+    pool: db::Pool,
+    metrics: Arc<AppMetrics>,
+    config: DatabasePoolMonitorConfig,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(config.interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut alerting = false;
+        loop {
+            ticker.tick().await;
+            let snapshot = pool.snapshot();
+            metrics.record_database_pool(snapshot);
+            let utilization_alert = snapshot.utilization_percent() >= config.alert_threshold_percent;
+            let next_alerting = utilization_alert || snapshot.waiting > 0;
+            if next_alerting != alerting {
+                alerting = next_alerting;
+                metrics
+                    .database_pool_alerting
+                    .with_label_values(&["application"])
+                    .set(if alerting { 1 } else { 0 });
+                if alerting {
+                    metrics.database_pool_alerts_total.inc();
+                    tracing::warn!(
+                        active_connections = snapshot.active,
+                        idle_connections = snapshot.idle,
+                        waiting_requests = snapshot.waiting,
+                        max_connections = snapshot.max_connections,
+                        utilization_percent = snapshot.utilization_percent(),
+                        threshold_percent = config.alert_threshold_percent,
+                        "Database connection pool threshold exceeded"
+                    );
+                } else {
+                    tracing::info!("Database connection pool utilization recovered");
+                }
+            }
+        }
+    })
+}
+
 async fn metrics_handler(
     State(state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, AppError> {
+    state
+        .metrics
+        .record_database_pool(state.database_pool.snapshot());
     let metric_families = state.metrics.registry.gather();
     let encoder = TextEncoder::new();
     let mut buffer = Vec::new();
@@ -1635,6 +1916,36 @@ async fn fee_recommend(
     }))
 }
 
+async fn fee_recommend_v2(
+    State(state): State<Arc<AppState>>,
+    Query(req): Query<FeeRecommendationRequest>,
+    request: axum::extract::Request,
+) -> Result<Json<FeeRecommendationResponse>, AppError> {
+    if !state
+        .feature_flags
+        .is_enabled(FeatureFlag::EnableNewFeeModel)
+    {
+        let path = request.uri().path().to_string();
+        return Err(AppError::NotFound(format!("No route for {path}")));
+    }
+    fee_recommend(State(state), Query(req)).await
+}
+
+async fn require_vault_v2(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, AppError> {
+    if !state
+        .feature_flags
+        .is_enabled(FeatureFlag::EnableVaultV2)
+    {
+        let path = request.uri().path().to_string();
+        return Err(AppError::NotFound(format!("No route for {path}")));
+    }
+    Ok(next.run(request).await)
+}
+
 #[utoipa::path(
     get,
     path = "/fees/history",
@@ -1821,10 +2132,13 @@ async fn not_found_handler(request: axum::extract::Request) -> impl IntoResponse
 async fn ready_check(State(state): State<Arc<AppState>>) -> axum::response::Response {
     use axum::response::IntoResponse;
     
-    let db_ok = sqlx::query("SELECT 1")
-        .execute(state.reconciliation_repo.pool())
-        .await
-        .is_ok();
+    let db_ok = match state.database_pool.acquire().await {
+        Ok(mut connection) => sqlx::query("SELECT 1")
+            .execute(&mut *connection)
+            .await
+            .is_ok(),
+        Err(_) => false,
+    };
         
     let rpc_ok = !state.provider_registry.healthy_providers().await.is_empty();
 
@@ -1907,7 +2221,7 @@ async fn main() {
 
     tracing::info!("Perigee Starting...");
 
-    let config = load_config().expect("Failed to load configuration");
+    let mut config = load_config().expect("Failed to load configuration");
     // Fail fast on malformed secrets before the server binds (issue #85 / NF-03).
     if let Err(err) = validate_config_secrets(&config) {
         tracing::error!(
@@ -1916,11 +2230,13 @@ async fn main() {
         );
         panic!("Invalid configuration: {}", err);
     }
-    tracing::info!("Perigee initialized with config: {:?}", config);
     tracing::info!(
-        redis_url = %config.redis_url,
-        "Cache config: using in-memory (moka) MVP; Redis URL reserved for future migration"
+        app_env = %config.app_env,
+        server_port = config.server_port,
+        simulation_mode = %config.simulation_mode,
+        "Perigee configuration loaded"
     );
+    tracing::info!("Using in-memory cache; Redis is reserved for future migration");
 
     let args: Vec<String> = env::args().collect();
 
@@ -2196,18 +2512,25 @@ async fn main() {
 
     // ── CLI: migrate subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "migrate" {
-        tracing::info!(database_url = %config.database_url, "Running database migrations");
-        let db_pool = sqlx::SqlitePool::connect(&config.database_url)
+        tracing::info!("Running database migrations");
+        let pool_config = db::PoolConfig::new(
+            config.database_max_connections,
+            config.database_min_connections,
+            std::time::Duration::from_secs(config.database_acquire_timeout_secs),
+        )
+        .map_err(|error| error.to_string())
+        .unwrap_or_else(|error| panic!("Invalid database pool configuration: {error}"));
+        db::init_pool_with_config(&config.database_url, pool_config)
             .await
-            .expect("Failed to connect to database");
-        crate::db::migrations::run_migrations(&db_pool)
-            .await
-            .expect("Failed to run database migrations");
+            .unwrap_or_else(|error| panic!("Failed to initialize database: {error}"));
         println!("Database migrations applied successfully.");
         return;
     }
 
     tracing::info!("Starting Perigee API Server...");
+    let feature_flags = FeatureFlagService::from_config(&config.feature_flags)
+        .unwrap_or_else(|error| panic!("Invalid backend feature flags: {error}"));
+    tracing::info!(flags = ?feature_flags.snapshot(), "Backend feature flags loaded");
 
     // ── Multi-node RPC setup ────────────────────────────────────────────
     let providers = build_providers(&config);
@@ -2275,31 +2598,45 @@ async fn main() {
 
     // Construct signing state only after every configured RPC provider has
     // proved that it is connected to the expected Stellar network.
-    let auth_state = Arc::new(auth::AuthState::new(
-        config.jwt_private_key.clone(),
-        None,
-        config.network_passphrase.clone(),
-        config.emergency_verification_paused,
-    ));
+    let production = config.app_env.trim().eq_ignore_ascii_case("production");
+    let auth_state = Arc::new(
+        auth::AuthState::from_config(
+            config.jwt_private_key.clone(),
+            Some(config.jwt_key_ring.clone()),
+            Some(config.jwt_current_key_id.clone()),
+            config.jwt_key_overlap_secs,
+            !production,
+            None,
+            config.network_passphrase.clone(),
+            config.emergency_verification_paused,
+        )
+        .unwrap_or_else(|error| panic!("JWT key configuration rejected: {error}")),
+    );
+    config.jwt_private_key = None;
+    config.jwt_key_ring.clear();
+    config.jwt_current_key_id.clear();
     tracing::info!(
         "SEP-10 server account: {}",
         auth_state.server_stellar_address()
     );
 
     // ── Fee Market Setup ────────────────────────────────────────────────
-    let database_url = &config.database_url;
-    tracing::info!(database_url = %database_url, "Initializing database");
-
-    let db_pool = sqlx::SqlitePool::connect(database_url)
+    let database_pool_config = db::PoolConfig::new(
+        config.database_max_connections,
+        config.database_min_connections,
+        std::time::Duration::from_secs(config.database_acquire_timeout_secs),
+    )
+    .map_err(|error| error.to_string())
+    .unwrap_or_else(|error| panic!("Invalid database pool configuration: {error}"));
+    let db_pool = db::init_pool_with_config(&config.database_url, database_pool_config)
         .await
-        .expect("Failed to connect to database");
-
-    // Run migrations (idempotent; tracked in sqlx's _sqlx_migrations table).
-    crate::db::migrations::run_migrations(&db_pool)
-        .await
-        .expect("Failed to run database migrations");
-
-    tracing::info!("Database migrations completed");
+        .unwrap_or_else(|error| panic!("Failed to initialize database: {error}"));
+    tracing::info!(
+        max_connections = config.database_max_connections,
+        min_connections = config.database_min_connections,
+        acquire_timeout_secs = config.database_acquire_timeout_secs,
+        "Database pool initialized and migrations completed"
+    );
 
     // Initialize typed DB schema for the managers, vaults, and reconciliation records.
     let db_schema = db::schema::TypedSchema::new(std::sync::Arc::new(db_pool.clone()));
@@ -2325,19 +2662,18 @@ async fn main() {
         Arc::clone(&fee_store),
         fee_analytics_engine.clone(),
     );
-    let job_queue_config = JobQueueConfig {
+    let job_config = JobQueueConfig {
         job_timeout_secs: config.job_timeout_secs,
         max_concurrent_jobs: config.max_concurrent_jobs,
-        ..JobQueueConfig::default()
+        ..Default::default()
     };
-    let job_queue = JobQueue::new(database_url, &config.redis_url, job_queue_config.clone())
+    let job_queue = JobQueue::from_pool(db_pool.clone(), &config.redis_url, job_config.clone())
         .await
-        .expect("Failed to initialize job queue");
-    // ── WebSocket event bus ─────────────────────────────────────────────
+        .expect("Failed to initialize JobQueue");
+    job_queue.spawn_cleanup_task();
     let simulation_bus = SimulationBus::new();
-
     let insights_cache = crate::cache::InsightsCache::new();
-    let job_worker = JobWorker::new(
+    let worker = JobWorker::new(
         job_queue.clone(),
         SimulationEngine::with_registry_and_timeout_and_mode(
             Arc::clone(&registry),
@@ -2347,38 +2683,10 @@ async fn main() {
         .with_stellar_service(Arc::clone(&stellar_service)),
         InsightsEngine::new(),
         insights_cache.clone(),
-        job_queue_config,
+        job_config,
     )
     .with_bus(Arc::clone(&simulation_bus))
     .with_reconciler(Arc::clone(&reconciler));
-
-    tokio::spawn(async move {
-        job_worker.run().await;
-    });
-
-    // ── Distributed Job Queue Setup ─────────────────────────────────────
-    let job_config = JobQueueConfig {
-        job_timeout_secs: config.job_timeout_secs,
-        max_concurrent_jobs: config.max_concurrent_jobs,
-        ..Default::default()
-    };
-
-    let job_queue = JobQueue::new(&config.database_url, &config.redis_url, job_config.clone())
-        .await
-        .expect("Failed to initialize JobQueue");
-
-    // Spawn background cleanup task
-    job_queue.spawn_cleanup_task();
-
-    // Spawn worker
-    let worker = JobWorker::new(
-        job_queue.clone(),
-        SimulationEngine::with_registry_and_timeout(Arc::clone(&registry), simulation_timeout)
-            .with_stellar_service(Arc::clone(&stellar_service)),
-        InsightsEngine::new(),
-        insights_cache.clone(),
-        job_config,
-    );
 
     tokio::spawn(async move {
         worker.run().await;
@@ -2435,6 +2743,17 @@ async fn main() {
     let sled_db = sled::open("Perigee_cache").expect("Failed to open sled database");
     let simulation_cache = SimulationCache::new(&sled_db);
     let contract_cache = Arc::new(ContractCache::new(&sled_db));
+    let metrics = Arc::new(AppMetrics::new().expect("Failed to initialize Prometheus metrics"));
+    let database_pool_monitor = DatabasePoolMonitorConfig {
+        interval: std::time::Duration::from_secs(config.database_pool_monitor_interval_secs),
+        alert_threshold_percent: config.database_pool_alert_threshold_percent,
+    };
+    metrics.record_database_pool(db_pool.snapshot());
+    let _database_pool_monitor_handle = spawn_database_pool_monitor(
+        db_pool.clone(),
+        Arc::clone(&metrics),
+        database_pool_monitor,
+    );
 
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_cache(
@@ -2453,7 +2772,9 @@ async fn main() {
         fee_analytics_engine,
         fee_store,
         fee_service,
-        metrics: Arc::new(AppMetrics::new().expect("Failed to initialize Prometheus metrics")),
+        metrics,
+        database_pool: db_pool,
+        feature_flags,
         simulation_bus,
         reconciler,
         reconciliation_repo,
@@ -2472,6 +2793,10 @@ async fn main() {
         .route("/analyze/gas-golfing", post(analyze_gas_golfing))
         // Scoped token issuance for role- and vault-scoped delegation
         .route("/auth/scoped-token", post(auth::issue_scoped_token_handler))
+        .route(
+            "/auth/emergency-pause",
+            post(auth::emergency_pause_handler),
+        )
         // Vault records with tenant-scoped access (API-37)
         .route("/vaults", get(vault_store::list_vaults_handler).post(vault_store::create_vault_handler))
         .route(
@@ -2486,24 +2811,6 @@ async fn main() {
             "/admin/vaults/deleted",
             get(vault_store::list_deleted_vaults_handler),
         )
-        .route_layer(axum::middleware::from_fn(auth::auth_middleware));
-
-    let api_routes = Router::new()
-        .route("/health", get(health_check))
-        .route("/ready", get(ready_check))
-        .route("/metrics", get(metrics_handler))
-        .route("/auth/challenge", post(auth::challenge_handler))
-        .route("/auth/verify", post(auth::verify_handler))
-        .route("/auth/refresh", post(auth::refresh_handler))
-        .route("/auth/revoke", post(auth::revoke_handler))
-        .route("/auth/emergency-pause", post(auth::emergency_pause_handler))
-        .route("/auth/jwks", get(auth::jwks_handler))
-        // Fee market routes (public access)
-        .route("/fees/recommend", get(fee_recommend))
-        .route("/fees/history", get(fee_history))
-        .route("/fees/analytics", get(fee_analytics))
-        // Manager onboarding with approval/KYC gate (API-33)
-        .route("/managers/register", post(manager_store::register_manager_handler))
         .route("/managers", get(manager_store::list_managers_handler))
         .route(
             "/managers/:id",
@@ -2518,11 +2825,9 @@ async fn main() {
             post(manager_store::reject_manager_handler),
         )
         .route(
-            "/managers/status/:stellar_address",
-            get(manager_store::check_manager_status_handler),
+            "/reconcile",
+            post(reconciliation::reconcile_handler),
         )
-        // Reconciliation routes (async via job queue)
-        .route("/reconcile", post(reconciliation::reconcile_handler))
         .route(
             "/reconcile/reports",
             get(reconciliation::list_reports_handler),
@@ -2531,10 +2836,55 @@ async fn main() {
             "/reconcile/:job_id",
             get(reconciliation::get_reconcile_job_handler),
         )
+        .route_layer(axum::middleware::from_fn(auth::auth_middleware));
+
+    let protected_v2 = Router::new()
+        .route(
+            "/v2/vaults",
+            get(vault_store::list_vaults_handler).post(vault_store::create_vault_handler),
+        )
+        .route(
+            "/v2/vaults/:id",
+            get(vault_store::get_vault_handler)
+                .patch(vault_store::update_vault_handler)
+                .delete(vault_store::soft_delete_vault_handler),
+        )
+        .route(
+            "/v2/vaults/:id/restore",
+            post(vault_store::restore_vault_handler),
+        )
+        .route(
+            "/v2/admin/vaults/deleted",
+            get(vault_store::list_deleted_vaults_handler),
+        )
+        .route_layer(axum::middleware::from_fn(auth::auth_middleware))
+        .route_layer(axum::middleware::from_fn(require_vault_v2));
+
+    let api_routes = Router::new()
+        .route("/health", get(health_check))
+        .route("/ready", get(ready_check))
+        .route("/metrics", get(metrics_handler))
+        .route("/auth/challenge", post(auth::challenge_handler))
+        .route("/auth/verify", post(auth::verify_handler))
+        .route("/auth/refresh", post(auth::refresh_handler))
+        .route("/auth/revoke", post(auth::revoke_handler))
+        .route("/auth/jwks", get(auth::jwks_handler))
+        // Fee market routes (public access)
+        .route("/fees/recommend", get(fee_recommend))
+        .route("/fees/v2/recommend", get(fee_recommend_v2))
+        .route("/fees/history", get(fee_history))
+        .route("/fees/analytics", get(fee_analytics))
+        // Manager onboarding with approval/KYC gate (API-33)
+        .route("/managers/register", post(manager_store::register_manager_handler))
+        .route(
+            "/managers/status/:stellar_address",
+            get(manager_store::check_manager_status_handler),
+        )
         // WebSocket streaming (Issue #105) — no auth required on the upgrade;
         // the client passes the job_id in the path.
         .route("/ws/jobs/:job_id", get(ws::ws_handler))
-        .merge(protected);
+        .merge(protected)
+        .merge(protected_v2);
 
     let app = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
@@ -3064,6 +3414,9 @@ mod validate_config_secrets_tests {
             rust_log: "info".to_string(),
             soroban_rpc_url: "https://soroban-testnet.stellar.org".to_string(),
             jwt_private_key: None,
+            jwt_key_ring: String::new(),
+            jwt_current_key_id: String::new(),
+            jwt_key_overlap_secs: 1_800,
             network_passphrase: "Test SDF Network ; September 2015".to_string(),
             redis_url: String::new(),
             rpc_providers: String::new(),
@@ -3075,12 +3428,18 @@ mod validate_config_secrets_tests {
             simulation_timeout_secs: 30,
             simulation_mode: "failover".to_string(),
             database_url: "sqlite://Perigee.db".to_string(),
+            database_max_connections: 10,
+            database_min_connections: 1,
+            database_acquire_timeout_secs: 30,
+            database_pool_monitor_interval_secs: 15,
+            database_pool_alert_threshold_percent: 80.0,
             job_timeout_secs: 300,
             max_concurrent_jobs: 10,
             fee_collection_interval_secs: 5,
             fee_retention_days: 30,
             fee_analysis_enabled: true,
             emergency_verification_paused: false,
+            feature_flags: String::new(),
             disk_cache_path: String::new(),
             max_ledger_age: 100,
             cors_allowed_origins: String::new(),

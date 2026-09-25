@@ -14,13 +14,14 @@
 //! consider migrating to fixed-point arithmetic (e.g. `i128` with 18 decimal
 //! places) in a future iteration.
 
+use crate::auth::AuthenticatedUser;
 use crate::db;
 use std::str::FromStr;
 use crate::fee_analytics::FeeAnalyticsEngine;
 use crate::fee_store::FeeStore;
 use crate::AppError;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -281,6 +282,16 @@ impl From<ReconciliationError> for AppError {
 
 // ── HTTP Handlers ────────────────────────────────────────────────────────────
 
+fn require_operator(user: &AuthenticatedUser) -> Result<(), AppError> {
+    if user.has_role(crate::auth::Role::Operator) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "Operator access is required".to_string(),
+        ))
+    }
+}
+
 /// Submit an async reconciliation job
 #[utoipa::path(
     post,
@@ -295,8 +306,10 @@ impl From<ReconciliationError> for AppError {
 )]
 pub async fn reconcile_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Json(req): Json<ReconcileRequest>,
 ) -> Result<(StatusCode, Json<ReconcileResponse>), AppError> {
+    require_operator(&user)?;
     if req.from_ledger >= req.to_ledger {
         return Err(AppError::BadRequest(
             "from_ledger must be less than to_ledger".into(),
@@ -346,8 +359,10 @@ pub async fn reconcile_handler(
 )]
 pub async fn get_reconcile_job_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(job_id): Path<String>,
 ) -> Result<Json<crate::jobs::Job>, AppError> {
+    require_operator(&user)?;
     let id = crate::jobs::JobId::from_str(&job_id)
         .map_err(|_| AppError::BadRequest("Invalid job ID".into()))?;
 
@@ -375,8 +390,10 @@ pub async fn get_reconcile_job_handler(
 )]
 pub async fn list_reports_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Query(params): Query<ListReportsQuery>,
 ) -> Result<Json<Vec<ReconciliationReport>>, AppError> {
+    require_operator(&user)?;
     let reports = state
         .reconciliation_repo
         .list(params.limit)
