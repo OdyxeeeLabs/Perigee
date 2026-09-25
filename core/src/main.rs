@@ -27,6 +27,7 @@ mod middleware;
 pub mod insights;
 mod input_sanitization;
 mod jobs;
+mod log_redaction;
 mod logging;
 mod merkle_tree;
 mod metrics;
@@ -88,6 +89,10 @@ use crate::logging::{LogLevelSnapshot, LogLevelUpdate, RuntimeLogController};
 use crate::stellar_service::{StellarService, StellarServiceConfig};
 use crate::ws::SimulationBus;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tokio_util::sync::CancellationToken;
+use tower_http::trace::{MakeSpan, TraceLayer};
+use tracing::Instrument;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{
     filter::LevelFilter,
@@ -269,6 +274,12 @@ fn build_cors_layer(cors_allowed_origins: &str) -> CorsLayer {
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
             header::ACCEPT,
+            header::HeaderName::from_static("x-request-id"),
+            header::HeaderName::from_static("x-correlation-id"),
+        ])
+        .expose_headers([
+            header::HeaderName::from_static("x-request-id"),
+            header::HeaderName::from_static("x-correlation-id"),
             axum::http::HeaderName::from_static("x-api-key"),
             axum::http::HeaderName::from_static("x-request-id"),
             axum::http::HeaderName::from_static("x-correlation-id"),
@@ -303,11 +314,18 @@ fn build_cors_layer(cors_allowed_origins: &str) -> CorsLayer {
         .filter_map(|origin| {
             match origin.parse::<axum::http::HeaderValue>() {
                 Ok(v) => {
-                    tracing::info!(origin, "CORS: allowing origin");
+                    tracing::info!(
+                        origin = %crate::log_redaction::redact_endpoint(origin),
+                        "CORS: allowing origin"
+                    );
                     Some(v)
                 }
                 Err(e) => {
-                    tracing::warn!(origin, error = %e, "CORS: skipping invalid origin");
+                    tracing::warn!(
+                        origin = %crate::log_redaction::redact_sensitive_text(origin),
+                        error = %crate::log_redaction::redact_display(&e),
+                        "CORS: skipping invalid origin"
+                    );
                     None
                 }
             }
@@ -330,11 +348,9 @@ fn validate_config_secrets(config: &AppConfig) -> Result<(), String> {
         return Err("SOROBAN_RPC_URL is empty".to_string());
     }
     if reqwest::Url::parse(rpc).is_err() {
-        return Err(format!(
-            "SOROBAN_RPC_URL is not a valid URL: '{}' \
-             (must start with http:// or https://)",
-            rpc
-        ));
+        return Err(
+            "SOROBAN_RPC_URL is not a valid URL (must start with http:// or https://)".to_string(),
+        );
     }
 
     // 2. Stellar network passphrase — never empty.
@@ -361,8 +377,8 @@ fn validate_config_secrets(config: &AppConfig) -> Result<(), String> {
             }
             if reqwest::Url::parse(&p.url).is_err() {
                 return Err(format!(
-                    "RPC_PROVIDERS[{}] ('{}') has invalid URL: '{}'",
-                    idx, p.name, p.url
+                    "RPC_PROVIDERS[{}] ('{}') has an invalid URL",
+                    idx, p.name
                 ));
             }
         }
@@ -370,20 +386,15 @@ fn validate_config_secrets(config: &AppConfig) -> Result<(), String> {
 
     // 4. REGISTRY_PUBLIC_URL — optional but, if set, must be a valid URL.
     if !config.registry_public_url.trim().is_empty()
-        && reqwest::Url::parse(&config.registry_public_url).is_err() {
-            return Err(format!(
-                "REGISTRY_PUBLIC_URL is not a valid URL: '{}'",
-                config.registry_public_url
-            ));
-        }
+        && reqwest::Url::parse(&config.registry_public_url).is_err()
+    {
+        return Err("REGISTRY_PUBLIC_URL is not a valid URL".to_string());
+    }
 
     // 5. REGISTRY_SEED_PEERS — every URL must be parseable.
     for peer in parse_seed_peers(&config.registry_seed_peers) {
         if reqwest::Url::parse(&peer).is_err() {
-            return Err(format!(
-                "REGISTRY_SEED_PEERS contains an invalid peer URL: '{}'",
-                peer
-            ));
+            return Err("REGISTRY_SEED_PEERS contains an invalid peer URL".to_string());
         }
     }
 
@@ -440,7 +451,7 @@ fn build_providers(config: &AppConfig) -> Vec<RpcProvider> {
             }
             Err(e) => {
                 tracing::warn!(
-                    error = %e,
+                    error = %crate::log_redaction::redact_display(&e),
                     "Failed to parse RPC_PROVIDERS, falling back to SOROBAN_RPC_URL"
                 );
             }
@@ -535,6 +546,7 @@ pub struct AppState {
     agent_fleet: Arc<agent_fleet::DefaultAgentFleet>,
     /// Manager onboarding with approval/KYC gate (API-33).
     manager_store: Arc<manager_store::ManagerStore>,
+    shutdown: CancellationToken,
     receipt_signer: ReceiptSigner,
     log_levels: RuntimeLogController,
 }
@@ -1048,13 +1060,14 @@ async fn analyze(
     Extension(cancellation): Extension<RequestCancellation>,
     ValidatedJson(payload): ValidatedJson<AnalyzeRequest>,
 ) -> Result<(HeaderMap, Json<crate::jobs::SubmitJobResponse>), AppError> {
+    let span_contract_id = payload.contract_id.clone();
+    let span_function_name = payload.function_name.clone();
     let span = tracing::info_span!(
         "analyze",
-        contract_id = %payload.contract_id,
-        function_name = %payload.function_name,
+        contract_id = %span_contract_id,
+        function_name = %span_function_name,
     );
-    let _enter = span.enter();
-    tracing::info!("Received analyze request, offloading to background task");
+    tracing::info!(parent: &span, "Received analyze request, offloading to background task");
 
     let job_id = cancellation
         .wait(state.job_queue.submit(
@@ -1066,6 +1079,8 @@ async fn analyze(
                 ledger_overrides: payload.ledger_overrides,
             },
             None,
+        )
+        .instrument(span)
         ))
         .await
         .map_err(|_| AppError::Internal("Request cancelled".into()))?
@@ -1351,9 +1366,9 @@ async fn optimize_limits(
     ValidatedJson(payload): ValidatedJson<OptimizeLimitsRequest>,
 ) -> Result<Json<OptimizeLimitsResponse>, AppError> {
     tracing::info!(
-        "Optimizing limits for contract: {}, function: {}",
-        payload.contract_id,
-        payload.function_name
+        contract_id = %crate::log_redaction::redact_sensitive_text(&payload.contract_id),
+        function_name = %crate::log_redaction::redact_sensitive_text(&payload.function_name),
+        "Optimizing limits"
     );
 
     let report = state
@@ -1600,7 +1615,7 @@ fn join_error_to_internal(context: &str, e: tokio::task::JoinError) -> AppError 
     if e.is_panic() {
         tracing::error!(
             context = context,
-            panic_detail = %e,
+            panic_detail = %crate::log_redaction::redact_display(&e),
             "spawn_blocking task panicked"
         );
         if crate::errors::is_production() {
@@ -2088,17 +2103,21 @@ async fn registry_gossip(
 /// Ctrl-C is wired up.
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if tokio::signal::ctrl_c().await.is_err() {
+            tracing::error!("Failed to install Ctrl+C handler");
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                tracing::error!(error = %crate::log_redaction::redact_display(&error), "Failed to install SIGTERM handler");
+            }
+        }
     };
 
     #[cfg(not(unix))]
@@ -2107,6 +2126,42 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => tracing::info!("SIGINT received, draining in-flight requests before shutdown"),
         _ = terminate => tracing::info!("SIGTERM received, draining in-flight requests before shutdown"),
+    }
+}
+
+async fn shutdown_background_tasks(
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    deadline: std::time::Instant,
+) {
+    let mut tasks = tasks.into_iter();
+
+    while let Some(mut task) = tasks.next() {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            task.abort();
+            for remaining_task in tasks {
+                remaining_task.abort();
+            }
+            break;
+        }
+
+        match tokio::time::timeout(remaining, &mut task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::error!(
+                    error = %crate::log_redaction::redact_display(&error),
+                    "Background task stopped with an error"
+                );
+            }
+            Err(_) => {
+                tracing::error!("Background task shutdown timed out");
+                task.abort();
+                for remaining_task in tasks {
+                    remaining_task.abort();
+                }
+                break;
+            }
+        }
     }
 }
 
@@ -2143,18 +2198,37 @@ async fn main() {
 
     tracing::info!("Perigee Starting...");
 
-    let config = load_config().expect("Failed to load configuration");
+    let config = match load_config() {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::error!(
+                error = %crate::log_redaction::redact_display(&error),
+                "Failed to load configuration"
+            );
+            return;
+        }
+    };
     // Fail fast on malformed secrets before the server binds (issue #85 / NF-03).
     if let Err(err) = validate_config_secrets(&config) {
         tracing::error!(
-            error = %err,
+            error = %crate::log_redaction::redact_sensitive_text(&err),
             "Configuration validation failed at startup. Refusing to bind."
         );
-        panic!("Invalid configuration: {}", err);
+        panic!("Invalid configuration");
     }
-    tracing::info!("Perigee initialized with config: {:?}", config);
     tracing::info!(
-        redis_url = %config.redis_url,
+        app_env = %config.app_env,
+        server_port = config.server_port,
+        rpc_providers_configured = !config.rpc_providers.trim().is_empty(),
+        network_passphrase_configured = !config.network_passphrase.trim().is_empty(),
+        jwt_private_key_configured = config.jwt_private_key.is_some(),
+        redis_configured = !config.redis_url.trim().is_empty(),
+        database_configured = !config.database_url.trim().is_empty(),
+        cors_origins_configured = !config.cors_allowed_origins.trim().is_empty(),
+        "Perigee configuration loaded"
+    );
+    tracing::info!(
+        redis_configured = !config.redis_url.trim().is_empty(),
         "Cache config: using in-memory (moka) MVP; Redis URL reserved for future migration"
     );
 
@@ -2189,10 +2263,16 @@ async fn main() {
             // delivery durable across restarts rather than just within a
             // single process's retry loop.
             if let Err(e) = simulation_service.dispatch_due_events().await {
-                tracing::warn!("Failed to drain pending webhook events: {}", e);
+                tracing::warn!(
+                    error = %crate::log_redaction::redact_display(&e),
+                    "Failed to drain pending webhook events"
+                );
             }
             if let Err(e) = benchmarks::run_token_benchmark(path, &simulation_service).await {
-                tracing::error!("Benchmark failed: {}", e);
+                tracing::error!(
+                    error = %crate::log_redaction::redact_display(&e),
+                    "Benchmark failed"
+                );
             }
         } else {
             tracing::error!(
@@ -2206,10 +2286,10 @@ async fn main() {
     // ── CLI: merkle subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "merkle" {
         if args.len() < 4 {
-            eprintln!("Usage: Perigee-core merkle <build|proof> <args>");
-            eprintln!("Commands:");
-            eprintln!("  build <leaf1> <leaf2> ...            Build a Merkle tree and print the root hash");
-            eprintln!("  proof <leaf_index> <leaf1> <leaf2> ... Generate a Merkle proof for the given leaf index");
+            tracing::error!("Usage: Perigee-core merkle <build|proof> <args>");
+            tracing::error!("Commands:");
+            tracing::error!("  build <leaf1> <leaf2> ...            Build a Merkle tree and print the root hash");
+            tracing::error!("  proof <leaf_index> <leaf1> <leaf2> ... Generate a Merkle proof for the given leaf index");
             std::process::exit(1);
         }
 
@@ -2217,7 +2297,7 @@ async fn main() {
         match command.as_str() {
             "build" => {
                 if args.len() < 4 {
-                    eprintln!("Usage: Perigee-core merkle build <leaf1> <leaf2> ...");
+                    tracing::error!("Usage: Perigee-core merkle build <leaf1> <leaf2> ...");
                     std::process::exit(1);
                 }
                 let leaves: Vec<Vec<u8>> = args[3..]
@@ -2226,16 +2306,16 @@ async fn main() {
                     .collect();
                 let mut tree = merkle_tree::MerkleTree::new(32);
                 match tree.build(leaves) {
-                    Ok(()) => println!("{}", tree.get_root_hex()),
+                    Ok(()) => tracing::info!("{}", tree.get_root_hex()),
                     Err(err) => {
-                        eprintln!("Error building Merkle tree: {}", err);
+                        tracing::error!("Error building Merkle tree: {}", err);
                         std::process::exit(1);
                     }
                 }
             }
             "proof" => {
                 if args.len() < 5 {
-                    eprintln!(
+                    tracing::error!(
                         "Usage: Perigee-core merkle proof <leaf_index> <leaf1> <leaf2> ..."
                     );
                     std::process::exit(1);
@@ -2243,7 +2323,7 @@ async fn main() {
                 let leaf_index = match args[3].parse::<usize>() {
                     Ok(index) => index,
                     Err(_) => {
-                        eprintln!("Leaf index must be a non-negative integer.");
+                        tracing::error!("Leaf index must be a non-negative integer.");
                         std::process::exit(1);
                     }
                 };
@@ -2253,13 +2333,13 @@ async fn main() {
                     .collect();
                 let mut tree = merkle_tree::MerkleTree::new(32);
                 if let Err(err) = tree.build(leaves) {
-                    eprintln!("Error building Merkle tree: {}", err);
+                    tracing::error!("Error building Merkle tree: {}", err);
                     std::process::exit(1);
                 }
                 let proof = match tree.generate_proof(leaf_index) {
                     Ok(proof) => proof,
                     Err(err) => {
-                        eprintln!("Error generating Merkle proof: {}", err);
+                        tracing::error!("Error generating Merkle proof: {}", err);
                         std::process::exit(1);
                     }
                 };
@@ -2269,11 +2349,11 @@ async fn main() {
                     "leaf_count": tree.leaf_count(),
                     "proof": proof,
                 });
-                println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                tracing::info!("{}", serde_json::to_string_pretty(&output).unwrap());
             }
             unknown => {
-                eprintln!("Unknown merkle command: {}", unknown);
-                eprintln!("Available commands: build, proof");
+                tracing::error!("Unknown merkle command: {}", unknown);
+                tracing::error!("Available commands: build, proof");
                 std::process::exit(1);
             }
         }
@@ -2282,16 +2362,16 @@ async fn main() {
     }
 
     // Default Web Server
-    println!("Perigee CLI Initialized. Run with 'benchmark' argument to profile token contract.");
+    tracing::info!("Perigee CLI Initialized. Run with 'benchmark' argument to profile token contract.");
 
     // ── CLI: compare subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "compare" {
         if args.len() < 4 {
-            eprintln!("Usage: Perigee-core compare <current.wasm> <base.wasm>");
-            eprintln!("\nCompare two WASM contract versions and detect resource regressions.");
-            eprintln!("\nArguments:");
-            eprintln!("  <current.wasm>  Path to the new (current) version WASM file");
-            eprintln!("  <base.wasm>     Path to the reference (base) version WASM file");
+            tracing::error!("Usage: Perigee-core compare <current.wasm> <base.wasm>");
+            tracing::error!("\nCompare two WASM contract versions and detect resource regressions.");
+            tracing::error!("\nArguments:");
+            tracing::error!("  <current.wasm>  Path to the new (current) version WASM file");
+            tracing::error!("  <base.wasm>     Path to the reference (base) version WASM file");
             std::process::exit(1);
         }
 
@@ -2299,14 +2379,14 @@ async fn main() {
         let base_path = PathBuf::from(&args[3]);
 
         if !current_path.exists() {
-            eprintln!(
+            tracing::error!(
                 "Error: Current WASM file not found: {}",
                 current_path.display()
             );
             std::process::exit(1);
         }
         if !base_path.exists() {
-            eprintln!("Error: Base WASM file not found: {}", base_path.display());
+            tracing::error!("Error: Base WASM file not found: {}", base_path.display());
             std::process::exit(1);
         }
 
@@ -2324,7 +2404,7 @@ async fn main() {
                 comparison::print_report(&report);
             }
             Err(e) => {
-                eprintln!("Error: Comparison failed: {}", e);
+                tracing::error!("Error: Comparison failed: {}", e);
                 std::process::exit(1);
             }
         }
@@ -2335,10 +2415,10 @@ async fn main() {
     // ── CLI: export subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "export" {
         if args.len() < 6 {
-            eprintln!(
+            tracing::error!(
                 "Usage: Perigee-core export <contract_id> <function> <args_json> <output_file>"
             );
-            eprintln!("\nSimulate a transaction and export the touched state to a JSON file.");
+            tracing::error!("\nSimulate a transaction and export the touched state to a JSON file.");
             std::process::exit(1);
         }
 
@@ -2361,17 +2441,17 @@ async fn main() {
                 if let Some(snapshot) = result.state_snapshot {
                     let json = serde_json::to_string_pretty(&snapshot).unwrap();
                     if let Err(e) = std::fs::write(output_file, json) {
-                        eprintln!("Error: Failed to write snapshot to {}: {}", output_file, e);
+                        tracing::error!("Error: Failed to write snapshot to {}: {}", output_file, e);
                         std::process::exit(1);
                     }
-                    println!("State snapshot exported to {}", output_file);
+                    tracing::info!("State snapshot exported to {}", output_file);
                 } else {
-                    eprintln!("Error: No state snapshot generated.");
+                    tracing::error!("Error: No state snapshot generated.");
                     std::process::exit(1);
                 }
             }
             Err(e) => {
-                eprintln!("Error: Simulation failed: {}", e);
+                tracing::error!("Error: Simulation failed: {}", e);
                 std::process::exit(1);
             }
         }
@@ -2382,8 +2462,8 @@ async fn main() {
     // ── CLI: restore subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "restore" {
         if args.len() < 6 {
-            eprintln!("Usage: Perigee-core restore <snapshot_file> <contract_id> <function> <args_json>");
-            eprintln!("\nRestore state from a JSON file and run a simulation.");
+            tracing::error!("Usage: Perigee-core restore <snapshot_file> <contract_id> <function> <args_json>");
+            tracing::error!("\nRestore state from a JSON file and run a simulation.");
             std::process::exit(1);
         }
 
@@ -2415,14 +2495,14 @@ async fn main() {
             .await
         {
             Ok(result) => {
-                println!("Simulation successful with restored state.");
-                println!("Resources: {:?}", result.resources);
+                tracing::info!("Simulation successful with restored state.");
+                tracing::info!("Resources: {:?}", result.resources);
                 if let Some(deps) = result.state_dependency {
-                    println!("State dependencies: {} entries", deps.len());
+                    tracing::info!("State dependencies: {} entries", deps.len());
                 }
             }
             Err(e) => {
-                eprintln!("Error: Simulation failed: {}", e);
+                tracing::error!("Error: Simulation failed: {}", e);
                 std::process::exit(1);
             }
         }
@@ -2432,20 +2512,25 @@ async fn main() {
 
     // ── CLI: migrate subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "migrate" {
-        tracing::info!(database_url = %config.database_url, "Running database migrations");
+        tracing::info!(
+            database_configured = !config.database_url.trim().is_empty(),
+            "Running database migrations"
+        );
         let db_pool = sqlx::SqlitePool::connect(&config.database_url)
             .await
             .expect("Failed to connect to database");
         crate::db::migrations::run_migrations(&db_pool)
             .await
             .expect("Failed to run database migrations");
-        println!("Database migrations applied successfully.");
+        tracing::info!("Database migrations applied successfully.");
         return;
     }
 
     let receipt_signer = ReceiptSigner::from_env_with_app_env(Some(&config.app_env))
         .unwrap_or_else(|error| panic!("Failed to configure receipt signing: {error}"));
     tracing::info!("Starting Perigee API Server...");
+    let runtime_shutdown = CancellationToken::new();
+    let mut background_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     // ── Multi-node RPC setup ────────────────────────────────────────────
     let providers = build_providers(&config);
@@ -2468,28 +2553,50 @@ async fn main() {
     );
     tracing::info!(
         instance_id = registry.instance_id(),
-        public_url = ?registry.public_base_url(),
+        public_url = %registry
+            .public_base_url()
+            .map(|url| crate::log_redaction::redact_endpoint(&url))
+            .unwrap_or_else(|| "[not configured]".to_string()),
         "Provider registry initialized"
     );
 
     // Spawn background health checker.
     let health_interval = std::time::Duration::from_secs(config.health_check_interval_secs);
-    let _health_handle = registry.spawn_health_checker(health_interval);
+    background_tasks.push(
+        registry.spawn_health_checker_with_cancellation(
+            health_interval,
+            runtime_shutdown.child_token(),
+        ),
+    );
     tracing::info!(
         interval_secs = config.health_check_interval_secs,
         "Background RPC health checker started"
     );
 
     let gossip_interval = std::time::Duration::from_secs(config.gossip_interval_secs);
-    let _gossip_handle = registry.spawn_gossip_task(gossip_interval);
+    background_tasks.push(
+        registry.spawn_gossip_task_with_cancellation(
+            gossip_interval,
+            runtime_shutdown.child_token(),
+        ),
+    );
     tracing::info!(
         interval_secs = config.gossip_interval_secs,
         "Provider gossip sync started"
     );
 
     let simulation_timeout = std::time::Duration::from_secs(config.simulation_timeout_secs);
-    let simulation_mode = SimulationMode::from_config(&config.simulation_mode)
-        .expect("Invalid simulation mode configuration");
+    let simulation_mode = match SimulationMode::from_config(&config.simulation_mode) {
+        Ok(mode) => mode,
+        Err(error) => {
+            tracing::error!(
+                error = %crate::log_redaction::redact_display(&error),
+                "Invalid simulation mode configuration"
+            );
+            runtime_shutdown.cancel();
+            return;
+        }
+    };
     tracing::info!(
         timeout_secs = config.simulation_timeout_secs,
         "Simulation timeout configured"
@@ -2499,13 +2606,20 @@ async fn main() {
     // ── Process-wide Stellar RPC service ────────────────────────────────
     // One shared reqwest::Client (connection pool) and one retry policy for
     // the entire process.  Every subsystem receives an Arc clone of this.
-    let stellar_service = Arc::new(
-        StellarService::new(
-            Arc::clone(&registry),
-            StellarServiceConfig::default().with_timeout(simulation_timeout),
-        )
-        .unwrap_or_else(|e| panic!("Failed to build Stellar HTTP client: {e}")),
-    );
+    let stellar_service = match StellarService::new(
+        Arc::clone(&registry),
+        StellarServiceConfig::default().with_timeout(simulation_timeout),
+    ) {
+        Ok(service) => Arc::new(service),
+        Err(error) => {
+            tracing::error!(
+                error = %crate::log_redaction::redact_display(&error),
+                "Failed to build Stellar HTTP client"
+            );
+            runtime_shutdown.cancel();
+            return;
+        }
+    };
 
     for provider in &startup_providers {
         if let Err(error) = stellar_service
@@ -2514,11 +2628,12 @@ async fn main() {
         {
             tracing::error!(
                 provider = %provider.name,
-                url = %provider.url,
-                error = %error,
+                url = %crate::log_redaction::redact_endpoint(&provider.url),
+                error = %crate::log_redaction::redact_display(&error),
                 "Stellar network validation failed at startup; refusing to initialize signing"
             );
-            panic!("Stellar network validation failed: {}", error);
+            runtime_shutdown.cancel();
+            return;
         }
     }
     tracing::info!("StellarService initialized (pooled client, retry, circuit-breaker)");
@@ -2532,13 +2647,16 @@ async fn main() {
         config.emergency_verification_paused,
     ));
     tracing::info!(
-        "SEP-10 server account: {}",
-        auth_state.server_stellar_address()
+        server_address = %auth_state.server_stellar_address(),
+        "SEP-10 server account initialized"
     );
 
     // ── Fee Market Setup ────────────────────────────────────────────────
     let database_url = &config.database_url;
-    tracing::info!(database_url = %database_url, "Initializing database");
+    tracing::info!(
+        database_endpoint = %crate::log_redaction::redact_endpoint(database_url),
+        "Initializing database"
+    );
 
     let db_pool = db::init_pool(database_url)
         .await
@@ -2603,9 +2721,10 @@ async fn main() {
     .with_bus(Arc::clone(&simulation_bus))
     .with_reconciler(Arc::clone(&reconciler));
 
-    tokio::spawn(async move {
-        job_worker.run().await;
-    });
+    let worker_cancellation = runtime_shutdown.child_token();
+    background_tasks.push(tokio::spawn(async move {
+        job_worker.run_until_cancelled(worker_cancellation).await;
+    }));
 
     // ── Distributed Job Queue Setup ─────────────────────────────────────
     let job_config = JobQueueConfig {
@@ -2619,7 +2738,10 @@ async fn main() {
         .expect("Failed to initialize JobQueue");
 
     // Spawn background cleanup task
-    job_queue.spawn_cleanup_task();
+    background_tasks.push(
+        job_queue
+            .spawn_cleanup_task_with_cancellation(runtime_shutdown.child_token()),
+    );
 
     // Spawn worker
     let worker = JobWorker::new(
@@ -2631,9 +2753,10 @@ async fn main() {
         job_config,
     );
 
-    tokio::spawn(async move {
-        worker.run().await;
-    });
+    let worker_cancellation = runtime_shutdown.child_token();
+    background_tasks.push(tokio::spawn(async move {
+        worker.run_until_cancelled(worker_cancellation).await;
+    }));
 
     tracing::info!("Job queue and worker started (Redis backend)");
 
@@ -2645,18 +2768,28 @@ async fn main() {
             request_timeout: std::time::Duration::from_secs(10),
         };
 
-        let collector = Arc::new(
-            FeeCollector::new(
-                Arc::clone(&registry),
-                Arc::clone(&fee_store),
-                collector_config,
-            )
-            .unwrap_or_else(|e| panic!("Failed to build fee collector HTTP client: {e}")),
-        );
+        let collector = match FeeCollector::new(
+            Arc::clone(&registry),
+            Arc::clone(&fee_store),
+            collector_config,
+        ) {
+            Ok(collector) => Arc::new(collector),
+            Err(error) => {
+                tracing::error!(
+                    error = %crate::log_redaction::redact_display(&error),
+                    "Failed to build fee collector HTTP client"
+                );
+                runtime_shutdown.cancel();
+                return;
+            }
+        };
 
-        tokio::spawn(async move {
-            collector.run_collection_loop().await;
-        });
+        let collector_cancellation = runtime_shutdown.child_token();
+        background_tasks.push(tokio::spawn(async move {
+            collector
+                .run_collection_loop_with_cancellation(collector_cancellation)
+                .await;
+        }));
 
         tracing::info!(
             interval_secs = config.fee_collection_interval_secs,
@@ -2666,18 +2799,24 @@ async fn main() {
         // Schedule periodic cleanup of old fee data
         let cleanup_store = Arc::clone(&fee_store);
         let retention_days = config.fee_retention_days;
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // Every hour
+        let cleanup_cancellation = runtime_shutdown.child_token();
+        background_tasks.push(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
             loop {
-                interval.tick().await;
-                if let Err(e) = cleanup_store
-                    .cleanup_old_samples(retention_days as i32)
-                    .await
-                {
-                    tracing::error!(error = %e, "Failed to cleanup old fee samples");
+                tokio::select! {
+                    _ = cleanup_cancellation.cancelled() => break,
+                    _ = interval.tick() => {
+                        let result = tokio::select! {
+                            _ = cleanup_cancellation.cancelled() => break,
+                            result = cleanup_store.cleanup_old_samples(retention_days as i32) => result,
+                        };
+                        if let Err(e) = result {
+                            tracing::error!(error = %crate::log_redaction::redact_display(&e), "Failed to cleanup old fee samples");
+                        }
+                    }
                 }
             }
-        });
+        }));
     } else {
         tracing::info!("Fee market analysis is disabled");
     }
@@ -2711,6 +2850,7 @@ async fn main() {
         vault_store,
         agent_fleet,
         manager_store,
+        shutdown: runtime_shutdown.clone(),
         receipt_signer: receipt_signer.clone(),
         log_levels: log_levels.clone(),
     });
@@ -2829,6 +2969,31 @@ async fn main() {
         .layer(axum::middleware::from_fn(
             crate::middleware::api_version_middleware,
         ))
+        .layer(TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<axum::body::Body>| {
+            let request_id = request
+                .headers()
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            let correlation_id = request
+                .headers()
+                .get("x-correlation-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            let method = request.method().to_string();
+            let path = request.uri().path().to_owned();
+            tracing::info_span!(
+                "http_trace",
+                request_id = %request_id,
+                correlation_id = %correlation_id,
+                method = %method,
+                path = %path,
+                version = ?request.version()
+            )
+        }))
+        ))
         .layer(cors)
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 2)) // 2 MB limit
         .layer(axum::middleware::from_fn(
@@ -2838,8 +3003,10 @@ async fn main() {
             crate::middleware::request_cancellation_middleware,
         ))
         .layer(axum::middleware::from_fn(
-            crate::middleware::api_version_middleware,
+            crate::middleware::correlation_id_middleware,
         ))
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 2))
+        .with_state(app_state);
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(
             input_sanitization::sanitize_request_middleware,
@@ -2853,19 +3020,56 @@ async fn main() {
         .await
         .expect("Failed to bind to address");
 
-    tracing::info!(
-        "Server listening on http://{}",
-        listener.local_addr().unwrap()
-    );
-    tracing::info!(
-        "Swagger UI available at http://{}/swagger-ui",
-        listener.local_addr().unwrap()
-    );
+    let local_addr = listener.local_addr().unwrap_or_else(|error| {
+        tracing::error!(error = %crate::log_redaction::redact_display(&error), "Failed to read listener address");
+        runtime_shutdown.cancel();
+        std::net::SocketAddr::from(([0, 0, 0, 0], config.server_port))
+    });
+    tracing::info!(address = %local_addr, "Server listening");
+    tracing::info!(address = %local_addr, path = "/swagger-ui", "Swagger UI available");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("Server failed to start");
+    let mut shutdown_deadline: Option<std::time::Instant> = None;
+    let server_result = {
+        let server_shutdown = runtime_shutdown.clone();
+        let server = async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    server_shutdown.cancelled().await;
+                })
+                .await
+        };
+        tokio::pin!(server);
+
+        let server_result: Result<Result<(), std::io::Error>, tokio::time::error::Elapsed> =
+            tokio::select! {
+                result = &mut server => Ok(result),
+                _ = shutdown_signal() => {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    shutdown_deadline = Some(deadline);
+                    runtime_shutdown.cancel();
+                    tokio::time::timeout(
+                        deadline.saturating_duration_since(std::time::Instant::now()),
+                        &mut server,
+                    )
+                    .await
+                }
+            };
+    };
+    runtime_shutdown.cancel();
+
+    match server_result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::error!(error = %crate::log_redaction::redact_display(&error), "Server stopped with an error");
+        }
+        Err(_) => {
+            tracing::error!("Server shutdown timed out");
+        }
+    }
+
+    let shutdown_deadline = shutdown_deadline
+        .unwrap_or_else(|| std::time::Instant::now() + std::time::Duration::from_secs(5));
+    shutdown_background_tasks(background_tasks, shutdown_deadline).await;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

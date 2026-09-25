@@ -103,7 +103,7 @@ impl OracleGuardConfig {
                 Err(e) => {
                     warn!(
                         target: "oracle_guard",
-                        error = %e,
+                        error = %crate::log_redaction::redact_display(&e),
                         "{MAX_STALENESS_ENV} is not a positive integer; \
                          using the default of {DEFAULT_MAX_STALENESS_SECONDS}s"
                     );

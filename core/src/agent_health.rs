@@ -273,7 +273,7 @@ impl RetryPolicy {
                     tracing::warn!(
                         attempt,
                         delay_ms = delay.as_millis(),
-                        error = %err,
+                        error = %crate::log_redaction::redact_display(&err),
                         "external call failed; retrying"
                     );
                     tokio::time::sleep(delay).await;

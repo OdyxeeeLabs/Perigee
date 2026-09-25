@@ -1,3 +1,4 @@
+use crate::log_redaction::{redact_display, redact_endpoint};
 use crate::parser::ArgParser;
 use crate::runner::cancellation::wait_for_cancellation;
 use crate::rpc_provider::ProviderRegistry;
@@ -1589,7 +1590,7 @@ impl SimulationEngine {
                     tracing::warn!(
                         contract_id = %contract_id,
                         function = %function_name,
-                        error = %e,
+                        error = %redact_display(&e),
                         "Local simulation unavailable, falling back to RPC"
                     );
                 }
@@ -1649,6 +1650,7 @@ impl SimulationEngine {
         let contract_id = contract_id.to_string();
         let function_name = function_name.to_string();
         let transaction_data = initial_result.transaction_data.clone();
+        let cancellation = CancellationToken::new();
 
         let cpu_search = self.binary_search_resource(
             &contract_id,
@@ -1684,6 +1686,7 @@ impl SimulationEngine {
             ResourceSearchKind::LedgerWrite,
             estimate,
             &transaction_data,
+            cancellation,
             cancellation.clone(),
         );
 
@@ -1882,6 +1885,9 @@ impl SimulationEngine {
 
     fn resolve_search_result(
         result: Result<u64, SimulationError>,
+        _resource_type: ResourceSearchKind,
+    ) -> Result<u64, SimulationError> {
+        result
         resource_type: ResourceSearchKind,
     ) -> Result<u64, SimulationError> {
         result.map_err(|err| {
@@ -2055,7 +2061,7 @@ impl SimulationEngine {
         for provider in &providers {
             tracing::debug!(
                 provider = %provider.name,
-                url = %provider.url,
+                url = %redact_endpoint(&provider.url),
                 "Attempting simulation request"
             );
 
@@ -2122,7 +2128,7 @@ impl SimulationEngine {
                     if should_retry {
                         tracing::warn!(
                             provider = %provider.name,
-                            error = %e,
+                            error = %redact_display(&e),
                             "Provider failed with retryable error, trying next"
                         );
                         last_error = Some(e);
@@ -2330,7 +2336,7 @@ impl SimulationEngine {
         auth_value: Option<&str>,
         transaction_xdr: &str,
     ) -> Result<SimulationResult, SimulationError> {
-        tracing::debug!("Sending simulateTransaction request to {}", url);
+        tracing::debug!(url = %redact_endpoint(url), "Sending simulateTransaction request");
 
         // Build a minimal provider record so StellarService can attach the
         // auth headers and report circuit-breaker outcomes against the right URL.
@@ -2370,7 +2376,11 @@ impl SimulationEngine {
 
         match rpc_response.result {
             ResponseResult::Error { error } => {
-                tracing::error!("RPC error (code {}): {}", error.code, error.message);
+                tracing::error!(
+                    code = error.code,
+                    message = %crate::log_redaction::redact_sensitive_text(&error.message),
+                    "RPC returned an error"
+                );
                 match error.code {
                     -32600 => Err(SimulationError::NodeError(
                         "Invalid request format".to_string(),
@@ -2393,7 +2403,10 @@ impl SimulationEngine {
                 }
             }
             ResponseResult::Success { result } => {
-                tracing::info!("Simulation successful at ledger {}", result.latest_ledger);
+                tracing::info!(
+                    latest_ledger = result.latest_ledger,
+                    "Simulation successful"
+                );
                 let mut parsed = self.parse_simulation_result(result.clone())?;
                 let touched_keys = self.extract_touched_ledger_keys(&result.transaction_data);
 
@@ -2429,7 +2442,10 @@ impl SimulationEngine {
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("State analysis skipped due to RPC error: {}", e);
+                            tracing::warn!(
+                                error = %redact_display(&e),
+                                "State analysis skipped due to RPC error"
+                            );
                         }
                     }
                 }
@@ -2731,14 +2747,20 @@ impl SimulationEngine {
         let xdr_bytes = match BASE64.decode(transaction_data) {
             Ok(bytes) => bytes,
             Err(e) => {
-                tracing::warn!("Failed to decode base64 transaction data: {}", e);
+                tracing::warn!(
+                    error = %redact_display(&e),
+                    "Failed to decode base64 transaction data"
+                );
                 return (0, 0);
             }
         };
         let soroban_data = match SorobanTransactionData::from_xdr(&xdr_bytes, Limits::none()) {
             Ok(data) => data,
             Err(e) => {
-                tracing::warn!("Failed to parse SorobanTransactionData XDR: {}", e);
+                tracing::warn!(
+                    error = %redact_display(&e),
+                    "Failed to parse SorobanTransactionData XDR"
+                );
                 return (0, 0);
             }
         };
@@ -3261,7 +3283,10 @@ pub fn profile_contract(
     let env = Env::default();
 
     if let Some(version) = protocol_version {
-        tracing::info!("Setting simulated protocol version to {}", version);
+        tracing::info!(
+            protocol_version = version,
+            "Setting simulated protocol version"
+        );
         env.ledger().set_protocol_version(version);
     }
 
@@ -3375,7 +3400,7 @@ pub fn profile_contract_with_flamegraph(
             Err(e) => {
                 tracing::error!(
                     wasm_size_bytes = wasm_size,
-                    error = %e,
+                    error = %redact_display(&e),
                     "WASM instrumentation failed; falling back to budget API"
                 );
                 (wasm_bytes.clone(), vec![], true)
@@ -3384,7 +3409,7 @@ pub fn profile_contract_with_flamegraph(
         Err(e) => {
             tracing::error!(
                 wasm_size_bytes = wasm_size,
-                error = %e,
+                error = %redact_display(&e),
                 "WASM instrumentation failed; falling back to budget API"
             );
             (wasm_bytes.clone(), vec![], true)
@@ -4590,9 +4615,9 @@ mod tests {
         use soroban_sdk::{Env, Symbol, Val};
         let wasm = soroban_wasm();
         let instr = WasmInstrumenter::new(&wasm).expect("parse ok");
-        eprintln!("func_names: {:?}", instr.func_names());
+        tracing::info!("func_names: {:?}", instr.func_names());
         let instrumented = instr.instrument(&wasm).expect("instrument ok");
-        eprintln!(
+        tracing::info!(
             "original size: {}, instrumented size: {}",
             wasm.len(),
             instrumented.len()
@@ -4611,12 +4636,12 @@ mod tests {
             env.invoke_contract::<Val>(&contract_id, &wrapper_sym, empty_args)
         }));
         match &result {
-            Ok(v) => eprintln!(
+            Ok(v) => tracing::info!(
                 "wrapper ok, payload={}, decoded={}",
                 v.get_payload(),
                 v.get_payload() >> 8
             ),
-            Err(_) => eprintln!("wrapper panicked"),
+            Err(_) => tracing::info!("wrapper panicked"),
         }
         assert!(result.is_ok(), "wrapper should succeed");
         let count = result.unwrap().get_payload() >> 8;

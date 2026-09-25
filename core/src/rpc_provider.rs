@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
+use crate::log_redaction::{redact_endpoint, redact_sensitive_text};
 use crate::metrics::Metrics;
 
 const CIRCUIT_BREAKER_THRESHOLD: u64 = 3;
@@ -833,6 +835,8 @@ impl ProviderRegistry {
                     let provider = state.provider.read().await;
                     tracing::warn!(
                         provider = %provider.name,
+                        url = %redact_endpoint(&provider.url),
+                        failures = prev + 1,
                         url = %provider.url,
                         failures,
                         "Provider circuit breaker tripped"
@@ -850,23 +854,43 @@ impl ProviderRegistry {
         self: &Arc<Self>,
         interval: Duration,
     ) -> tokio::task::JoinHandle<()> {
+        self.spawn_health_checker_with_cancellation(interval, CancellationToken::new())
+    }
+
+    pub fn spawn_health_checker_with_cancellation(
+        self: &Arc<Self>,
+        interval: Duration,
+        cancellation: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
         let registry = Arc::clone(self);
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
             loop {
-                ticker.tick().await;
-                registry.run_health_checks().await;
+                tokio::select! {
+                    _ = cancellation.cancelled() => break,
+                    _ = ticker.tick() => registry.run_health_checks(&cancellation).await,
+                }
             }
         })
     }
 
     pub fn spawn_gossip_task(self: &Arc<Self>, interval: Duration) -> tokio::task::JoinHandle<()> {
+        self.spawn_gossip_task_with_cancellation(interval, CancellationToken::new())
+    }
+
+    pub fn spawn_gossip_task_with_cancellation(
+        self: &Arc<Self>,
+        interval: Duration,
+        cancellation: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
         let registry = Arc::clone(self);
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
             loop {
-                ticker.tick().await;
-                registry.run_gossip_round().await;
+                tokio::select! {
+                    _ = cancellation.cancelled() => break,
+                    _ = ticker.tick() => registry.run_gossip_round(&cancellation).await,
+                }
             }
         })
     }
@@ -983,12 +1007,19 @@ impl ProviderRegistry {
         }
     }
 
-    async fn run_health_checks(&self) {
+    async fn run_health_checks(&self, cancellation: &CancellationToken) {
+        if cancellation.is_cancelled() {
+            return;
+        }
         let states = self.states.read().await;
         let provider_states = states.values().cloned().collect::<Vec<_>>();
         drop(states);
 
         for state in provider_states {
+            let result = tokio::select! {
+                _ = cancellation.cancelled() => break,
+                result = self.probe_provider(&state) => result,
+            };
             let provider = state.provider.read().await.clone();
             if !self.try_acquire_provider(&provider.url).await {
                 continue;
@@ -1007,6 +1038,9 @@ impl ProviderRegistry {
                         .saturating_add(1);
                     tracing::warn!(
                         provider = %provider.name,
+                        url = %redact_endpoint(&provider.url),
+                        consecutive_failures = prev + 1,
+                        error = %redact_sensitive_text(&error),
                         url = %provider.url,
                         consecutive_failures,
                         error = %error,
@@ -1018,7 +1052,10 @@ impl ProviderRegistry {
         }
     }
 
-    async fn run_gossip_round(&self) {
+    async fn run_gossip_round(&self, cancellation: &CancellationToken) {
+        if cancellation.is_cancelled() {
+            return;
+        }
         let peers = self.peers.read().await;
         let peer_states = peers.values().cloned().collect::<Vec<_>>();
         drop(peers);
@@ -1027,19 +1064,28 @@ impl ProviderRegistry {
             return;
         }
 
-        let local_snapshot = self.registry_snapshot().await;
+        let local_snapshot = tokio::select! {
+            _ = cancellation.cancelled() => return,
+            snapshot = self.registry_snapshot() => snapshot,
+        };
 
         for peer in peer_states {
             let endpoint = format!("{}/registry/gossip", peer.base_url);
-            match self
-                .client
-                .post(&endpoint)
-                .json(&local_snapshot)
-                .send()
-                .await
-            {
+            let response = tokio::select! {
+                _ = cancellation.cancelled() => break,
+                response = self
+                    .client
+                    .post(&endpoint)
+                    .json(&local_snapshot)
+                    .send() => response,
+            };
+            match response {
                 Ok(response) if response.status().is_success() => {
-                    match response.json::<RegistrySnapshot>().await {
+                    let snapshot = tokio::select! {
+                        _ = cancellation.cancelled() => break,
+                        result = response.json::<RegistrySnapshot>() => result,
+                    };
+                    match snapshot {
                         Ok(snapshot) => {
                             self.merge_snapshot(snapshot).await;
                             self.report_peer_success(&peer.base_url).await;
@@ -1085,7 +1131,7 @@ impl ProviderRegistry {
         let response = tokio::time::timeout(HEALTH_CHECK_TIMEOUT, req.send())
             .await
             .map_err(|_| "timeout".to_string())?
-            .map_err(|error| format!("request error: {error}"))?;
+            .map_err(|error| redact_sensitive_text(&format!("request error: {error}")))?;
 
         if !response.status().is_success() {
             return Err(format!("HTTP {}", response.status().as_u16()));
@@ -1184,7 +1230,7 @@ impl ProviderRegistry {
                 adjust_score(peer.score.load(Ordering::Relaxed), -PEER_FAILURE_PENALTY),
                 Ordering::Relaxed,
             );
-            *peer.last_error.write().await = Some(error);
+            *peer.last_error.write().await = Some(redact_sensitive_text(&error));
         }
     }
 

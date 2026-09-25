@@ -1,9 +1,19 @@
+use axum::{
+    extract::{Request, State},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    routing::post,
+    Json, Router,
+};
+use axum::http::{HeaderName, HeaderValue};
 use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
 use Perigee_core::input_sanitization::SanitizedJson;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
+use tracing::Instrument;
+use uuid::Uuid;
 
 #[derive(Parser)]
 struct Args {
@@ -71,8 +81,81 @@ struct AppState {
     config: Config,
 }
 
+async fn request_id_middleware(mut request: Request, next: Next) -> Response {
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte))
+        })
+        .map(str::to_owned)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let header_value = HeaderValue::from_str(&request_id)
+        .unwrap_or_else(|_| HeaderValue::from_static("unknown"));
+    request.headers_mut().insert(
+        HeaderName::from_static("x-request-id"),
+        header_value.clone(),
+    );
+
+    let method = request.method().to_string();
+    let path = request.uri().path().to_owned();
+    let span = tracing::info_span!(
+        "rpc_request",
+        request_id = %request_id,
+        method = %method,
+        path = %path,
+    );
+    let mut response = next.run(request).instrument(span.clone()).await;
+    response.headers_mut().insert(
+        HeaderName::from_static("x-request-id"),
+        header_value,
+    );
+    tracing::info!(
+        parent: &span,
+        request_id = %request_id,
+        status = %response.status(),
+        "RPC request completed"
+    );
+    response
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut signal) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            signal.recv().await;
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("Shutdown signal received"),
+        _ = terminate => tracing::info!("Shutdown signal received"),
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
     let args = Args::parse();
 
     let state = Arc::new(AppState {
@@ -83,15 +166,25 @@ async fn main() {
 
     let app = Router::new()
         .route("/", post(handle_rpc))
-        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 2)) // 2 MB limit
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 2))
+        .layer(axum::middleware::from_fn(request_id_middleware))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", args.port))
-        .await
-        .unwrap();
+    let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", args.port)).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            tracing::error!(error = %error, port = args.port, "RPC proxy failed to bind");
+            return;
+        }
+    };
 
-    println!("RPC Proxy running on port {}", args.port);
-    axum::serve(listener, app).await.unwrap();
+    tracing::info!(port = args.port, "RPC proxy started");
+    if let Err(error) = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+    {
+        tracing::error!(error = %error, "RPC proxy stopped with an error");
+    }
 }
 
 async fn handle_rpc(
@@ -99,7 +192,7 @@ async fn handle_rpc(
     SanitizedJson(req): SanitizedJson<RpcRequest>,
 ) -> impl IntoResponse {
     if req.method == "eth_sendTransaction" {
-        println!("Intercepting sendTransaction");
+        tracing::info!("Intercepting sendTransaction");
 
         let params: Vec<Transaction> = match serde_json::from_value(req.params.clone()) {
             Ok(p) => p,
@@ -163,7 +256,7 @@ async fn handle_rpc(
                 let result: serde_json::Value = resp.json().await.unwrap_or_default();
 
                 if result.get("error").is_some() {
-                    println!("Simulation failed for tx from {}", tx.from);
+                    tracing::info!("Transaction simulation failed");
                     return Json(RpcResponse {
                         jsonrpc: "2.0".to_string(),
                         result: None,
@@ -198,9 +291,10 @@ async fn handle_rpc(
                         .unwrap_or(0);
 
                     if gas_used > state.config.max_gas_limit {
-                        println!(
-                            "Gas limit exceeded: {} > {}",
-                            gas_used, state.config.max_gas_limit
+                        tracing::info!(
+                            gas_used,
+                            max_gas_limit = state.config.max_gas_limit,
+                            "Gas limit exceeded"
                         );
                         return Json(RpcResponse {
                             jsonrpc: "2.0".to_string(),
@@ -217,7 +311,7 @@ async fn handle_rpc(
                         });
                     }
 
-                    println!("Simulation passed: gas={}", gas_used);
+                    tracing::info!(gas_used, "Transaction simulation passed");
                 }
             }
             Err(_) => {
@@ -245,11 +339,12 @@ async fn handle_rpc(
                 id: req.id,
             })
         }
-        Err(e) => Json(RpcResponse {
+        Err(_) => Json(RpcResponse {
             jsonrpc: "2.0".to_string(),
             result: None,
             error: Some(RpcError {
                 code: -32000,
+                message: "Upstream request failed".to_string(),
                 message: format!("Upstream error: {}", e),
                 error: "UPSTREAM_ERROR".to_string(),
             }),

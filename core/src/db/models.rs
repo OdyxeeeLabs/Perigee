@@ -138,7 +138,7 @@ pub struct ReconciliationReport {
     pub avg_delta_pct: f64,
     pub max_delta_pct: f64,
     pub summary: Option<ReconciliationSummary>,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

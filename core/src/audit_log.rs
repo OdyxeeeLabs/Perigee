@@ -107,7 +107,7 @@ pub struct SecurityAuditEvent {
     pub agent_id: Option<String>,
     #[serde(rename = "vaultId", skip_serializing_if = "Option::is_none")]
     pub vault_id: Option<String>,
-    pub timestamp: String,
+    pub timestamp: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ip: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -364,18 +364,21 @@ pub fn log_audit_event(manager_id: &str, action: &str, actor: &str) {
 
     let event = chain.append(manager_id, action, actor, Utc::now()).clone();
 
+    let redactor = crate::log_redaction::LogRedactor::new("perigee-log-redaction");
+    let redacted_manager = redactor.redact_address(&event.manager_id);
+    let redacted_actor = redactor.redact_address(&event.actor);
     info!(
         target: "audit_log",
         sequence = event.sequence,
-        manager_id = %event.manager_id,
+        manager_id = %redacted_manager,
         action = %event.action,
-        actor = %event.actor,
+        actor = %redacted_actor,
         timestamp = %event.timestamp.to_rfc3339(),
         prev_hash = %event.prev_hash,
         entry_hash = %event.entry_hash,
         "AUDIT: {} by {}",
         event.action,
-        event.actor
+        redacted_actor
     );
 }
 
@@ -402,7 +405,6 @@ pub fn log_security_event(
     reason: Option<&str>,
 ) -> SecurityAuditEvent {
     let now = Utc::now();
-    let timestamp_str = now.to_rfc3339();
 
     let manager_id = agent_id.unwrap_or("system");
     let action = event.as_str();
@@ -412,34 +414,46 @@ pub fn log_security_event(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    let chain_entry = chain.append(manager_id, action, actor, now).clone();
+    let chain_entry = chain.append(manager_id, action, actor, now.clone()).clone();
 
     let sec_event = SecurityAuditEvent {
         event,
         agent_id: agent_id.map(|s| s.to_string()),
         vault_id: vault_id.map(|s| s.to_string()),
-        timestamp: timestamp_str,
+        timestamp: now,
         ip: ip.map(|s| s.to_string()),
         reason: reason.map(|s| s.to_string()),
         metadata: None,
     };
 
-    let json_str = serde_json::to_string(&sec_event).unwrap_or_default();
+    let redactor = crate::log_redaction::LogRedactor::new("perigee-log-redaction");
+    let redacted_agent_id = sec_event
+        .agent_id
+        .as_deref()
+        .map(|value| redactor.redact_address(value));
+    let redacted_vault_id = sec_event
+        .vault_id
+        .as_deref()
+        .map(|value| redactor.redact_vault_id(value));
+    let redacted_ip = sec_event.ip.as_deref().map(|value| redactor.redact_address(value));
+    let redacted_reason = sec_event
+        .reason
+        .as_deref()
+        .map(crate::log_redaction::redact_sensitive_text);
 
     info!(
         target: "audit_log",
         sequence = chain_entry.sequence,
         event = %sec_event.event.as_str(),
-        agent_id = ?sec_event.agent_id,
-        vault_id = ?sec_event.vault_id,
-        timestamp = %sec_event.timestamp,
-        ip = ?sec_event.ip,
-        reason = ?sec_event.reason,
+        agent_id = ?redacted_agent_id,
+        vault_id = ?redacted_vault_id,
+        timestamp = %sec_event.timestamp.to_rfc3339(),
+        ip = ?redacted_ip,
+        reason = ?redacted_reason,
         prev_hash = %chain_entry.prev_hash,
         entry_hash = %chain_entry.entry_hash,
-        security_event_json = %json_str,
         "SECURITY_AUDIT: {}",
-        json_str
+        sec_event.event.as_str()
     );
 
     sec_event

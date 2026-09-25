@@ -216,7 +216,7 @@ impl IntoResponse for AppError {
         tracing::error!(
             error_type = code.as_str(),
             status = status.as_u16(),
-            detail = self.diagnostic(),
+            detail = %crate::log_redaction::redact_sensitive_text(&self.diagnostic()),
             "Request failed"
         );
 

@@ -42,7 +42,7 @@ use axum::{
 };
 use tower::{Layer, Service};
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
-use tracing::info;
+use tracing::{info, Instrument};
 use uuid::Uuid;
 
 use crate::error_codes::{ErrorCode, ErrorResponse};
@@ -52,11 +52,31 @@ use crate::metrics::Metrics;
 use crate::runner::RequestCancellation;
 use crate::signed_receipt::{ApiReceipt, ReceiptSigner, RECEIPT_HEADER, RECEIPT_ID_HEADER};
 
-// ── Correlation-ID middleware ────────────────────────────────────────────────
-
 const CORRELATION_ID_HEADER: &str = "x-correlation-id";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 
+#[derive(Clone, Debug)]
+pub struct RequestContext {
+    pub request_id: String,
+    pub correlation_id: String,
+}
+
+fn normalized_id(value: Option<&HeaderValue>) -> Option<String> {
+    let value = value?.to_str().ok()?.trim();
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte))
+    {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn response_header(value: &str) -> HeaderValue {
+    HeaderValue::from_str(value).unwrap_or_else(|_| HeaderValue::from_static("unknown"))
+}
 pub async fn receipt_middleware(
     Extension(signer): Extension<ReceiptSigner>,
     request: Request,
@@ -181,19 +201,32 @@ pub async fn correlation_id_middleware(request: Request, next: Next) -> Response
         .map(|s| s.to_string())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let request_id = Uuid::new_v4().to_string();
+pub async fn correlation_id_middleware(mut request: Request, next: Next) -> Response {
+    let incoming_request_id = normalized_id(request.headers().get(REQUEST_ID_HEADER));
+    let incoming_correlation_id = normalized_id(request.headers().get(CORRELATION_ID_HEADER));
+    let request_id = incoming_request_id
+        .clone()
+        .or_else(|| incoming_correlation_id.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let correlation_id = incoming_correlation_id.unwrap_or_else(|| request_id.clone());
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
 
     let span = tracing::info_span!(
         "http_request",
         correlation_id = %correlation_id,
         request_id = %request_id,
-        method = %request.method(),
-        uri = %request.uri(),
+        method = %method,
+        path = %path,
     );
 
-    let mut request = request;
     request.headers_mut().insert(
         HeaderName::from_static(CORRELATION_ID_HEADER),
+        response_header(&correlation_id),
+    );
+    request.headers_mut().insert(
+        HeaderName::from_static(REQUEST_ID_HEADER),
+        response_header(&request_id),
         HeaderValue::from_str(&correlation_id)
             .unwrap_or_else(|_| HeaderValue::from_static("invalid-correlation-id")),
     );
@@ -202,22 +235,22 @@ pub async fn correlation_id_middleware(request: Request, next: Next) -> Response
         HeaderValue::from_str(&request_id)
             .unwrap_or_else(|_| HeaderValue::from_static("invalid-request-id")),
     );
+    request.extensions_mut().insert(RequestContext {
+        request_id: request_id.clone(),
+        correlation_id: correlation_id.clone(),
+    });
 
-    let _enter = span.enter();
     let start = Instant::now();
-    let method = request.method().clone();
-    let uri = request.uri().clone();
-
-    let mut response = next.run(request).await;
-
+    let mut response = next.run(request).instrument(span.clone()).await;
     let latency = start.elapsed();
     let status = response.status();
 
     info!(
+        parent: &span,
         correlation_id = %correlation_id,
         request_id = %request_id,
         method = %method,
-        uri = %uri,
+        path = %path,
         status = %status,
         latency_ms = latency.as_millis(),
         "Request completed"
@@ -225,6 +258,11 @@ pub async fn correlation_id_middleware(request: Request, next: Next) -> Response
 
     response.headers_mut().insert(
         HeaderName::from_static(CORRELATION_ID_HEADER),
+        response_header(&correlation_id),
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static(REQUEST_ID_HEADER),
+        response_header(&request_id),
         HeaderValue::from_str(&correlation_id)
             .unwrap_or_else(|_| HeaderValue::from_static("invalid-correlation-id")),
     );
@@ -375,15 +413,20 @@ pub async fn method_not_allowed_middleware(request: Request, next: Next) -> Resp
     use axum::Json;
 
     let method = request.method().clone();
-    let uri = request.uri().clone();
+    let path = request.uri().path().to_owned();
     let response = next.run(request).await;
 
     if response.status() == StatusCode::METHOD_NOT_ALLOWED {
         tracing::debug!(
             method = %method,
-            uri = %uri,
+            path = %path,
             "Method not allowed"
         );
+        let body = Json(serde_json::json!({
+            "error": "METHOD_NOT_ALLOWED",
+            "message": format!("Method {} is not allowed for {}", method, path)
+        }));
+        return (StatusCode::METHOD_NOT_ALLOWED, body).into_response();
         let body = Json(ErrorResponse::from_error_code(
             ErrorCode::MethodNotAllowed,
             format!("Method {} is not allowed for {}", method, uri.path()),
@@ -782,8 +825,9 @@ pub async fn api_version_middleware(request: Request, next: Next) -> Response {
     let is_supported = SUPPORTED_API_VERSIONS.iter().any(|&v| v == normalized || format!("v{}", v) == normalized);
 
     if !is_supported {
+        let safe_version = version.chars().take(64).collect::<String>();
         tracing::warn!(
-            version = %version,
+            version = %safe_version,
             path = %path,
             "Unsupported API version requested"
         );

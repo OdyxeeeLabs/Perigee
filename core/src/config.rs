@@ -29,8 +29,6 @@
 //! use Perigee_core::config::ContractConfig;
 //!
 //! let cfg = ContractConfig::from_env();
-//! println!("policy vault: {:?}", cfg.policy_vault);
-//!
 //! // Fail fast if a required ID is missing:
 //! let id = cfg.require("CONTRACT_POLICY_VAULT", cfg.policy_vault.as_deref())
 //!             .expect("policy vault contract ID must be set");

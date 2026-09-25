@@ -259,7 +259,7 @@ mod tests {
         // Skip when the hello-world WASM artifact has not been built yet;
         // the other unit tests still exercise the happy path logic.
         if HELLO_WORLD_WASM.is_empty() {
-            eprintln!(
+            tracing::info!(
                 "local_runner_executes_hello_world_wasm: hello-world WASM artifact \
                  unavailable — skipping end-to-end invocation check. Rebuild \
                  contracts/hello_soroban to re-enable."

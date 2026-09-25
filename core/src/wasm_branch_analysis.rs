@@ -836,14 +836,14 @@ pub fn analyze_wasm_branches_with_cancellation(
             }
             Ok(Err(e)) => {
                 tracing::debug!(
-                    args = ?variant_args,
-                    error = %e,
+                    argument_count = variant_args.len(),
+                    error = %crate::log_redaction::redact_display(&e),
                     "Arg permutation produced simulation error (skipped)"
                 );
             }
             Err(_) => {
                 tracing::debug!(
-                    args = ?variant_args,
+                    argument_count = variant_args.len(),
                     "Arg permutation caused a panic (skipped)"
                 );
             }

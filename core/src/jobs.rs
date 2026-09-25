@@ -810,7 +810,11 @@ impl JobQueue {
             }
         }
 
-        tracing::error!(job_id = %id, error = %error, "Job failed");
+        tracing::error!(
+            job_id = %id,
+            error = %crate::log_redaction::redact_sensitive_text(error),
+            "Job failed"
+        );
         Ok(())
     }
 
@@ -877,6 +881,18 @@ impl JobQueue {
 
     /// Retry a failed job with exponential backoff
     pub async fn retry_job(&self, job: &Job) -> Result<(), JobError> {
+        self.retry_job_with_cancellation(job, CancellationToken::new())
+            .await
+    }
+
+    pub async fn retry_job_with_cancellation(
+        &self,
+        job: &Job,
+        cancellation: CancellationToken,
+    ) -> Result<(), JobError> {
+        if cancellation.is_cancelled() {
+            return Ok(());
+        }
         if job.retry_count >= self.config.max_job_retries {
             tracing::warn!(job_id = %job.id, "Max retries reached, marking as failed");
             return Ok(());
@@ -909,12 +925,22 @@ impl JobQueue {
         let queue = self.clone();
         let id_str = job.id.0.to_string();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(delay_secs)).await;
-            let mut conn = match queue.redis.get_multiplexed_async_connection().await {
-                Ok(c) => c,
-                Err(_) => return,
+            tokio::select! {
+                _ = cancellation.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_secs(delay_secs)) => {}
+            }
+            let connection = tokio::select! {
+                _ = cancellation.cancelled() => return,
+                connection = queue.redis.get_multiplexed_async_connection() => connection,
             };
-            let _: Result<(), _> = conn.lpush("Perigee:jobs:queue", id_str).await;
+            let Ok(mut conn) = connection else {
+                return;
+            };
+            let push = conn.lpush::<_, _, i64>("Perigee:jobs:queue", id_str);
+            tokio::select! {
+                _ = cancellation.cancelled() => return,
+                result = push => { let _ = result; }
+            };
         });
 
         tracing::info!(job_id = %job.id, retry_count = new_retry_count, delay_secs, "Job scheduled for retry");
@@ -923,6 +949,13 @@ impl JobQueue {
 
     /// Spawn a background cleanup task
     pub fn spawn_cleanup_task(&self) -> tokio::task::JoinHandle<()> {
+        self.spawn_cleanup_task_with_cancellation(CancellationToken::new())
+    }
+
+    pub fn spawn_cleanup_task_with_cancellation(
+        &self,
+        cancellation: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
         let queue = self.clone();
         let interval_secs = self.config.cleanup_interval_secs;
 
@@ -930,12 +963,21 @@ impl JobQueue {
             let mut interval = interval(Duration::from_secs(interval_secs));
 
             loop {
-                interval.tick().await;
-
-                if let Err(e) = queue.cleanup().await {
-                    tracing::error!("Cleanup task error: {}", e);
+                tokio::select! {
+                    _ = cancellation.cancelled() => break,
+                    _ = interval.tick() => {
+                        let result = tokio::select! {
+                            _ = cancellation.cancelled() => break,
+                            result = queue.cleanup() => result,
+                        };
+                        if let Err(e) = result {
+                            tracing::error!(error = %crate::log_redaction::redact_display(&e), "Cleanup task error");
+                        }
+                    }
                 }
             }
+
+            tracing::debug!("Job cleanup task stopped");
         })
     }
 
@@ -1167,46 +1209,64 @@ impl JobWorker {
 
     /// Start the worker loop
     pub async fn run(self) {
+        self.run_until_cancelled(CancellationToken::new()).await;
+    }
+
+    pub async fn run_until_cancelled(self, cancellation: CancellationToken) {
         let worker_id = Uuid::new_v4().to_string();
         tracing::info!(worker_id = %worker_id, "Job worker started");
 
-        // Spawn heartbeat task
+        let heartbeat_cancellation = cancellation.child_token();
         let redis_clone = self.queue.redis.clone();
         let worker_id_clone = worker_id.clone();
-        tokio::spawn(async move {
+        let heartbeat = tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(10));
-            let mut conn = match redis_clone.get_multiplexed_async_connection().await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::error!("Heartbeat task failed to get Redis connection: {}", e);
-                    return;
-                }
+            let connection = tokio::select! {
+                _ = heartbeat_cancellation.cancelled() => return,
+                connection = redis_clone.get_multiplexed_async_connection() => connection,
+            };
+            let Ok(mut conn) = connection else {
+                return;
             };
 
             loop {
-                interval.tick().await;
-                let key = format!("Perigee:workers:{}:heartbeat", worker_id_clone);
-                let _: Result<(), _> = conn.set_ex(key, "alive", 30).await;
+                tokio::select! {
+                    _ = heartbeat_cancellation.cancelled() => break,
+                    _ = interval.tick() => {
+                        let key = format!("Perigee:workers:{}:heartbeat", worker_id_clone);
+                        let heartbeat_write = conn.set_ex::<_, _, String>(key, "alive", 30);
+                        tokio::select! {
+                            _ = heartbeat_cancellation.cancelled() => break,
+                            result = heartbeat_write => { let _ = result; }
+                        }
+                    }
+                }
             }
         });
 
         let semaphore = Arc::new(tokio::sync::Semaphore::new(self.config.max_concurrent_jobs));
 
         loop {
-            let mut conn = match self.queue.redis.get_multiplexed_async_connection().await {
+            let connection = tokio::select! {
+                _ = cancellation.cancelled() => break,
+                connection = self.queue.redis.get_multiplexed_async_connection() => connection,
+            };
+            let mut conn = match connection {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::error!("Worker failed to get Redis connection: {}", e);
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tracing::error!(error = %crate::log_redaction::redact_display(&e), "Worker failed to get Redis connection");
+                    tokio::select! {
+                        _ = cancellation.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                    }
                     continue;
                 }
             };
 
-            // Reliability pattern: RPOPLPUSH (or BLMOVE)
-            // Pop from main queue and push to processing list
-            let job_id_res: Result<Option<String>, _> = conn
-                .brpoplpush("Perigee:jobs:queue", "Perigee:jobs:processing", 0.0)
-                .await;
+            let job_id_res: Result<Option<String>, _> = tokio::select! {
+                _ = cancellation.cancelled() => break,
+                result = conn.brpoplpush("Perigee:jobs:queue", "Perigee:jobs:processing", 0.0) => result,
+            };
 
             match job_id_res {
                 Ok(Some(id_str)) => {
@@ -1215,10 +1275,14 @@ impl JobWorker {
                         Err(_) => continue,
                     };
 
-                    let permit = match semaphore.clone().acquire_owned().await {
+                    let permit = tokio::select! {
+                        _ = cancellation.cancelled() => break,
+                        permit = semaphore.clone().acquire_owned() => permit,
+                    };
+                    let permit = match permit {
                         Ok(p) => p,
                         Err(e) => {
-                            tracing::error!("Failed to acquire semaphore: {}", e);
+                            tracing::error!(error = %crate::log_redaction::redact_display(&e), "Failed to acquire job semaphore");
                             continue;
                         }
                     };
@@ -1232,43 +1296,61 @@ impl JobWorker {
                     let bus = self.bus.clone();
                     let reconciler = self.reconciler.clone();
                     let id_str_clone = id_str.clone();
+                    let job_cancellation = cancellation.child_token();
 
                     tokio::spawn(async move {
                         let _permit = permit;
+                        let process_result = tokio::select! {
+                            _ = job_cancellation.cancelled() => {
+                                tracing::info!(job_id = %job_id, "Job processing cancelled during shutdown");
+                                None
+                            }
+                            result = Self::process_job(
+                                &queue,
+                                job_id,
+                                engine,
+                                insights,
+                                insights_cache,
+                                config,
+                                http_client,
+                                bus,
+                                reconciler,
+                                job_cancellation.clone(),
+                            ) => Some(result),
+                        };
 
-                        if let Err(e) = Self::process_job(
-                            &queue,
-                            job_id,
-                            engine,
-                            insights,
-                            insights_cache,
-                            config,
-                            http_client,
-                            bus,
-                            reconciler,
-                        )
-                        .await
-                        {
-                            tracing::error!("Job processing error: {}", e);
+                        if let Some(Err(e)) = process_result {
+                            tracing::error!(job_id = %job_id, error = %crate::log_redaction::redact_display(&e), "Job processing error");
                         }
 
-                        // Clean up processing list after completion
-                        let mut conn = match queue.redis.get_multiplexed_async_connection().await {
-                            Ok(c) => c,
-                            Err(_) => return,
+                        let connection = tokio::select! {
+                            _ = job_cancellation.cancelled() => return,
+                            connection = queue.redis.get_multiplexed_async_connection() => connection,
                         };
-                        let _: Result<(), _> = conn
-                            .lrem("Perigee:jobs:processing", 1, id_str_clone)
-                            .await;
+                        let Ok(mut conn) = connection else {
+                            return;
+                        };
+                        let remove = conn.lrem::<_, _, i64>("Perigee:jobs:processing", 1, id_str_clone);
+                        tokio::select! {
+                            _ = job_cancellation.cancelled() => {}
+                            result = remove => { let _ = result; }
+                        }
                     });
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    tracing::error!("Error fetching next job from Redis: {}", e);
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tracing::error!(error = %crate::log_redaction::redact_display(&e), "Error fetching next job from Redis");
+                    tokio::select! {
+                        _ = cancellation.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                    }
                 }
             }
         }
+
+        heartbeat.abort();
+        let _ = heartbeat.await;
+        tracing::info!(worker_id = %worker_id, "Job worker stopped");
     }
 
     async fn process_job(
@@ -1281,21 +1363,44 @@ impl JobWorker {
         http_client: Client,
         bus: Option<Arc<SimulationBus>>,
         reconciler: Option<Arc<FeeReconciler>>,
+        cancellation: CancellationToken,
     ) -> Result<(), JobError> {
+        if cancellation.is_cancelled() {
+            return Ok(());
+        }
+
         let job = queue
             .get(&job_id)
             .await?
             .ok_or(JobError::NotFound(job_id))?;
         tracing::info!(job_id = %job.id, "Processing job");
 
-        // Mark as processing and emit first progress event
         queue.mark_processing(&job.id).await?;
         if let Some(b) = &bus {
             let _ = b.publish_async(SimulationBus::progress(&job.id, 10, "Processing started")).await;
         }
 
-        // Process with timeout
         let timeout = Duration::from_secs(job.timeout_secs as u64);
+        let result = tokio::select! {
+            _ = cancellation.cancelled() => return Ok(()),
+            result = tokio::time::timeout(
+                timeout,
+                Self::execute_job(
+                    &job,
+                    &engine,
+                    &insights_engine,
+                    &insights_cache,
+                    queue,
+                    bus.clone(),
+                    reconciler,
+                    cancellation.clone(),
+                ),
+            ) => result,
+        };
+
+        if cancellation.is_cancelled() {
+            return Ok(());
+        }
         let cancellation = CancellationToken::new();
         let result = tokio::time::timeout(
             timeout,
@@ -1352,6 +1457,7 @@ impl JobWorker {
                         Some(&job_result),
                         config.webhook_timeout_secs,
                         config.webhook_max_retries,
+                        &cancellation,
                     )
                     .await;
                 }
@@ -1361,7 +1467,9 @@ impl JobWorker {
                 queue.fail(&job.id, &error_msg, "ProcessingError").await?;
 
                 // Attempt retry
-                let _ = queue.retry_job(&job).await;
+                let _ = queue
+                    .retry_job_with_cancellation(&job, cancellation.clone())
+                    .await;
 
                 if let Some(b) = &bus {
                     let _ = b
@@ -1382,6 +1490,7 @@ impl JobWorker {
                         None,
                         config.webhook_timeout_secs,
                         config.webhook_max_retries,
+                        &cancellation,
                     )
                     .await;
                 }
@@ -1391,7 +1500,9 @@ impl JobWorker {
                 queue.fail(&job.id, &error_msg, "Timeout").await?;
 
                 // Attempt retry
-                let _ = queue.retry_job(&job).await;
+                let _ = queue
+                    .retry_job_with_cancellation(&job, cancellation.clone())
+                    .await;
 
                 if let Some(b) = &bus {
                     let _ = b
@@ -1408,6 +1519,7 @@ impl JobWorker {
                         None,
                         config.webhook_timeout_secs,
                         config.webhook_max_retries,
+                        &cancellation,
                     )
                     .await;
                 }
@@ -1573,6 +1685,7 @@ impl JobWorker {
                 let bus_for_cb = bus.clone();
                 let cancellation_for_cb = cancellation.clone();
                 let job_id_for_cb = job.id;
+                let callback_cancellation = cancellation.clone();
                 let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(16);
                 let progress_task = tokio::spawn(async move {
                     while let Some((percent, msg)) = progress_rx.recv().await {
@@ -1602,6 +1715,11 @@ impl JobWorker {
                             let b = bus_for_cb.clone();
                             let jid = job_id_for_cb;
                             let msg = msg.to_string();
+                            let callback_cancellation = callback_cancellation.clone();
+                            tokio::spawn(async move {
+                                tokio::select! {
+                                    _ = callback_cancellation.cancelled() => {}
+                                    _ = async {
                             let progress_cancellation = cancellation_for_cb.clone();
                             tokio::spawn(async move {
                                 tokio::select! {
@@ -1653,6 +1771,7 @@ impl JobWorker {
         result: Option<&JobResult>,
         timeout_secs: u64,
         max_retries: u32,
+        cancellation: &CancellationToken,
     ) {
         let payload = serde_json::json!({
             "job_id": job_id.to_string(),
@@ -1677,7 +1796,11 @@ impl JobWorker {
                 }
             }
 
-            match request.send().await {
+            let response = tokio::select! {
+                _ = cancellation.cancelled() => return,
+                response = request.send() => response,
+            };
+            match response {
                 Ok(response) => {
                     if response.status().is_success() {
                         tracing::info!(job_id = %job_id, attempt, "Webhook delivered");
@@ -1692,10 +1815,20 @@ impl JobWorker {
             }
 
             if attempt < max_retries {
-                tokio::time::sleep(Duration::from_millis(1000 * 2_u64.pow(attempt - 1))).await;
+                tokio::select! {
+                    _ = cancellation.cancelled() => return,
+                    _ = tokio::time::sleep(Duration::from_millis(1000 * 2_u64.pow(attempt - 1))) => {}
+                }
             }
         }
 
-        tracing::error!(job_id = %job_id, error = ?last_error, "Webhook failed");
+        tracing::error!(
+            job_id = %job_id,
+            error = %last_error
+                .as_deref()
+                .map(crate::log_redaction::redact_sensitive_text)
+                .unwrap_or_else(|| "unknown".to_string()),
+            "Webhook failed"
+        );
     }
 }
