@@ -22,7 +22,7 @@
     "no-restricted-syntax": [
       "warn",
       {
-        "selector": "CallExpression[callee.object.name="process"][callee.property.name="exit"]",
+        "selector": "CallExpression[callee.object.name='process'][callee.property.name='exit']",
         "message": "Do not call process.exit() in browser code."
       }
     ],

@@ -54,7 +54,7 @@ export function InvocationHistorySidebar({
       <button
         id="invocation-history-toggle"
         onClick={() => setIsOpen((prev) => !prev)}
-        title={isOpen ? "Hide history" : "Show history"}
+        title={isOpen ? t("history.hide") : t("history.show")}
         style={{
           position: "absolute",
           top: "16px",
@@ -252,10 +252,11 @@ export function InvocationHistorySidebar({
                               fontFamily: "monospace",
                             }}
                           >
-                            {(report.cpu_instructions / 1_000_000).toFixed(1)}M
-                            CPU
+                            {(report.cpu_instructions / 1_000_000).toFixed(1)}M{" "}
+                            {t("history.cpu")}
                             {" · "}
-                            {(report.ram_bytes / 1024).toFixed(0)} KB
+                            {(report.ram_bytes / 1024).toFixed(0)}{" "}
+                            {t("history.kb")}
                           </p>
                         )}
 
