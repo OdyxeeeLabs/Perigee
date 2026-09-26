@@ -4,11 +4,8 @@ import { useWalletStore } from "../context/WalletContext";
 import { shallow } from "../lib/createStore";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useState, useRef, useEffect } from "react";
-import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { LogOut } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { useWalletStore } from "../context/WalletContext";
-import { shallow } from "../lib/createStore";
 import { Spinner } from "./ui/Spinner";
 
 const ArrowDownIcon = () => (
@@ -29,9 +26,6 @@ const ArrowDownIcon = () => (
 
 export function ConnectButton() {
   const t = useTranslations();
-  const { address, openModal, disconnect } = useWalletStore(
-    (s) => ({ address: s.address, openModal: s.openModal, disconnect: s.disconnect }),
-  // Single granular subscription — only re-renders when these four values change.
   const { address, openModal, disconnect, isConnecting } = useWalletStore(
     (s) => ({
       address: s.address,
@@ -74,11 +68,10 @@ export function ConnectButton() {
   if (isConnected && address) {
     return (
       <div className="relative" ref={dropdownRef}>
-        <Button
+        <button
+          type="button"
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          variant="outline"
-          size="sm"
-          className="group"
+          className="flex items-center gap-3 px-6 py-3 rounded-s-2xl bg-[#0F1621] border border-[#1e293b] hover:border-[#33C5E0]/50 transition-all group pointer-events-auto"
         >
           <div className="w-2 h-2 rounded-full bg-[#33C5E0] shadow-[0_0_8px_#33C5E0]" />
           <span className="text-[#33C5E0] font-medium tracking-wide">
@@ -91,7 +84,7 @@ export function ConnectButton() {
           >
             <ArrowDownIcon />
           </div>
-        </Button>
+        </button>
 
         <AnimatePresence>
           {dropdownOpen && (
@@ -101,31 +94,24 @@ export function ConnectButton() {
                   ? { opacity: 1, y: 0 }
                   : { opacity: 0, y: 10 }
               }
-              animate={
-                shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 1, y: 0 }
-              }
+              animate={{ opacity: 1, y: 0 }}
               exit={
                 shouldReduceMotion
                   ? { opacity: 1, y: 0 }
                   : { opacity: 0, y: 10 }
               }
-              initial={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 }}
               transition={{ duration: shouldReduceMotion ? 0 : 0.15 }}
               className="absolute top-full right-0 mt-2 w-full min-w-[180px] bg-[#0F1621] border border-[#1e293b] rounded-xl shadow-xl overflow-hidden z-50"
             >
-              <Button
+              <button
+                type="button"
                 onClick={handleDisconnect}
-                variant="ghost"
-                className="w-full justify-start"
+                aria-label={t("connectButton.disconnectAriaLabel", { address })}
+                className="flex items-center gap-3 w-full px-4 py-3 text-red-400 hover:bg-white/5 transition-colors text-sm font-medium"
               >
                 <LogOut className="w-4 h-4" />
                 {t("connectButton.disconnect")}
               </button>
-                <LogOut className="w-4 h-4 mr-2" />
-                Disconnect
-              </Button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -133,38 +119,32 @@ export function ConnectButton() {
     );
   }
 
-  import { Button } from "./ui/Button";
-
-  // ... (rest of the file)
-
   return (
-    <Button onClick={openModal} size="lg">
-      <span>Connect Wallet</span>
-      <ArrowDownIcon />
-    </Button>
     <motion.button
+      type="button"
       whileHover={!isConnecting && !shouldReduceMotion ? { scale: 1.02 } : undefined}
       whileTap={!isConnecting && !shouldReduceMotion ? { scale: 0.98 } : undefined}
       onClick={isConnecting ? undefined : openModal}
       disabled={isConnecting}
       aria-busy={isConnecting}
-      aria-label={isConnecting ? "Connecting wallet…" : "Connect wallet"}
+      aria-label={
+        isConnecting
+          ? t("walletModal.connecting")
+          : t("connectButton.connectWallet")
+      }
       className={`flex items-center gap-4 ${
         isConnecting ? "opacity-70 cursor-not-allowed pointer-events-none" : ""
       }`}
     >
       <div className="flex items-center gap-4 px-8 py-3 rounded-s-2xl bg-[#0F1621] border border-[#1e293b] hover:border-[#33C5E0]/50 transition-all text-[#33C5E0] font-medium tracking-wide shadow-lg shadow-black/20">
-        <span>{t("connectButton.connectWallet")}</span>
-        <ArrowDownIcon />
         {isConnecting ? (
           <>
-            {/* Shared Spinner component — size/color consistent with ui/Spinner */}
             <Spinner size="sm" color="primary" aria-hidden />
-            <span>Connecting…</span>
+            <span>{t("walletModal.connecting")}</span>
           </>
         ) : (
           <>
-            <span>Connect Wallet</span>
+            <span>{t("connectButton.connectWallet")}</span>
             <ArrowDownIcon />
           </>
         )}

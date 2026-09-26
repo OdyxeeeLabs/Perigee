@@ -204,7 +204,6 @@ export function UploadZone({
   enableBackendValidation = true,
 }: UploadZoneProps) {
   const t = useTranslations();
-  const [uploadState, setUploadState] = useState<UploadState>('idle');
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [droppedFile, setDroppedFile] = useState<DroppedFile | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
@@ -476,9 +475,6 @@ export function UploadZone({
       : "unknown type";
     const customMessage = first?.errors?.[0]?.message;
     const errorMsg = customMessage || t("upload.rejectedFile", { name: fileName, ext });
-    const errorMsg =
-      customMessage ||
-      `"${fileName}" was rejected — only .wasm files are accepted (got ${ext})`;
     setErrorMessage(errorMsg);
     setErrorDetails({
       title: "Invalid File Type",
@@ -493,10 +489,8 @@ export function UploadZone({
     const extension = file.name.split(".").pop()?.toLowerCase();
     if (extension !== "wasm") {
       return {
-        code: 'file-invalid-type',
-        message: t("upload.rejectedFile", { name: file.name, ext: `.${extension || 'unknown'}` }),
         code: "file-invalid-type",
-        message: `"${file.name}" was rejected — only .wasm files are accepted (got .${extension || "unknown"})`,
+        message: t("upload.rejectedFile", { name: file.name, ext: `.${extension || 'unknown'}` }),
       };
     }
     return null;
@@ -611,8 +605,8 @@ export function UploadZone({
                 }`}
               >
                 {displayState === "hover"
-                  ? "Release to upload your .wasm file"
-                  : "Drag & drop your compiled .wasm file"}
+                  ? t("upload.hover")
+                  : t("upload.idle")}
               </p>
               <p className="text-sm text-slate-500 mt-1">
                 or{" "}
@@ -624,16 +618,13 @@ export function UploadZone({
                     open();
                   }}
                 >
-                  click to browse
+                  {t("upload.browse")}
                 </button>
               </p>
             </div>
             <div className="flex items-center gap-2 mt-1 px-4 py-1.5 rounded-full bg-slate-800/70 border border-slate-700">
               <span className="w-2 h-2 rounded-full bg-sky-400" />
               <span className="text-xs text-slate-400 font-mono">{t("upload.onlyWasm")}</span>
-             
-                Only .wasm files accepted
-              </span>
             </div>
           </div>
         )}
@@ -643,7 +634,7 @@ export function UploadZone({
           <div className="flex flex-col items-center text-center gap-3 w-full px-4">
             <WasmIcon state="scanning" />
             <p className="text-violet-300 font-semibold text-base tracking-wide">
-              Scanning contract…
+              {t("upload.scanning")}
             </p>
             {droppedFile && (
               <div className="flex items-center gap-2 text-xs text-slate-400 font-mono bg-slate-800/70 px-3 py-1.5 rounded-full border border-slate-700">
@@ -658,7 +649,7 @@ export function UploadZone({
             <ScanningAnimation />
             <SpinnerDots />
             <p className="text-xs text-slate-500">
-              Parsing WASM binary · analysing resource usage…
+              {t("upload.parsing")}
             </p>
           </div>
         )}
@@ -670,10 +661,10 @@ export function UploadZone({
             <div>
               <p className="text-emerald-400 font-semibold text-base">
                 <SuccessIcon />
-                Contract uploaded successfully
+                {t("upload.success")}
               </p>
               <p className="text-xs text-slate-500 mt-1">
-                Ready for resource analysis
+                {t("upload.ready")}
               </p>
             </div>
 
@@ -700,7 +691,7 @@ export function UploadZone({
               onClick={handleReset}
               className="text-xs text-slate-500 hover:text-slate-300 underline underline-offset-2 transition-colors mt-1"
             >
-              Upload a different file
+              {t("upload.different")}
             </button>
           </div>
         )}
@@ -712,7 +703,7 @@ export function UploadZone({
             <div>
               <p className="text-red-400 font-semibold text-base">
                 <ErrorIcon />
-                File rejected
+                {t("upload.rejected")}
               </p>
               <p className="text-xs text-red-300/70 mt-1 max-w-[280px] leading-relaxed">
                 {errorMessage}
@@ -730,7 +721,7 @@ export function UploadZone({
               onClick={handleReset}
               className="mt-1 px-5 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-all"
             >
-              Try again
+              {t("upload.tryAgain")}
             </button>
           </div>
         )}
@@ -738,7 +729,7 @@ export function UploadZone({
 
       {/* Caption hint */}
       <p className="text-xs text-slate-600 text-center mt-3 font-mono">
-        WASM Resource Analyzer · Perigee · compiled Soroban contracts only
+        {t("upload.caption")}
       </p>
 
       <style>{`

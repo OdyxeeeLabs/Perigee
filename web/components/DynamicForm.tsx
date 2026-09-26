@@ -4,6 +4,7 @@ import React from "react"
 
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { sanitizeUserInput } from '../lib/sanitize';
 import type { ContractFunction, SimulationInputs } from '../lib/sorobantypes';
 
@@ -81,6 +82,7 @@ export function validateField(type: string, value: string): string | null {
 // ---------------------------------------------------------------------------
 
 export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
+  const t = useTranslations();
   const [formData, setFormData] = useState<SimulationInputs>({});
   // Map of field name → error message (empty string or undefined = no error)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -140,7 +142,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
   return (
     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {func.inputs.length === 0 ? (
-        <p style={{ color: '#8b949e', fontSize: '14px' }}>No inputs required</p>
+        <p style={{ color: '#8b949e', fontSize: '14px' }}>{t("dynamicForm.noInputs")}</p>
       ) : (
         func.inputs.map((input) => (
           <div
@@ -161,7 +163,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
             >
               {input.name}
               {input.optional ? (
-                <span style={{ color: '#8b949e', marginLeft: '4px' }}>(optional)</span>
+                <span style={{ color: '#8b949e', marginLeft: '4px' }}>{t("dynamicForm.optional")}</span>
               ) : (
                 <span style={{ color: '#fb8500' }}>*</span>
               )}
@@ -183,7 +185,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               <input
                 id={`field-${input.name}`}
                 type="text"
-                placeholder="Enter Stellar address (G... or C...)"
+                placeholder={t("dynamicForm.placeholderAddress")}
                 value={fieldValue(input.name)}
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
@@ -196,7 +198,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               <input
                 id={`field-${input.name}`}
                 type="text"
-                placeholder="Enter asset code (e.g. USDC, XLM)"
+                placeholder={t("dynamicForm.placeholderAssetCode")}
                 value={fieldValue(input.name)}
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
@@ -209,7 +211,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               <input
                 id={`field-${input.name}`}
                 type="number"
-                placeholder={`Enter ${input.type} value`}
+                placeholder={t("dynamicForm.placeholderNumber", { type: input.type })}
                 value={fieldValue(input.name)}
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
@@ -220,7 +222,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               <input
                 id={`field-${input.name}`}
                 type="text"
-                placeholder={`Enter ${input.type}`}
+                placeholder={t("dynamicForm.placeholderText", { type: input.type })}
                 value={fieldValue(input.name)}
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
@@ -236,15 +238,15 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 disabled={loading}
                 style={inputStyle(input.name)}
               >
-                <option value="">Select value</option>
-                <option value="true">True</option>
-                <option value="false">False</option>
+                <option value="">{t("dynamicForm.selectValue")}</option>
+                <option value="true">{t("dynamicForm.true")}</option>
+                <option value="false">{t("dynamicForm.false")}</option>
               </select>
             ) : (
               <input
                 id={`field-${input.name}`}
                 type="text"
-                placeholder="Enter value"
+                placeholder={t("dynamicForm.placeholderDefault")}
                 value={fieldValue(input.name)}
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
@@ -293,10 +295,10 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
           {loading ? (
             <>
               <Loader2 size={16} className="animate-spin" />
-              <span>Simulating...</span>
+              <span>{t("dynamicForm.simulating")}</span>
             </>
           ) : (
-            'Simulate'
+            t("dynamicForm.simulate")
           )}
         </button>
         <button
@@ -321,10 +323,10 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
           {loading ? (
             <>
               <Loader2 size={16} className="animate-spin" />
-              <span>Invoking...</span>
+              <span>{t("dynamicForm.invoking")}</span>
             </>
           ) : (
-            'Live (Invoke)'
+            t("dynamicForm.liveInvoke")
           )}
         </button>
       </div>

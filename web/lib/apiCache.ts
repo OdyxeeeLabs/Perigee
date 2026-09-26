@@ -59,7 +59,7 @@ export async function cachedGet<T>(
     cache: revalidate === 0 ? "no-store" : undefined,
   });
 
-  if (\!res.ok) {
+  if (!res.ok) {
     const body = await res.text().catch(() => res.statusText);
     throw new Error(`API ${res.status}: ${body}`);
   }
@@ -92,7 +92,7 @@ export async function uncachedPost<T>(
     cache: "no-store",
   });
 
-  if (\!res.ok) {
+  if (!res.ok) {
     const body = await res.text().catch(() => res.statusText);
     throw new Error(`API ${res.status}: ${body}`);
   }

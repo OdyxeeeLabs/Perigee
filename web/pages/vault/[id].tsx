@@ -1,5 +1,6 @@
 import type { GetServerSideProps } from "next";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { SEO } from "../../components/SEO";
 import { Vault } from "../../types/vault";
 import {
@@ -38,12 +39,20 @@ export default function PagesVaultDetailPage({
   vaultId,
   vault,
 }: VaultDetailPageProps) {
+  const t = useTranslations();
   const jsonLd = vault ? buildVaultJsonLd(vault, vaultId) : undefined;
   const customOg = vault ? buildVaultOgTags(vault, vaultId) : undefined;
-  const title = vault ? `${vault.name} | Perigee` : "Vault Details";
+  const title = vault ? `${vault.name} | ${t("app.name")}` : t("vault.defaultTitle");
   const description = vault
-    ? `Perigee vault ${vault.name}. Balance: ${vault.balance} ${vault.asset} · APY: ${vault.apy}% · Status: ${vault.status}.`
-    : "Autonomous vault details on Perigee.";
+    ? t("vault.metaDescription", {
+        name: vault.name,
+        siteName: t("app.name"),
+        balance: String(vault.balance),
+        asset: vault.asset,
+        apy: String(vault.apy),
+        status: vault.status,
+      })
+    : t("vault.defaultDescription");
 
   return (
     <>
@@ -60,31 +69,31 @@ export default function PagesVaultDetailPage({
           <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
             <div>
               <Link href="/" className="text-2xl font-bold text-cyan-400 hover:text-cyan-300">
-                Perigee
+                {t("app.name")}
               </Link>
               <span className="ml-3 text-xs uppercase tracking-wider text-slate-500">
-                Vault Details
+                {t("vault.details")}
               </span>
             </div>
             <Link
               href="/"
               className="text-sm font-medium text-slate-400 hover:text-cyan-400 transition-colors"
             >
-              &larr; Back to Dashboard
+              {t("nav.backToDashboard")}
             </Link>
           </div>
         </header>
 
         <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
           {!vault ? (
-            <div className="py-12 text-center text-slate-400">Vault not found.</div>
+            <div className="py-12 text-center text-slate-400">{t("vault.notFound")}</div>
           ) : (
             <>
               {/* Breadcrumb */}
               <nav className="mb-6 flex items-center gap-2 text-xs text-slate-500">
-                <Link href="/" className="hover:text-slate-400">Home</Link>
+                <Link href="/" className="hover:text-slate-400">{t("nav.home")}</Link>
                 <span>/</span>
-                <span className="text-slate-400">Vaults</span>
+                <span className="text-slate-400">{t("nav.vaults")}</span>
                 <span>/</span>
                 <span className="font-mono text-cyan-400">{vault.id}</span>
               </nav>
@@ -105,7 +114,7 @@ export default function PagesVaultDetailPage({
                     </span>
                   </div>
                   <p className="mt-1 font-mono text-xs text-slate-400">
-                    Vault ID: {vault.id}
+                    {t("vault.vaultId", { id: vault.id })}
                   </p>
                 </div>
               </div>
@@ -113,7 +122,7 @@ export default function PagesVaultDetailPage({
               {/* Key Metrics Cards */}
               <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 backdrop-blur">
-                  <p className="text-xs font-medium text-slate-400">Total Balance</p>
+                  <p className="text-xs font-medium text-slate-400">{t("vault.totalBalance")}</p>
                   <p className="mt-2 text-2xl font-bold text-white">
                     {vault.balance.toLocaleString()}{" "}
                     <span className="text-sm font-normal text-cyan-400">{vault.asset}</span>
@@ -121,19 +130,19 @@ export default function PagesVaultDetailPage({
                 </div>
 
                 <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 backdrop-blur">
-                  <p className="text-xs font-medium text-slate-400">Projected APY</p>
+                  <p className="text-xs font-medium text-slate-400">{t("vault.projectedApy")}</p>
                   <p className="mt-2 text-2xl font-bold text-emerald-400">
                     {vault.apy !== undefined ? `${vault.apy}%` : "0.0%"}
                   </p>
                 </div>
 
                 <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 backdrop-blur">
-                  <p className="text-xs font-medium text-slate-400">Underlying Asset</p>
+                  <p className="text-xs font-medium text-slate-400">{t("vault.underlyingAsset")}</p>
                   <p className="mt-2 text-2xl font-bold text-white">{vault.asset || "XLM"}</p>
                 </div>
 
                 <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 backdrop-blur">
-                  <p className="text-xs font-medium text-slate-400">Manager / Owner</p>
+                  <p className="text-xs font-medium text-slate-400">{t("vault.managerOwner")}</p>
                   <p className="mt-2 truncate font-mono text-sm font-medium text-slate-300">
                     {vault.owner}
                   </p>
