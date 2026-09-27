@@ -93,7 +93,7 @@ export function ResultViewer({ result }: ResultViewerProps) {
               alignItems: "center",
               justifyContent: "center",
             }}
-            title={isExpanded ? "Collapse" : "Expand"}
+            title={isExpanded ? t("result.collapse") : t("result.expand")}
           >
             {isExpanded ? "▼" : "▶"}
           </button>
@@ -135,7 +135,7 @@ export function ResultViewer({ result }: ResultViewerProps) {
               (e.currentTarget.style.backgroundColor = "#1f2937")
             }
           >
-            {copied ? "Copied!" : "Copy Full Result"}
+            {copied ? t("result.copied") : t("result.copyFull")}
           </button>
           {result.stateSnapshot && (
             <button
@@ -226,8 +226,7 @@ export function ResultViewer({ result }: ResultViewerProps) {
               >
                 {result.errorType === "NETWORK_ERROR" ? (
                   <>
-                    ⚠️ The analyzer backend isn’t responding — it may have
-                    crashed or isn’t running.
+                    {t("result.networkError")}
                     <br />
                     Start it with{" "}
                     <code style={{ color: "#00d9ff" }}>cargo run</code>{" "}
@@ -236,20 +235,11 @@ export function ResultViewer({ result }: ResultViewerProps) {
                     then retry.
                   </>
                 ) : result.errorType === "PARSE_ERROR" ? (
-                  <>
-                    ⚠️ The backend returned a malformed response — it may have
-                    crashed mid-analysis. Check the analyzer logs, then retry.
-                  </>
+                  <>{t("result.parseError")}</>
                 ) : result.errorType === "INTERNAL_SERVER_ERROR" ? (
-                  <>
-                    💡 The analyzer hit an internal error during simulation.
-                    Check the analyzer logs for the panic trace.
-                  </>
+                  <>{t("result.internalError")}</>
                 ) : (
-                  <>
-                    💡 Tip: Check if the backend is running and all parameters
-                    are correct.
-                  </>
+                  <>{t("result.tip")}</>
                 )}
                 <br />
                 <a
@@ -287,7 +277,7 @@ export function ResultViewer({ result }: ResultViewerProps) {
                   border: "1px solid #30363d",
                 }}
               >
-                <strong style={{ color: "#8b949e" }}>Result:</strong>
+                <strong style={{ color: "#8b949e" }}>{t("result.label")}</strong>
                 <br />
                 {JSON.stringify(result.result, null, 2)}
               </div>

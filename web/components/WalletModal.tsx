@@ -145,6 +145,7 @@ export function WalletModal() {
                 </div>
 
                 <button
+                  type="button"
                   onClick={handleConnectClick}
                   disabled={!activeSelection || isConnecting}
                   className={`w-full py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
@@ -153,35 +154,19 @@ export function WalletModal() {
                       : "bg-[#2A3338] cursor-not-allowed text-gray-500"
                   } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#33C5E0]`}
                 >
-                  <UserIcon />
-                  <span>
-                    {isConnecting ? t("connecting") : t("connectButton")}
-                  </span>
+                  {isConnecting ? (
+                    <>
+                      <Spinner size="sm" color="white" />
+                      <span>{t("connecting")}</span>
+                    </>
+                  ) : (
+                    <>
+                      <UserIcon />
+                      <span>{t("connectButton")}</span>
+                    </>
+                  )}
                 </button>
               </div>
-
-              <button
-                onClick={handleConnectClick}
-                disabled={!activeSelection || isConnecting}
-                className={`w-full py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
-                  activeSelection && !isConnecting
-                    ? "bg-[#33C5E0] hover:bg-[#33C5E0]/90 text-black"
-                    : "bg-[#2A3338] cursor-not-allowed text-gray-500"
-                }`}
-              >
-                {isConnecting ? (
-                  <>
-                    <Spinner size="sm" color="white" />
-                    <span>{t("connecting")}</span>
-                  </>
-                ) : (
-                  <>
-                    <UserIcon />
-                    <span>{t("connectButton")}</span>
-                  </>
-                )}
-              </button>
-            </div>
             </div>
           </motion.div>
         </>

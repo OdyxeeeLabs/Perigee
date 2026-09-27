@@ -161,7 +161,7 @@ test.describe("Wallet error states", () => {
       const isAlertVisible = await errorEl.isVisible().catch(() => false);
       const isModalVisible = await modal.isVisible().catch(() => false);
       // At least one of: error shown or modal closed without crash
-      expect(isAlertVisible || \!isModalVisible).toBe(true);
+      expect(isAlertVisible || !isModalVisible).toBe(true);
     }
   });
 });

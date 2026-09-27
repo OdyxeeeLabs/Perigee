@@ -8,6 +8,7 @@ import { Analytics } from "../components/Analytics";
 import { NetworkStatusBanner } from "../components/NetworkStatusBanner";
 import { RpcFallbackBanner } from "../components/RpcFallbackBanner";
 import { NextIntlClientProvider } from "next-intl";
+import defaultMessages from "../messages/en.json";
 import { API_URL } from "../lib/api";
 import { useRouter } from "next/router";
 import { useEffect } from "react";
@@ -54,7 +55,7 @@ export default function App({ Component, pageProps }: AppProps) {
       <FeatureFlagProvider>
         <NextIntlClientProvider
           locale={router?.locale ?? "en"}
-          messages={pageProps.messages ?? {}}
+          messages={pageProps.messages ?? defaultMessages}
           timeZone="UTC"
         >
           <WalletProvider>
