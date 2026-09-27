@@ -15,7 +15,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::{
     body::Body,
@@ -24,16 +24,19 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use redis::Commands;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tower::{Layer, Service};
 
 use crate::error_codes::{ErrorCode, ErrorResponse};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenBucket {
     tokens: f64,
     max_tokens: f64,
     refill_rate: f64,
-    last_refill: Instant,
+    last_refill: f64,
 }
 
 impl TokenBucket {
@@ -42,8 +45,15 @@ impl TokenBucket {
             tokens: max_tokens,
             max_tokens,
             refill_rate,
-            last_refill: Instant::now(),
+            last_refill: Self::now(),
         }
+    }
+
+    fn now() -> f64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64()
     }
 
     pub fn try_consume(&mut self, tokens: f64) -> bool {
@@ -61,18 +71,64 @@ impl TokenBucket {
     }
 
     fn is_stale(&self, max_age: Duration) -> bool {
-        self.last_refill.elapsed() >= max_age
+        Self::now() - self.last_refill >= max_age.as_secs_f64()
     }
 
     fn refill(&mut self) {
-        let now = Instant::now();
-        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
-        self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.max_tokens);
-        self.last_refill = now;
+        let now = Self::now();
+        let elapsed = now - self.last_refill;
+        if elapsed > 0.0 {
+            self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.max_tokens);
+            self.last_refill = now;
+        }
     }
 }
 
+const TOKEN_BUCKET_LUA: &str = r#"
+local max_req = tonumber(ARGV[1])
+local refill = tonumber(ARGV[2])
+local consume = tonumber(ARGV[3])
+local now = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+
+local tokens = max_req
+local last_refill = now
+
+local data = redis.call('GET', KEYS[1])
+if data then
+    local ok, b = pcall(cjson.decode, data)
+    if ok and type(b) == "table" then
+        tokens = tonumber(b.tokens) or max_req
+        last_refill = tonumber(b.last_refill) or now
+    end
+end
+
+local elapsed = math.max(0, now - last_refill)
+tokens = math.min(max_req, tokens + (elapsed * refill))
+
+local allowed = tokens >= consume
+if allowed then
+    tokens = tokens - consume
+end
+
+local next_bucket = {
+    tokens = tokens,
+    max_tokens = max_req,
+    refill_rate = refill,
+    last_refill = now
+}
+
+redis.call('SETEX', KEYS[1], math.max(1, ttl), cjson.encode(next_bucket))
+
+if allowed then
+    return {1, tostring(tokens)}
+else
+    return {0, tostring(tokens)}
+end
+"#;
+
 pub struct AgentRateLimiter {
+    redis_client: Option<redis::Client>,
     buckets: HashMap<String, TokenBucket>,
     default_max: f64,
     default_refill_rate: f64,
@@ -80,7 +136,10 @@ pub struct AgentRateLimiter {
 
 impl AgentRateLimiter {
     pub fn new(default_max: f64, default_refill_rate: f64) -> Self {
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        let redis_client = redis::Client::open(url).ok();
         Self {
+            redis_client,
             buckets: HashMap::new(),
             default_max,
             default_refill_rate,
@@ -96,6 +155,33 @@ impl AgentRateLimiter {
     pub fn try_acquire(&mut self, agent_id: &str, tokens: f64) -> bool {
         let default_max = self.default_max;
         let default_refill_rate = self.default_refill_rate;
+
+        if let Some(client) = &self.redis_client {
+            if let Ok(mut con) = client.get_connection() {
+                let key = format!("ratelimit:agent:{}", agent_id);
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+                let ttl = if default_refill_rate > 0.0 {
+                    (default_max / default_refill_rate).ceil() as usize * 2
+                } else {
+                    3600
+                };
+                
+                let script = redis::Script::new(TOKEN_BUCKET_LUA);
+                let result: redis::RedisResult<(i32, String)> = script
+                    .key(&key)
+                    .arg(default_max)
+                    .arg(default_refill_rate)
+                    .arg(tokens)
+                    .arg(now)
+                    .arg(ttl)
+                    .invoke(&mut con);
+
+                if let Ok((allowed_int, _)) = result {
+                    return allowed_int == 1;
+                }
+            }
+        }
+
         let bucket = self
             .buckets
             .entry(agent_id.to_string())
@@ -382,6 +468,7 @@ pub struct RateLimitDecision {
 
 #[derive(Clone)]
 pub struct ApiRateLimiter {
+    redis_client: Option<redis::Client>,
     buckets: Arc<Mutex<HashMap<(String, String), TokenBucket>>>,
     config: RateLimitConfig,
 }
@@ -394,7 +481,10 @@ impl Default for ApiRateLimiter {
 
 impl ApiRateLimiter {
     pub fn new(config: RateLimitConfig) -> Self {
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        let redis_client = redis::Client::open(url).ok();
         Self {
+            redis_client,
             buckets: Arc::new(Mutex::new(HashMap::new())),
             config,
         }
@@ -424,41 +514,83 @@ impl ApiRateLimiter {
 
         let policy = self.config.policy_for(endpoint);
         let policy = EndpointRateLimit::new(policy.max_requests, policy.window);
-        let key = (
-            client_bucket_id(client_id),
-            normalize_endpoint(endpoint),
-        );
-        let mut buckets = self
-            .buckets
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !buckets.contains_key(&key) && buckets.len() >= MAX_RATE_LIMIT_BUCKETS {
-            let stale_after = policy.window.saturating_mul(2);
-            buckets.retain(|_, bucket| !bucket.is_stale(stale_after));
-            if buckets.len() >= MAX_RATE_LIMIT_BUCKETS {
-                return RateLimitDecision {
-                    allowed: false,
-                    limit: policy.max_requests,
-                    remaining: 0,
-                    retry_after: policy.window,
-                };
+        let bucket_id = client_bucket_id(client_id);
+        let normalized_endpoint = normalize_endpoint(endpoint);
+
+        let max_req = policy.max_requests as f64;
+        let refill = policy.max_requests as f64 / policy.window.as_secs_f64();
+
+        let mut allowed = false;
+        let mut remaining = 0;
+        let mut retry_after = Duration::ZERO;
+        let mut bucket_refill_rate = 0.0;
+        let mut bucket_available = 0.0;
+
+        let mut used_redis = false;
+
+        if let Some(client) = &self.redis_client {
+            if let Ok(mut con) = client.get_connection() {
+                used_redis = true;
+                let key = format!("ratelimit:api:{}:{}", bucket_id, normalized_endpoint);
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+                let ttl = policy.window.as_secs() * 2;
+                
+                let script = redis::Script::new(TOKEN_BUCKET_LUA);
+                let result: redis::RedisResult<(i32, String)> = script
+                    .key(&key)
+                    .arg(max_req)
+                    .arg(refill)
+                    .arg(1.0)
+                    .arg(now)
+                    .arg(ttl)
+                    .invoke(&mut con);
+
+                if let Ok((allowed_int, tokens_str)) = result {
+                    allowed = allowed_int == 1;
+                    let tokens_f64 = tokens_str.parse::<f64>().unwrap_or(0.0);
+                    remaining = tokens_f64.floor().max(0.0) as u64;
+                    bucket_refill_rate = refill;
+                    bucket_available = tokens_f64;
+                } else {
+                    used_redis = false;
+                }
             }
         }
-        let bucket = buckets.entry(key).or_insert_with(|| {
-            TokenBucket::new(
-                policy.max_requests as f64,
-                policy.max_requests as f64 / policy.window.as_secs_f64(),
-            )
-        });
-        let allowed = bucket.try_consume(1.0);
-        let remaining = bucket.available().floor().max(0.0) as u64;
-        let retry_after = if allowed {
-            Duration::ZERO
-        } else if bucket.refill_rate > 0.0 {
-            Duration::from_secs_f64((1.0 - bucket.available()).max(0.0) / bucket.refill_rate)
-        } else {
-            policy.window
-        };
+
+        if !used_redis {
+            let key = (bucket_id, normalized_endpoint);
+            let mut buckets = self
+                .buckets
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !buckets.contains_key(&key) && buckets.len() >= MAX_RATE_LIMIT_BUCKETS {
+                let stale_after = policy.window.saturating_mul(2);
+                buckets.retain(|_, bucket| !bucket.is_stale(stale_after));
+                if buckets.len() >= MAX_RATE_LIMIT_BUCKETS {
+                    return RateLimitDecision {
+                        allowed: false,
+                        limit: policy.max_requests,
+                        remaining: 0,
+                        retry_after: policy.window,
+                    };
+                }
+            }
+            let bucket = buckets.entry(key).or_insert_with(|| {
+                TokenBucket::new(max_req, refill)
+            });
+            allowed = bucket.try_consume(1.0);
+            remaining = bucket.available().floor().max(0.0) as u64;
+            bucket_refill_rate = bucket.refill_rate;
+            bucket_available = bucket.available();
+        }
+
+        if !allowed {
+            retry_after = if bucket_refill_rate > 0.0 {
+                Duration::from_secs_f64((1.0 - bucket_available).max(0.0) / bucket_refill_rate)
+            } else {
+                policy.window
+            };
+        }
 
         RateLimitDecision {
             allowed,
@@ -631,5 +763,80 @@ mod tests {
         let mut limiter = AgentRateLimiter::new(1.0, 0.0);
         assert!(limiter.try_acquire("new-agent", 1.0));
         assert!(!limiter.try_acquire("new-agent", 1.0));
+    }
+
+    #[test]
+    fn test_redis_persistence_agent() {
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        if redis::Client::open(&url).and_then(|c| c.get_connection()).is_err() {
+            return;
+        }
+
+        let agent_id = format!("test-agent-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros());
+        let mut limiter1 = AgentRateLimiter::new(10.0, 1.0);
+        let allowed = limiter1.try_acquire(&agent_id, 10.0);
+        assert!(allowed);
+        let allowed = limiter1.try_acquire(&agent_id, 1.0);
+        assert!(!allowed);
+
+        // Simulated restart
+        let mut limiter2 = AgentRateLimiter::new(10.0, 1.0);
+        let allowed = limiter2.try_acquire(&agent_id, 1.0);
+        assert!(!allowed);
+    }
+
+    #[test]
+    fn test_redis_persistence_api() {
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        if redis::Client::open(&url).and_then(|c| c.get_connection()).is_err() {
+            return;
+        }
+
+        let client_id = format!("test-client-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros());
+        let endpoint = "/test/endpoint";
+        
+        let config = RateLimitConfig::new(EndpointRateLimit::new(10, Duration::from_secs(10)));
+        let limiter1 = ApiRateLimiter::new(config.clone());
+        
+        for _ in 0..10 {
+            assert!(limiter1.check(&client_id, endpoint).allowed);
+        }
+        assert!(!limiter1.check(&client_id, endpoint).allowed);
+
+        // Simulated restart
+        let limiter2 = ApiRateLimiter::new(config);
+        assert!(!limiter2.check(&client_id, endpoint).allowed);
+    }
+    
+    #[test]
+    fn test_concurrent_api_requests() {
+        let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        if redis::Client::open(&url).and_then(|c| c.get_connection()).is_err() {
+            return;
+        }
+
+        let client_id = format!("concurrent-client-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_micros());
+        let endpoint = "/test/concurrent";
+        
+        let config = RateLimitConfig::new(EndpointRateLimit::new(100, Duration::from_secs(60)));
+        
+        let mut threads = vec![];
+        for _ in 0..10 {
+            let config = config.clone();
+            let client_id = client_id.clone();
+            threads.push(std::thread::spawn(move || {
+                let limiter = ApiRateLimiter::new(config);
+                let mut allowed_count = 0;
+                for _ in 0..20 {
+                    if limiter.check(&client_id, endpoint).allowed {
+                        allowed_count += 1;
+                    }
+                }
+                allowed_count
+            }));
+        }
+        
+        let total_allowed: i32 = threads.into_iter().map(|t| t.join().unwrap()).sum();
+        assert_eq!(total_allowed, 100);
     }
 }
