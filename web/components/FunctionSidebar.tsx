@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslations } from 'next-intl';
 import { ContractFunction } from '../lib/sorobantypes';
 
 interface FunctionSidebarProps {
@@ -12,6 +13,8 @@ export const FunctionSidebar: React.FC<FunctionSidebarProps> = ({
     selectedFunction,
     onSelect,
 }) => {
+    const t = useTranslations();
+
     return (
         <div
             style={{
@@ -30,7 +33,7 @@ export const FunctionSidebar: React.FC<FunctionSidebarProps> = ({
                     color: '#58a6ff',
                 }}
             >
-                Available Functions
+                {t("functionSidebar.title")}
             </h2>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {functions.map((func) => {
@@ -69,7 +72,7 @@ export const FunctionSidebar: React.FC<FunctionSidebarProps> = ({
                         >
                             <span>{func.name}</span>
                             <span style={{ fontSize: '12px', opacity: '0.7' }}>
-                                {func.inputs.length} args
+                                {t("functionSidebar.args", { count: func.inputs.length })}
                             </span>
                         </button>
                     );
