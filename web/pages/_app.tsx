@@ -8,10 +8,16 @@ import { Analytics } from "../components/Analytics";
 import { NetworkStatusBanner } from "../components/NetworkStatusBanner";
 import { RpcFallbackBanner } from "../components/RpcFallbackBanner";
 import { NextIntlClientProvider } from "next-intl";
+import defaultMessages from "../messages/en.json";
 import { API_URL } from "../lib/api";
 import { useRouter } from "next/router";
 import { useEffect } from "react";
 import { FeatureFlagProvider } from "../features/feature-flags";
+// WEB-15 (#469): enable `reducedMotion="user"` for Framer Motion across the
+// whole Pages Router tree. Every `motion.*` animation now respects the OS
+// `prefers-reduced-motion` setting, in addition to the per-component
+// `useReducedMotion()` guards already in place.
+import { MotionProvider } from "../components/MotionProvider";
 
 // WEB-54 (#187): self-host the Inter typeface through `next/font`. Font files
 // are downloaded and preloaded at build time, eliminating FOIT and render
@@ -51,10 +57,35 @@ export default function App({ Component, pageProps }: AppProps) {
 
   return (
     <div className={inter.className}>
+      <MotionProvider>
+        <FeatureFlagProvider>
+          <NextIntlClientProvider
+            locale={router?.locale ?? "en"}
+            messages={pageProps.messages ?? {}}
+            timeZone="UTC"
+          >
+            <WalletProvider>
+              {/* Network status and API availability (#109) */}
+              <NetworkStatusBanner apiUrl={API_URL} />
+              {/*
+               * Graceful RPC fallback — shown when the backend is unreachable (#115).
+               * Wraps ErrorBoundary so children can read `useRpcFallback()` to display
+               * stale-data badges on individual views.
+               */}
+              <RpcFallbackBanner apiUrl={API_URL}>
+                <ErrorBoundary>
+                  <Component {...pageProps} />
+                  <Analytics />
+                </ErrorBoundary>
+              </RpcFallbackBanner>
+            </WalletProvider>
+          </NextIntlClientProvider>
+        </FeatureFlagProvider>
+      </MotionProvider>
       <FeatureFlagProvider>
         <NextIntlClientProvider
           locale={router?.locale ?? "en"}
-          messages={pageProps.messages ?? {}}
+          messages={pageProps.messages ?? defaultMessages}
           timeZone="UTC"
         >
           <WalletProvider>

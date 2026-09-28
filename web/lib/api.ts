@@ -346,6 +346,30 @@ export interface UpdateVaultRequest {
   config_json?: string;
 }
 
+export type UserRole = "admin" | "manager" | "operator" | "viewer";
+
+export interface ScopedTokenRequest {
+  role: UserRole;
+  vault_scopes?: string[];
+}
+
+export interface ScopedTokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  role: UserRole;
+  vault_scopes: string[];
+}
+
+export const authService = {
+  async issueScopedToken(
+    req: ScopedTokenRequest,
+    token?: string,
+  ): Promise<ScopedTokenResponse> {
+    return apiClient.post<ScopedTokenResponse>("/auth/scoped-token", req, { token });
+  },
+};
+
 export const vaultService = {
   async list(managerId: string, token?: string): Promise<VaultRecord[]> {
     return apiClient.get<VaultRecord[]>("/vaults", {

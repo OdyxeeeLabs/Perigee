@@ -13,6 +13,17 @@ The feature flag module lives in `web/features/feature-flags/` and provides:
 - Env-var-based flag overrides via `NEXT_PUBLIC_FEATURE_FLAG_*`
 - API-based remote flag sources with automatic polling
 
+## Backend flags
+
+The Rust backend uses the typed `config::FeatureFlagService`. Flags are read from `FEATURE_FLAGS` as a JSON object, JSON array of enabled names, or comma-separated `name=true|false` values. `ENABLE_VAULT_V2` and `ENABLE_NEW_FEE_MODEL` can override the aggregate value. Unknown names, malformed JSON, and non-boolean values stop startup.
+
+| Backend flag | Default | Effect when enabled |
+|---|---|---|
+| `enable_vault_v2` | `false` | Exposes the authenticated `/v2/vaults` aliases |
+| `enable_new_fee_model` | `false` | Exposes `/fees/v2/recommend` |
+
+Disabled routes return the same generic not-found response as an unknown route. The web and backend flag namespaces are independent; do not use `NEXT_PUBLIC_*` values to control backend authorization or secret handling.
+
 ## File Structure
 
 ```

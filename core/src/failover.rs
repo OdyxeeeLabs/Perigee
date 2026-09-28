@@ -79,6 +79,14 @@ impl FailoverManager {
         self.consecutive_failures.remove(agent_id);
     }
 
+    pub fn remove_agent(&mut self, agent_id: &str) {
+        self.consecutive_failures.remove(agent_id);
+        let suffix = format!(":{}", agent_id);
+        self.pending_reauth
+            .retain(|entry| !entry.as_str().ends_with(suffix.as_str()));
+        self.events.retain(|event| event.agent_id != agent_id);
+    }
+
     pub fn check_and_trigger_failover(
         &mut self,
         vault_id: &str,

@@ -47,6 +47,7 @@ const _: fn() = || {
     assert_send_sync::<SimulationResult>();
     assert_send_sync::<SimulationError>();
     assert_send_sync::<SorobanResources>();
+    assert_send_sync::<tokio_util::sync::CancellationToken>();
 
     // The runner is cloned into and shared across tasks, so it must be both
     // `Send` and `Sync`. Asserting it also implies the `LedgerInfo` it holds

@@ -1,33 +1,39 @@
-import { strategyPhases } from "./strategyPhases";
+import { DataTable, type ColumnDef } from '../ui/DataTable';
+import { strategyPhases, type StrategyPhase } from './strategyPhases';
+
+const columns: ColumnDef<StrategyPhase>[] = [
+  {
+    key: 'phase',
+    header: 'Phase',
+    sortable: true,
+  },
+  {
+    key: 'marketCondition',
+    header: 'Market',
+    sortable: true,
+  },
+  {
+    key: 'action',
+    header: 'Recommended Action',
+    sortable: true,
+  },
+  {
+    key: 'description',
+    header: 'Description',
+  },
+];
 
 export function StrategyPhaseTable() {
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full border-collapse border border-gray-200">
-        <caption className="sr-only">
-          Strategy phases explained in tabular form.
-        </caption>
-
-        <thead>
-          <tr>
-            <th>Phase</th>
-            <th>Market</th>
-            <th>Recommended Action</th>
-            <th>Description</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {strategyPhases.map((phase) => (
-            <tr key={phase.id}>
-              <td>{phase.phase}</td>
-              <td>{phase.marketCondition}</td>
-              <td>{phase.action}</td>
-              <td>{phase.description}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable<StrategyPhase>
+      columns={columns}
+      data={strategyPhases}
+      rowKey={(row) => row.id}
+      title="Strategy Phases"
+      subtitle="Cycle-phase rotation rules."
+      filterPlaceholder="Filter phases…"
+      emptyMessage="No matching phases."
+      data-testid="strategy-phase-table"
+    />
   );
 }

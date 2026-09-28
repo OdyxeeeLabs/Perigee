@@ -1,7 +1,12 @@
+use crate::auth::AuthenticatedUser;
+use crate::error_codes::ErrorCode;
+use crate::errors::{ApiJson, AppError};
 use crate::errors::AppError;
+use crate::input_sanitization::{SanitizedJson, SanitizedPath, SanitizedQuery};
 use crate::db;
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
+    extract::State,
     Json,
 };
 use chrono::Utc;
@@ -28,10 +33,18 @@ pub enum ManagerStoreError {
 impl From<ManagerStoreError> for AppError {
     fn from(err: ManagerStoreError) -> Self {
         match err {
-            ManagerStoreError::NotFound(msg) => AppError::NotFound(msg),
-            ManagerStoreError::InvalidData(msg) => AppError::BadRequest(msg),
-            ManagerStoreError::DuplicateAddress(msg) => AppError::Conflict(msg),
-            ManagerStoreError::Database(e) => AppError::Internal(e.to_string()),
+            ManagerStoreError::NotFound(msg) => {
+                AppError::with_code(ErrorCode::ManagerNotFound, msg)
+            }
+            ManagerStoreError::InvalidData(msg) => {
+                AppError::with_code(ErrorCode::InvalidInput, msg)
+            }
+            ManagerStoreError::DuplicateAddress(msg) => {
+                AppError::with_code(ErrorCode::ManagerAlreadyExists, msg)
+            }
+            ManagerStoreError::Database(e) => {
+                AppError::with_code(ErrorCode::DatabaseError, e.to_string())
+            }
         }
     }
 }
@@ -157,6 +170,16 @@ impl ManagerStore {
     }
 }
 
+fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
+    if user.is_admin() {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "Administrator role is required".to_string(),
+        ))
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/managers/register",
@@ -170,7 +193,8 @@ impl ManagerStore {
 )]
 pub async fn register_manager_handler(
     State(state): State<Arc<crate::AppState>>,
-    Json(payload): Json<RegisterManagerRequest>,
+    ApiJson(payload): ApiJson<RegisterManagerRequest>,
+    SanitizedJson(payload): SanitizedJson<RegisterManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
     let manager = state.manager_store.register(&payload).await?;
     Ok(Json(manager))
@@ -191,8 +215,11 @@ pub async fn register_manager_handler(
 )]
 pub async fn list_managers_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    SanitizedQuery(params): SanitizedQuery<std::collections::HashMap<String, String>>,
 ) -> Result<Json<crate::db::models::PagedResponse<ManagerRecord>>, AppError> {
+    require_admin(&user)?;
     let status_filter = params.get("status").map(|s| s.as_str());
 
     let page: u32 = params
@@ -221,8 +248,11 @@ pub async fn list_managers_handler(
 )]
 pub async fn get_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
 ) -> Result<Json<ManagerRecord>, AppError> {
+    require_admin(&user)?;
     let manager = state.manager_store.get(&id).await?;
     Ok(Json(manager))
 }
@@ -241,9 +271,13 @@ pub async fn get_manager_handler(
 )]
 pub async fn approve_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
-    Json(payload): Json<ApproveManagerRequest>,
+    ApiJson(payload): ApiJson<ApproveManagerRequest>,
+    SanitizedPath(id): SanitizedPath<String>,
+    SanitizedJson(payload): SanitizedJson<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
+    require_admin(&user)?;
     let manager = state.manager_store.approve(&id, &payload).await?;
     Ok(Json(manager))
 }
@@ -262,9 +296,13 @@ pub async fn approve_manager_handler(
 )]
 pub async fn reject_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
-    Json(payload): Json<ApproveManagerRequest>,
+    ApiJson(payload): ApiJson<ApproveManagerRequest>,
+    SanitizedPath(id): SanitizedPath<String>,
+    SanitizedJson(payload): SanitizedJson<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
+    require_admin(&user)?;
     let manager = state.manager_store.reject(&id, &payload).await?;
     Ok(Json(manager))
 }
@@ -280,7 +318,7 @@ pub async fn reject_manager_handler(
 )]
 pub async fn check_manager_status_handler(
     State(state): State<Arc<crate::AppState>>,
-    Path(stellar_address): Path<String>,
+    SanitizedPath(stellar_address): SanitizedPath<String>,
 ) -> Result<Json<ManagerStatusResponse>, AppError> {
     let record = state
         .manager_store
@@ -340,7 +378,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        ManagerStore::new(db::schema::TypedSchema::new(std::sync::Arc::new(pool)).managers())
+        ManagerStore::new(
+            db::schema::TypedSchema::new(std::sync::Arc::new(db::MonitoredPool::from_inner(pool)))
+                .managers(),
+        )
     }
 
     #[tokio::test]

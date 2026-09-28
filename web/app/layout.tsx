@@ -21,6 +21,9 @@ import { API_URL } from '@/lib/api';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { WalletProvider } from '@/context/WalletContext';
 import '@/styles/globals.css';
+// WEB-15 (#469): mirror the Pages Router `MotionProvider` so the App Router
+// routes also honour `prefers-reduced-motion` once migration completes.
+import { MotionProvider } from '../components/MotionProvider';
 
 // WEB-54 (#187): self-host the Inter typeface through `next/font` instead of
 // loading it from an external stylesheet. Fonts are downloaded and preloaded
@@ -46,10 +49,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en" className={inter.variable}>
       <body>
         <ErrorBoundary>
-          <WalletProvider>
-            <NetworkStatusBanner apiUrl={API_URL} />
-            {children}
-          </WalletProvider>
+          <MotionProvider>
+            <WalletProvider>
+              <NetworkStatusBanner apiUrl={API_URL} />
+              {children}
+            </WalletProvider>
+          </MotionProvider>
         </ErrorBoundary>
       </body>
     </html>

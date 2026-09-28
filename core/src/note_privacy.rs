@@ -134,7 +134,7 @@ impl ShieldedRailFallbackConfig {
             Ok(secs) if secs > 0 => Duration::from_secs(secs),
             _ => {
                 tracing::warn!(
-                    value = %raw,
+                    value_present = !raw.is_empty(),
                     env_var = SHIELDED_RAIL_TIMEOUT_ENV_VAR,
                     "Invalid shielded-rail timeout — falling back to the default of 30s",
                 );
@@ -188,9 +188,12 @@ where
 
     let waited_ms = started.elapsed().as_millis() as u64;
 
+    let redactor = crate::log_redaction::LogRedactor::new("perigee-log-redaction");
+    let redacted_settlement_id = redactor.redact_address(settlement_id);
+    let redacted_reason = crate::log_redaction::redact_sensitive_text(&fallback_reason);
     tracing::warn!(
-        settlement_id = %settlement_id,
-        reason = %fallback_reason,
+        settlement_id = %redacted_settlement_id,
+        reason = %redacted_reason,
         waited_ms,
         timeout_ms = config.timeout.as_millis() as u64,
         "Shielded payment rail unavailable — falling back to transparent settlement",

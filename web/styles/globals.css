@@ -13,3 +13,35 @@
 body {
   @apply bg-slate-950 text-slate-100;
 }
+
+/* ===========================================================================
+   Reduced motion — WEB-15 (#469)
+
+   CSS/Tailwind animations are not covered by Framer Motion's
+   `MotionConfig`, so neutralise them here whenever the user asks for reduced
+   motion. This covers Tailwind's `animate-*` utilities, the inline keyframe
+   animations in `components/upload-zone.tsx` (scan / pulse effects), and every
+   `transition-*` hover state. Framer Motion animations are handled separately
+   by `<MotionProvider>` rendered in `pages/_app.tsx` and `app/layout.tsx`.
+
+   The `!important` flags are required: author-important declarations beat the
+   normal inline `style={{ animation, transition }}` values used by several
+   components.
+   =========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Indeterminate loaders (Spinner) are essential status indicators, so keep
+     them moving — just much slower to avoid vestibular discomfort. The class
+     selector out-specifies the `*` rule above. */
+  .animate-spin {
+    animation: spin 3s linear infinite !important;
+  }
+}

@@ -61,7 +61,10 @@ pub enum DataKey {
     DelegatedPower(Address), // delegator -> delegate
     Delegate(Address), // delegate -> total delegated power
     Config,
-    HasVoted(u32, Address), // proposal_id, toter -> has_voted
+    HasVoted(u32, Address), // proposal_id, voter -> has_voted
     Receipt(u32, Address), // proposal_id, voter -> VotingReceipt
     TotalCreditsSpent(Address), // voter -> total credits spent across all proposals
+    VotingSnapshot(u64, Address), // snapshot_id, address -> VotingSnapshot
+    ProposalSnapshot(u32), // proposal_id -> snapshot_id
+    SnapshotCounter, // counter for snapshot IDs
 }

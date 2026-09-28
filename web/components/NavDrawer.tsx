@@ -113,7 +113,7 @@ export function NavDrawer({ isOpen, onClose, children, title }: NavDrawerProps) 
         {/* Header with close button */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
           <span id={titleId} className="text-slate-100 font-semibold">
-            {title}
+            {resolvedTitle}
           </span>
           <button
             type="button"

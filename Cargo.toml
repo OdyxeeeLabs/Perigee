@@ -6,8 +6,10 @@ members = [
     "contracts/error_codes",
     "contracts/math",
     "contracts/guards",
+    "contracts/governance",
     "contracts/staking_rewards",
     "contracts/oracle_aggregator",
+    "contracts/policy_vault",
 ]
 
 # CONTRACT-41 (#535): dedicated build profile used by `scripts/coverage.sh`

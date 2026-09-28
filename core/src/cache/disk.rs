@@ -87,7 +87,7 @@ impl DiskCache {
             Ok(Some(ivec)) => ivec,
             Ok(None) => return None,
             Err(e) => {
-                tracing::warn!(error = %e, "disk cache read failed, treating as miss");
+                tracing::warn!(error = %crate::log_redaction::redact_display(&e), "disk cache read failed, treating as miss");
                 return None;
             }
         };
@@ -97,7 +97,7 @@ impl DiskCache {
             Err(e) => {
                 // Corrupt / schema-mismatched entry — drop it so the next
                 // write can replace it.
-                tracing::warn!(error = %e, "disk cache entry failed to deserialise, evicting");
+                tracing::warn!(error = %crate::log_redaction::redact_display(&e), "disk cache entry failed to deserialise, evicting");
                 let _ = self.db.remove(key);
                 return None;
             }
@@ -142,7 +142,7 @@ impl DiskCache {
             let (key, value) = match kv {
                 Ok(pair) => pair,
                 Err(e) => {
-                    tracing::warn!(error = %e, "disk cache iter failed mid-sweep");
+                    tracing::warn!(error = %crate::log_redaction::redact_display(&e), "disk cache iter failed mid-sweep");
                     break;
                 }
             };

@@ -1,7 +1,3 @@
--- Migration 004: White-label vault records with optimistic locking (API-37).
--- Parallel updates must include the expected `version`; a mismatch means
--- another writer won the race and the client must reload before retrying.
-
 CREATE TABLE IF NOT EXISTS vaults (
     id TEXT PRIMARY KEY,
     manager_id TEXT NOT NULL,
@@ -9,8 +5,8 @@ CREATE TABLE IF NOT EXISTS vaults (
     status TEXT NOT NULL DEFAULT 'active',
     config_json TEXT NOT NULL DEFAULT '{}',
     version INTEGER NOT NULL DEFAULT 1,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_vaults_manager ON vaults(manager_id);

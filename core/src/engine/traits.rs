@@ -13,6 +13,9 @@ pub enum ProviderError {
     NetworkError(String),
     #[error("Node error: {0}")]
     NodeError(String),
+
+    #[error("RPC circuit breaker open: {0}")]
+    CircuitBreakerOpen(String),
 }
 
 #[derive(Error, Debug)]

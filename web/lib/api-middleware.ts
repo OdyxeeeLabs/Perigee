@@ -85,7 +85,7 @@ export function withRateLimit(
   return async function rateLimitedHandler(
     req: NextApiRequest,
     res: NextApiResponse,
-  ) => {
+  ) {
     const key = keyFn(req);
     const now = Date.now();
 
