@@ -45,10 +45,7 @@ enum RefreshTokenRecord {
         family_id: String,
     },
     /// Tombstone left after rotation; presenting this hash revokes the whole family.
-    Rotated {
-        family_id: String,
-        expires_at: u64,
-    },
+    Rotated { family_id: String, expires_at: u64 },
 }
 
 /// Authenticated user extracted from JWT and injected into request extensions
@@ -284,7 +281,10 @@ fn encode_access_token(state: &AuthState, subject: &str) -> Result<String, AppEr
 }
 
 /// Issue a short-lived access JWT plus a new refresh token (new rotation family).
-pub(crate) fn issue_token_pair(state: &AuthState, subject: &str) -> Result<VerifyResponse, AppError> {
+pub(crate) fn issue_token_pair(
+    state: &AuthState,
+    subject: &str,
+) -> Result<VerifyResponse, AppError> {
     let family_id = Uuid::new_v4().to_string();
     issue_token_pair_in_family(state, subject, &family_id)
 }
@@ -335,6 +335,13 @@ pub(crate) fn rotate_refresh_token(
     refresh_token: &str,
 ) -> Result<VerifyResponse, AppError> {
     if refresh_token.is_empty() {
+        log_security_event(
+            SecurityEventType::UnauthorizedAccess,
+            None,
+            None,
+            None,
+            Some("Missing refresh token"),
+        );
         return Err(AppError::Unauthorized("Missing refresh token".into()));
     }
 
@@ -358,9 +365,7 @@ pub(crate) fn rotate_refresh_token(
                 if now > expires_at {
                     store.retain(|_, r| match r {
                         RefreshTokenRecord::Active { family_id: fid, .. }
-                        | RefreshTokenRecord::Rotated { family_id: fid, .. } => {
-                            fid != &family_id
-                        }
+                        | RefreshTokenRecord::Rotated { family_id: fid, .. } => fid != &family_id,
                     });
                     log_security_event(
                         SecurityEventType::TokenExpired,
@@ -436,7 +441,9 @@ pub(crate) fn revoke_refresh_token(state: &AuthState, refresh_token: &str) -> Re
         .map_err(|_| AppError::Internal("Refresh token store lock poisoned".into()))?;
 
     let found = store.get(&token_hash).map(|r| match r {
-        RefreshTokenRecord::Active { family_id, subject, .. } => (family_id.clone(), Some(subject.clone())),
+        RefreshTokenRecord::Active {
+            family_id, subject, ..
+        } => (family_id.clone(), Some(subject.clone())),
         RefreshTokenRecord::Rotated { family_id, .. } => (family_id.clone(), None),
     });
     if let Some((family_id, subject)) = found {
@@ -542,7 +549,10 @@ pub(crate) fn build_challenge_envelope(
     Ok(BASE64.encode(&xdr))
 }
 
-pub(crate) fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str) -> Result<String, AppError> {
+pub(crate) fn verify_challenge_envelope(
+    state: &AuthState,
+    signed_xdr_b64: &str,
+) -> Result<String, AppError> {
     let raw = BASE64
         .decode(signed_xdr_b64)
         .map_err(|_| AppError::BadRequest("Invalid base64".into()))?;
@@ -765,7 +775,7 @@ pub async fn verify_handler(
         None,
         Some("SEP-10 challenge verified and JWT issued"),
     );
-    
+
     crate::audit_log::log_audit_event(&subject, "auth_login", &subject);
 
     Ok(Json(tokens))
@@ -881,7 +891,9 @@ pub async fn auth_middleware(
                 None,
                 Some("Missing Authorization header"),
             );
-            return Err(AppError::Unauthorized("Missing Authorization header".into()));
+            return Err(AppError::Unauthorized(
+                "Missing Authorization header".into(),
+            ));
         }
     };
 
@@ -927,9 +939,7 @@ pub async fn auth_middleware(
     // Validate JWT expiry claim (BE-030: verify token has not expired)
     let now = now_secs();
     if token_data.claims.exp <= now {
-        return Err(AppError::Unauthorized(
-            "Token has expired".into(),
-        ));
+        return Err(AppError::Unauthorized("Token has expired".into()));
     }
 
     if !token_data.claims.scopes.contains(&"simulate".to_string()) {
@@ -1182,29 +1192,32 @@ mod tests {
         use jsonwebtoken::encode;
         let state = test_state();
         let now = now_secs();
-        
+
         // Create a token that expired 1 second ago
         let expired_claims = Claims {
             sub: "GTESTEXPIRED".to_string(),
             iss: WEB_AUTH_DOMAIN.to_string(),
             iat: now - 100,
-            exp: now - 1,  // Expired
+            exp: now - 1, // Expired
             scopes: vec!["simulate".to_string()],
         };
-        
+
         let header = Header::new(Algorithm::RS256);
         let expired_token = encode(&header, &expired_claims, &state.encoding_key).unwrap();
-        
+
         // Attempt to validate the expired token using the same logic as auth_middleware
         let validation = Validation::new(Algorithm::RS256);
         let result = decode::<Claims>(&expired_token, &state.decoding_key, &validation);
-        
+
         // The token should fail validation (either by jsonwebtoken or our explicit check)
         // If it doesn't fail in decode, our explicit check in auth_middleware will catch it
         if let Ok(token_data) = result {
             // Simulate the explicit expiry check from auth_middleware (BE-030)
             let current_time = now_secs();
-            assert!(token_data.claims.exp <= current_time, "Expired token should be rejected");
+            assert!(
+                token_data.claims.exp <= current_time,
+                "Expired token should be rejected"
+            );
         }
     }
 
@@ -1213,32 +1226,34 @@ mod tests {
         use jsonwebtoken::encode;
         let state = test_state();
         let now = now_secs();
-        
+
         // Create a token that expires 1 hour from now
         let valid_claims = Claims {
             sub: "GTESTVALID".to_string(),
             iss: WEB_AUTH_DOMAIN.to_string(),
             iat: now,
-            exp: now + 3600,  // Expires in 1 hour
+            exp: now + 3600, // Expires in 1 hour
             scopes: vec!["simulate".to_string()],
         };
-        
+
         let header = Header::new(Algorithm::RS256);
         let valid_token = encode(&header, &valid_claims, &state.encoding_key).unwrap();
-        
+
         // Validate the token
         let validation = Validation::new(Algorithm::RS256);
         let result = decode::<Claims>(&valid_token, &state.decoding_key, &validation);
-        
+
         assert!(result.is_ok(), "Valid token should decode successfully");
-        
+
         let token_data = result.unwrap();
         let current_time = now_secs();
-        
+
         // Explicit expiry check from auth_middleware (BE-030)
-        assert!(token_data.claims.exp > current_time, "Valid token should not be expired");
+        assert!(
+            token_data.claims.exp > current_time,
+            "Valid token should not be expired"
+        );
         assert_eq!(token_data.claims.sub, "GTESTVALID");
         assert!(token_data.claims.scopes.contains(&"simulate".to_string()));
     }
 }
-
