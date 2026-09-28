@@ -523,14 +523,17 @@ fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
     if user.is_admin() {
         Ok(())
     } else {
+        // Authorization denial: the caller authenticated, but lacks the admin
+        // privilege this operation requires. Record it as a security audit
+        // event so privileged-access attempts are traceable (issue #399).
         crate::audit_log::log_security_event(
-            crate::audit_log::SecurityEventType::UnauthorizedAccess,
+            crate::audit_log::SecurityEventType::AuthorizationDenied,
             Some(&user.stellar_address),
             None,
             None,
-            Some("Admin privileges required but caller is not admin"),
+            Some("Admin privileges required to perform this action"),
         );
-        Err(AppError::Forbidden(
+        Err(AppError::Unauthorized(
             "Admin privileges required to perform this action".into(),
         ))
     }
@@ -701,6 +704,39 @@ mod tests {
             db::schema::TypedSchema::new(std::sync::Arc::new(db::MonitoredPool::from_inner(pool)))
                 .vaults(),
         )
+    }
+
+    #[test]
+    fn require_admin_enforces_the_allowlist() {
+        // Env vars are process-global; serialize with the shared env guard.
+        let _env = crate::errors::env_guard();
+        let previous = std::env::var("PERIGEE_ADMIN_STELLAR_ADDRESSES").ok();
+        unsafe {
+            std::env::set_var("PERIGEE_ADMIN_STELLAR_ADDRESSES", "GADMIN, G2");
+        }
+
+        let admin = AuthenticatedUser {
+            stellar_address: "GADMIN".into(),
+        };
+        let non_admin = AuthenticatedUser {
+            stellar_address: "GOTHER".into(),
+        };
+
+        assert!(require_admin(&admin).is_ok(), "allow-listed caller passes");
+        // A denial must also be recorded as an authorization security event.
+        assert!(
+            require_admin(&non_admin).is_err(),
+            "non-admin caller is denied"
+        );
+
+        match previous {
+            Some(value) => unsafe {
+                std::env::set_var("PERIGEE_ADMIN_STELLAR_ADDRESSES", value);
+            },
+            None => unsafe {
+                std::env::remove_var("PERIGEE_ADMIN_STELLAR_ADDRESSES");
+            },
+        }
     }
 
     #[tokio::test]

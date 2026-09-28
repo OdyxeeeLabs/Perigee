@@ -72,6 +72,9 @@ pub enum SecurityEventType {
     TokenRevoked,
     TokenExpired,
     UnauthorizedAccess,
+    /// A caller was authenticated but lacked the authorization (role/privilege)
+    /// required for the requested operation.
+    AuthorizationDenied,
     VaultAccessDenied,
     AgentDisabled,
     JwtKeyRotated,
@@ -86,6 +89,7 @@ impl SecurityEventType {
             SecurityEventType::TokenRevoked => "TOKEN_REVOKED",
             SecurityEventType::TokenExpired => "TOKEN_EXPIRED",
             SecurityEventType::UnauthorizedAccess => "UNAUTHORIZED_ACCESS",
+            SecurityEventType::AuthorizationDenied => "AUTHORIZATION_DENIED",
             SecurityEventType::VaultAccessDenied => "VAULT_ACCESS_DENIED",
             SecurityEventType::AgentDisabled => "AGENT_DISABLED",
             SecurityEventType::JwtKeyRotated => "JWT_KEY_ROTATED",
@@ -391,6 +395,7 @@ pub fn log_audit_event(manager_id: &str, action: &str, actor: &str) {
 /// - `TOKEN_REVOKED`
 /// - `TOKEN_EXPIRED`
 /// - `UNAUTHORIZED_ACCESS`
+/// - `AUTHORIZATION_DENIED`
 /// - `VAULT_ACCESS_DENIED`
 /// - `AGENT_DISABLED`
 /// - `JWT_KEY_ROTATED`
@@ -481,6 +486,7 @@ pub fn log_security_event_with_metrics(
             SecurityEventType::LoginFailed
             | SecurityEventType::TokenExpired
             | SecurityEventType::UnauthorizedAccess
+            | SecurityEventType::AuthorizationDenied
             | SecurityEventType::VaultAccessDenied => "denied",
         });
         metrics
@@ -712,11 +718,24 @@ mod tests {
     fn test_security_event_types_formatting_and_str() {
         assert_eq!(SecurityEventType::LoginSuccess.as_str(), "LOGIN_SUCCESS");
         assert_eq!(SecurityEventType::LoginFailed.as_str(), "LOGIN_FAILED");
-        assert_eq!(SecurityEventType::TokenRefreshed.as_str(), "TOKEN_REFRESHED");
+        assert_eq!(
+            SecurityEventType::TokenRefreshed.as_str(),
+            "TOKEN_REFRESHED"
+        );
         assert_eq!(SecurityEventType::TokenRevoked.as_str(), "TOKEN_REVOKED");
         assert_eq!(SecurityEventType::TokenExpired.as_str(), "TOKEN_EXPIRED");
-        assert_eq!(SecurityEventType::UnauthorizedAccess.as_str(), "UNAUTHORIZED_ACCESS");
-        assert_eq!(SecurityEventType::VaultAccessDenied.as_str(), "VAULT_ACCESS_DENIED");
+        assert_eq!(
+            SecurityEventType::UnauthorizedAccess.as_str(),
+            "UNAUTHORIZED_ACCESS"
+        );
+        assert_eq!(
+            SecurityEventType::AuthorizationDenied.as_str(),
+            "AUTHORIZATION_DENIED"
+        );
+        assert_eq!(
+            SecurityEventType::VaultAccessDenied.as_str(),
+            "VAULT_ACCESS_DENIED"
+        );
         assert_eq!(SecurityEventType::AgentDisabled.as_str(), "AGENT_DISABLED");
         assert_eq!(SecurityEventType::JwtKeyRotated.as_str(), "JWT_KEY_ROTATED");
     }
@@ -735,7 +754,10 @@ mod tests {
         assert_eq!(event.agent_id.as_deref(), Some("agent-123"));
         assert_eq!(event.vault_id.as_deref(), Some("vault-456"));
         assert_eq!(event.ip.as_deref(), Some("192.168.1.100"));
-        assert_eq!(event.reason.as_deref(), Some("Agent not authorized for vault"));
+        assert_eq!(
+            event.reason.as_deref(),
+            Some("Agent not authorized for vault")
+        );
 
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains(r#""event":"VAULT_ACCESS_DENIED""#));
@@ -744,6 +766,24 @@ mod tests {
         assert!(json.contains(r#""ip":"192.168.1.100""#));
         assert!(json.contains(r#""reason":"Agent not authorized for vault""#));
         assert!(json.contains(r#""timestamp":""#));
+    }
+
+    #[test]
+    fn test_authorization_denied_serialization() {
+        let event = log_security_event(
+            SecurityEventType::AuthorizationDenied,
+            Some("GTENANT"),
+            None,
+            None,
+            Some("Admin privileges required to perform this action"),
+        );
+
+        assert_eq!(event.event, SecurityEventType::AuthorizationDenied);
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""event":"AUTHORIZATION_DENIED""#));
+        assert!(json.contains(r#""agentId":"GTENANT""#));
+        assert!(json.contains(r#""reason":"Admin privileges required to perform this action""#));
     }
 
     #[test]
