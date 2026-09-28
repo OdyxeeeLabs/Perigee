@@ -53,10 +53,10 @@ describe("external link security audit", () => {
           continue;
         }
 
-        const relValue = relMatch[1].toLowerCase();
+        const relTokens = new Set(relMatch[1].toLowerCase().split(/\s+/));
         if (
-          !relValue.includes("noopener") ||
-          !relValue.includes("noreferrer")
+          !relTokens.has("noopener") ||
+          !relTokens.has("noreferrer")
         ) {
           failures.push(
             `${path.relative(projectRoot, filePath)}: rel="${relMatch[1]}" is missing noopener/noreferrer for target="_blank" link`,
