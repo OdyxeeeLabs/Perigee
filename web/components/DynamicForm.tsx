@@ -260,6 +260,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               <span
                 id={`error-${input.name}`}
                 role="alert"
+                aria-live="assertive"
                 style={{
                   fontSize: '12px',
                   color: '#f85149',
@@ -329,6 +330,27 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
             t("dynamicForm.liveInvoke")
           )}
         </button>
+      </div>
+      {/* WEB-16 (#470): announce the simulating/invoking transition, which is
+          otherwise conveyed only by the disabled buttons and a spinning icon. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="dynamic-form-live-status"
+        style={{
+          position: 'absolute',
+          width: '1px',
+          height: '1px',
+          padding: 0,
+          margin: '-1px',
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          whiteSpace: 'nowrap',
+          border: 0,
+        }}
+      >
+        {loading ? t("dynamicForm.simulating") : ''}
       </div>
     </form>
   );

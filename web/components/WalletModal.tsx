@@ -88,8 +88,24 @@ export function WalletModal() {
                   </p>
                 </div>
 
+                {/* WEB-16 (#470): announce the connecting state, which is
+                    otherwise only visible as a spinner on the selected row. */}
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  data-testid="wallet-modal-live-status"
+                  className="sr-only"
+                >
+                  {isConnecting ? t("connecting") : ""}
+                </div>
+
                 {error && (
-                  <div className="w-full mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-2">
+                  <div
+                    role="alert"
+                    aria-live="assertive"
+                    className="w-full mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-2"
+                  >
                     <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
                     <span className="text-red-400 text-sm">{error}</span>
                   </div>

@@ -276,9 +276,32 @@ export default function WasmUpload({
   const pendingCount = files.filter((f) => f.status === "pending").length;
   const uploadingCount = files.filter((f) => f.status === "uploading").length;
   const successCount = files.filter((f) => f.status === "success").length;
+  const errorCount = files.filter((f) => f.status === "error").length;
+
+  // WEB-16 (#470): per-file upload status is conveyed visually by badges and
+  // colours; mirror the headline counts into a live region so screen readers
+  // hear the transition ("1 uploading" → "2 ready").
+  const uploadStatusMessage = [
+    uploadingCount > 0
+      ? `${uploadingCount} ${t("wasmUpload.uploading")}`
+      : "",
+    successCount > 0 ? `${successCount} ${t("wasmUpload.ready")}` : "",
+    errorCount > 0 ? `${errorCount} ${t("wasmUpload.retry")}` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return (
     <div className={cn("w-full max-w-2xl mx-auto", className)}>
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="wasm-upload-live-status"
+        className="sr-only"
+      >
+        {uploadStatusMessage}
+      </div>
       {/*drop Zone*/}
       <div
         {...getRootProps()}

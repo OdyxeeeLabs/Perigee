@@ -255,5 +255,14 @@
   "vault.overviewDesc": "This vault operates autonomously on Soroban smart contracts. Yield is auto-compounded, and allocations are guarded by strict emergency circuit breakers and multi-sig verification.",
   "vault.statusActive": "ACTIVE",
   "vault.statusLocked": "LOCKED",
-  "vault.statusPending": "PENDING"
+  "vault.statusPending": "PENDING",
+
+  "a11y.statusRegionLabel": "Status updates",
+  "a11y.analysisRunning": "Analysis running",
+  "a11y.analysisComplete": "Analysis complete",
+  "a11y.analysisFailed": "Analysis failed",
+  "a11y.resultReady": "Result ready: {outcome}",
+  "a11y.uploadScanning": "Scanning contract",
+  "a11y.uploadSuccess": "Contract uploaded successfully",
+  "a11y.uploadRejected": "File rejected"
 }

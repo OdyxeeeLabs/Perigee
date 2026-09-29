@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { ConnectButton } from "../../components/ConnectButton";
 import { SEO } from "../../components/SEO";
 import { Button } from "../../components/ui/Button";
+import { LiveStatus } from "../../components/LiveRegion";
 import { useWalletStore } from "../../context/WalletContext";
 import { managerService } from "../../lib/api";
 import { shallow } from "../../lib/createStore";
@@ -25,6 +26,18 @@ export default function ManagerOnboarding() {
   const [managerRecord, setManagerRecord] = useState<Awaited<
     ReturnType<typeof managerService.register>
   > | null>(null);
+
+  // WEB-16 (#470): onboarding is a step flow — which step is showing is a
+  // status change that screen readers previously never heard about.
+  const stepLabels: Record<Step, string> = {
+    connect: t("onboarding.stepConnect"),
+    register: t("onboarding.stepRegister"),
+    submitted: t("onboarding.stepSubmitted"),
+    status: t("onboarding.stepStatus"),
+  };
+  const stepStatusMessage = loading
+    ? t("onboarding.submittingButton")
+    : `${stepLabels[step]}${error ? ` — ${error}` : ""}`;
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -127,6 +140,13 @@ export default function ManagerOnboarding() {
         path="/managers/onboarding"
       />
       <main className="min-h-screen bg-slate-950 text-slate-100">
+        {/* WEB-16 (#470): announce step transitions, submission progress and
+            errors as they happen. */}
+        <LiveStatus
+          message={stepStatusMessage}
+          label={t("a11y.statusRegionLabel")}
+          data-testid="onboarding-live-status"
+        />
         <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
           <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
             <div>
