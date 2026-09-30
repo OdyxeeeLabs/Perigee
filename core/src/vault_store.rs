@@ -37,6 +37,12 @@ pub enum VaultStoreError {
 
     #[error("Invalid data: {0}")]
     InvalidData(String),
+
+    /// The policy configuration failed BE-033 validation (issue #270):
+    /// structured so the caller can branch on the specific rule that broke
+    /// instead of parsing a message.
+    #[error("Invalid vault policy configuration: {0}")]
+    InvalidPolicy(#[from] crate::vault_validation::VaultValidationError),
 }
 
 impl From<crate::policy_expiry::PolicyExpiryError> for AppError {
@@ -74,6 +80,13 @@ impl From<VaultStoreError> for AppError {
             VaultStoreError::InvalidData(msg) => {
                 AppError::with_code(ErrorCode::InvalidInput, msg)
             }
+
+            // BE-033 (#270): a policy that cannot be internally consistent is
+            // a 400 with a stable code appended, not a 500.
+            VaultStoreError::InvalidPolicy(err) => AppError::with_code(
+                ErrorCode::ValidationFailed,
+                format!("{err} [{}]", err.code()),
+            ),
             VaultStoreError::Database(e) => {
                 AppError::with_code(ErrorCode::DatabaseError, e.to_string())
             }
@@ -108,6 +121,11 @@ impl VaultStore {
                 "name must not be empty".into(),
             ));
         }
+
+        // BE-033 (#270): a policy is only worth storing if it is internally
+        // consistent — allowed assets present, fee in range, high-water mark
+        // seeded from the deposit. Rejected before the row is written.
+        crate::vault_validation::validate_policy_config(req.config_json.trim())?;
 
         let idempotency_key = req
             .idempotency_key
@@ -191,6 +209,13 @@ impl VaultStore {
             .map(str::trim)
             .filter(|s| !s.is_empty());
         let config_json = req.config_json.as_deref();
+
+        // Same rule on the write path: an update that supplies a new config
+        // must supply a consistent one (BE-033 / #270).
+        if let Some(config_json) = config_json {
+            crate::vault_validation::validate_policy_config(config_json)?;
+        }
+
         let now = Utc::now();
 
         let result = self
@@ -671,6 +696,7 @@ pub async fn list_deleted_vaults_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vault_validation::VaultValidationError;
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn test_store() -> VaultStore {
@@ -1018,6 +1044,151 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count.0, 2);
+    }
+
+    // ── BE-033 (#270): policy configuration validated before storage ─────────
+
+    /// A policy that declares no assets to apply its constraints to is not
+    /// internally consistent, and must never reach the table.
+    #[tokio::test]
+    async fn create_rejects_a_policy_with_no_allowed_assets() {
+        let store = test_store().await;
+
+        let err = store
+            .create(&CreateVaultRequest {
+                manager_id: "mgr-policy".into(),
+                name: "Empty allow-list".into(),
+                status: "active".into(),
+                config_json: r#"{"policy":{"allowed_assets":[]}}"#.into(),
+                idempotency_key: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            VaultStoreError::InvalidPolicy(VaultValidationError::EmptyList {
+                field: "allowed_assets"
+            })
+        ));
+
+        // The rejected policy was not stored.
+        let listed = store
+            .list_by_manager("mgr-policy", &pagination(1, 50))
+            .await
+            .unwrap();
+        assert_eq!(listed.total_count, 0);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_fee_outside_zero_to_one_hundred_percent() {
+        let store = test_store().await;
+
+        let err = store
+            .create(&CreateVaultRequest {
+                manager_id: "mgr-policy".into(),
+                name: "Runaway fee".into(),
+                status: "active".into(),
+                config_json: r#"{"policy":{"allowed_assets":["XLM"],"fee_percent":400}}"#
+                    .into(),
+                idempotency_key: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            VaultStoreError::InvalidPolicy(VaultValidationError::OutOfRange { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_high_water_mark_that_is_not_the_deposit() {
+        let store = test_store().await;
+
+        let err = store
+            .create(&CreateVaultRequest {
+                manager_id: "mgr-policy".into(),
+                name: "Diverged HWM".into(),
+                status: "active".into(),
+                config_json: r#"{"policy":{"allowed_assets":["XLM"],"deposit_amount":1000,"high_water_mark":900}}"#
+                    .into(),
+                idempotency_key: None,
+            })
+            .await
+            .unwrap_err();
+
+        if let VaultStoreError::InvalidPolicy(VaultValidationError::HighWaterMarkMismatch {
+            high_water_mark,
+            deposit_amount,
+        }) = err
+        {
+            assert_eq!(high_water_mark, 900.0);
+            assert_eq!(deposit_amount, 1000.0);
+        } else {
+            panic!("expected InvalidPolicy(HighWaterMarkMismatch), got {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn create_accepts_a_consistent_policy() {
+        let store = test_store().await;
+
+        let config = r#"{"policy":{"allowed_assets":["XLM","USDC"],"allowed_operations":["rebalance"],"fee_percent":1.5,"deposit_amount":1000,"high_water_mark":1000}}"#;
+        let created = store
+            .create(&CreateVaultRequest {
+                manager_id: "mgr-policy".into(),
+                name: "Consistent".into(),
+                status: "active".into(),
+                config_json: config.into(),
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+
+        let fetched = store.get(&created.id).await.unwrap();
+        assert_eq!(fetched.config_json, config);
+    }
+
+    /// The update path must apply the same rule as creation, and a rejected
+    /// config must leave the stored one untouched.
+    #[tokio::test]
+    async fn update_rejects_an_inconsistent_policy() {
+        let store = test_store().await;
+        let created = store
+            .create(&CreateVaultRequest {
+                manager_id: "mgr-policy".into(),
+                name: "Starts valid".into(),
+                status: "active".into(),
+                config_json: r#"{"policy":{"allowed_assets":["XLM"]}}"#.into(),
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+
+        let err = store
+            .update(
+                &created.id,
+                &UpdateVaultRequest {
+                    version: created.version,
+                    name: None,
+                    status: None,
+                    config_json: Some(r#"{"policy":{"allowed_assets":[]}}"#.into()),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            VaultStoreError::InvalidPolicy(VaultValidationError::EmptyList {
+                field: "allowed_assets"
+            })
+        ));
+
+        let stored = store.get(&created.id).await.unwrap();
+        assert_eq!(stored.version, created.version, "no write happened");
+        assert!(stored.config_json.contains("[\"XLM\"]"));
     }
 
     // ── BE-023: policy expiry on vault operations ────────────────────────
