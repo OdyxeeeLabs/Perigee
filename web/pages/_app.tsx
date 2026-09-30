@@ -18,6 +18,9 @@ import { FeatureFlagProvider } from "../features/feature-flags";
 // `prefers-reduced-motion` setting, in addition to the per-component
 // `useReducedMotion()` guards already in place.
 import { MotionProvider } from "../components/MotionProvider";
+// WEB-52 (#185): global command palette — ⌘K / Ctrl+K / `/` opens a searchable
+// launcher for navigation, vaults, settings and quick actions.
+import { CommandPaletteLauncher } from "../components/CommandPaletteLauncher";
 
 // WEB-54 (#187): self-host the Inter typeface through `next/font`. Font files
 // are downloaded and preloaded at build time, eliminating FOIT and render
@@ -99,6 +102,7 @@ export default function App({ Component, pageProps }: AppProps) {
             <RpcFallbackBanner apiUrl={API_URL}>
               <ErrorBoundary>
                 <Component {...pageProps} />
+                <CommandPaletteLauncher />
                 <Analytics />
               </ErrorBoundary>
             </RpcFallbackBanner>
