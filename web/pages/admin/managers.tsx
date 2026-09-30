@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { ConnectButton } from "../../components/ConnectButton";
 import { SEO } from "../../components/SEO";
 import { Button } from "../../components/ui/Button";
+import { LiveStatus } from "../../components/LiveRegion";
 import { managerService, type ManagerRecord } from "../../lib/api";
 
 export default function AdminManagers() {
@@ -102,6 +103,13 @@ export default function AdminManagers() {
               </Button>
             ))}
           </div>
+          {/* WEB-16 (#470): announce loading/error transitions while the
+              table content changes underneath them. */}
+          <LiveStatus
+            message={loading ? t("admin.managers.loading") : (error ?? "")}
+            label={t("a11y.statusRegionLabel")}
+            data-testid="admin-managers-live-status"
+          />
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <div

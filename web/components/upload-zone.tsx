@@ -727,6 +727,20 @@ export function UploadZone({
         )}
       </div>
 
+      {/* WEB-16 (#470): announce upload state changes (scanning → success or
+          error). Rendered always, so screen readers pick up the transition. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="upload-live-status"
+        className="sr-only"
+      >
+        {displayState === "scanning" && t("upload.scanning")}
+        {displayState === "success" && t("upload.success")}
+        {displayState === "error" && t("upload.rejected")}
+      </div>
+
       {/* Caption hint */}
       <p className="text-xs text-slate-600 text-center mt-3 font-mono">
         {t("upload.caption")}

@@ -6,6 +6,7 @@ import { ConnectButton } from "../components/ConnectButton";
 import { ContractInteraction } from "../components/ContractInteraction";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { FunctionSidebar } from "../components/FunctionSidebar";
+import { LiveAlert, LiveStatus } from "../components/LiveRegion";
 import { ResultViewer } from "../components/Resultviewer";
 import { SEO } from "../components/SEO";
 import { UploadZone } from "../components/upload-zone";
@@ -32,6 +33,17 @@ export default function Home() {
   const [currentResult, setCurrentResult] = useState<InvocationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [wasmData, setWasmData] = useState<string | null>(null);
+
+  // WEB-16 (#470): loading and outcome changes are announced to screen
+  // readers through live regions (see components/LiveRegion.tsx). Derived
+  // from state, so the announcement always matches what is on screen.
+  const analysisStatusMessage = loading
+    ? t("a11y.analysisRunning")
+    : currentResult
+      ? t("a11y.resultReady", {
+          outcome: currentResult.success ? t("result.success") : t("result.error"),
+        })
+      : "";
 
   useEffect(() => {
     setCurrentResult(null);
@@ -154,6 +166,20 @@ export default function Home() {
               selectedFunction={selectedFunction}
               onSimulate={handleSimulate}
               isLoading={loading}
+            />
+            {/* WEB-16 (#470): announce analysis progress and outcomes. */}
+            <LiveStatus
+              message={analysisStatusMessage}
+              label={t("a11y.statusRegionLabel")}
+              data-testid="analysis-live-status"
+            />
+            <LiveAlert
+              message={
+                currentResult && !currentResult.success
+                  ? (currentResult.error ?? t("a11y.analysisFailed"))
+                  : ""
+              }
+              data-testid="analysis-live-alert"
             />
             {currentResult && (
               <ErrorBoundary>
