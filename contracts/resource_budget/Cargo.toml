@@ -1,0 +1,12 @@
+[package]
+name = "perigee-resource-budget"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Deterministic Soroban resource-budget report for representative vault, strategy and governance operations (#886)."
+
+[dev-dependencies]
+soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+perigee-vault-guard = { path = "../vault_guard" }
+perigee-vault-strategy = { path = "../vault_strategy" }
+perigee-cross-chain-governance = { path = "../cross_chain_governance" }
