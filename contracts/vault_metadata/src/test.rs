@@ -9,7 +9,8 @@
 //! Closes OdyxeeeLabs/Perigee#639
 
 use crate::{
-    RiskTier, VaultMetadata, VaultMetadataClient, Error, HISTORY_DEPTH, MAX_RISK_SCORE,
+    DisplayMetadataUpdate, RiskTier, VaultMetadata, VaultMetadataClient, Error,
+    HISTORY_DEPTH, MAX_RISK_SCORE,
 };
 use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
@@ -383,6 +384,77 @@ fn the_registry_can_only_be_initialized_once() {
     let (env, _cid, client, admin, _vault) = setup!();
 
     assert_eq!(client.try_initialize(&admin), Err(Ok(Error::AlreadyInitialized)));
+}
+
+#[test]
+fn display_update_preserves_canonical_identity_and_protocol_traits() {
+    let (env, contract_id, client, admin, vault) = setup!();
+    register!(env, client, admin, vault, "lending", RiskTier::Low, 20);
+
+    let version = client.update_display(
+        &admin,
+        &vault,
+        &DisplayMetadataUpdate {
+            name: sid(&env, "Renamed Vault"),
+            symbol: sid(&env, "rUSDC"),
+            metadata_uri: sid(&env, "ipfs://renamed"),
+        },
+    );
+
+    let metadata = client.get_metadata(&vault);
+    assert_eq!(version, 2);
+    assert_eq!(metadata.vault, vault);
+    assert_eq!(metadata.name, sid(&env, "Renamed Vault"));
+    assert_eq!(metadata.symbol, sid(&env, "rUSDC"));
+    assert_eq!(metadata.strategy, sid(&env, "lending"));
+    assert_eq!(metadata.risk_tier, RiskTier::Low);
+    assert_eq!(metadata.risk_score, 20);
+
+    let events = env.events().all();
+    let mut found = false;
+    for (_, topics, data) in events.iter() {
+        if topics.len() != 3 {
+            continue;
+        }
+        let topic_vault: Result<Address, _> = topics.get(1).unwrap().try_into_val(&env);
+        let topic_action: Result<_, _> = topics.get(2).unwrap().try_into_val(&env);
+        let action = topic_action.ok().map(|s: soroban_sdk::Symbol| s);
+        let event_data: Result<(u32, u32), _> = data.try_into_val(&env);
+        if topic_vault.ok() == Some(vault.clone())
+            && action == Some(soroban_sdk::Symbol::new(&env, "up"))
+            && event_data.ok() == Some((1, 2))
+        {
+            found = true;
+        }
+    }
+    assert!(found);
+
+    assert_eq!(client.list_by_strategy(&sid(&env, "lending")).len(), 1);
+    assert_eq!(client.list_by_risk(&RiskTier::Low).len(), 1);
+}
+
+#[test]
+fn only_the_admin_may_update_display() {
+    let (env, _cid, client, admin, vault) = setup!();
+    register!(env, client, admin, vault, "lending", RiskTier::Low, 20);
+    let stranger = Address::generate(&env);
+
+    assert_eq!(
+        client.try_update_display(
+            &stranger,
+            &vault,
+            &DisplayMetadataUpdate {
+                name: sid(&env, "X"),
+                symbol: sid(&env, "X"),
+                metadata_uri: sid(&env, "ipfs://x"),
+            }
+        ),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    let metadata = client.get_metadata(&vault);
+    assert_eq!(metadata.vault, vault);
+    assert_eq!(metadata.version, 1);
 }
 
 #[test]
