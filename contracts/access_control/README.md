@@ -95,6 +95,27 @@ refuse to orphan live permissions — a per-pattern usage counter tracks how man
 direct grants and role selectors still reference the pattern, and removal is
 rejected while that count is non-zero.
 
+### Precedence (#870)
+
+The ACL is **purely additive**. There are no deny entries, so there is nothing
+for an exact selector to "override": a call is allowed when *any* of the rules in
+the authorization list above matches, and denied when none does.
+
+| Situation | Result |
+|---|---|
+| No matching rule | denied |
+| Exact grant only | allowed for that selector only (not siblings, not wildcards) |
+| Namespace wildcard `vault.*` | allowed for selectors starting with `vault.` |
+| Universal `*` | allowed for every well-formed selector |
+| Exact **and** wildcard both held | allowed; revoking the exact grant does **not** remove access the wildcard still gives |
+| Held directly **and** through a role | allowed until *both* are removed |
+| Malformed selector (`""`, `a*b`, `*x`) | denied for everyone except the root admin, even with `*` |
+| Root admin | always allowed |
+
+To take access away from someone holding a wildcard, revoke the wildcard
+itself; narrowing it with an exact rule is not supported. Rules for different
+principals never interact.
+
 ### Batch updates
 
 | Entry point | Semantics |
