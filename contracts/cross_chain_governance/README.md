@@ -69,3 +69,40 @@ Governance state can be synchronized and queried cross-chain:
 - **Circuit Breaker (`set_paused`)**: Instantly freeze cross-chain message processing during an active bridge compromise or exploit.
 - **Admin Rotation (`transfer_admin`)**: Rotate administrative authority.
 - **Protocol Toggles (`set_bridge_protocol`)**: Disable a compromised bridge wire format while keeping remaining bridges functional.
+
+## Execution status model and timeouts (#873)
+
+All times are **ledger timestamps in seconds** (`env.ledger().timestamp()`), not
+ledger sequence numbers. `min_execution_delay` is therefore a number of seconds.
+
+| From | To | How |
+| --- | --- | --- |
+| *(none)* | `Executed` | `receive_and_execute` with `min_execution_delay == 0` |
+| *(none)* | `Queued` | `receive_and_execute` with a delay; `execute_after = now + delay` |
+| `Queued` | `Executed` | `execute_queued` when `now >= execute_after` (inclusive) |
+| `Queued` | `Cancelled` | `cancel_queued` (admin) |
+
+`Pending` and `Failed` exist in the enum but are **not written by this contract**:
+a remote call that fails reverts the whole `execute_queued` invocation, so the
+record is left `Queued` rather than marked `Failed`. That makes retry the same
+operation as the first attempt — call `execute_queued` again.
+
+- A retry always runs the **stored** `target`, `function` and `args`; none of them
+  can be changed after the message is accepted.
+- Re-delivering an `execution_id` through a new message is rejected with
+  `ExecutionAlreadyExecuted` and reverts entirely, so it cannot overwrite the
+  approved payload or consume a sequence number.
+- `Executed` and `Cancelled` are terminal. A second `execute_queued` or
+  `cancel_queued` fails with `ExecutionAlreadyExecuted` (the error name covers
+  "already finished" in either direction).
+- There is no automatic expiry: a queued execution whose target never recovers
+  stays `Queued` until it succeeds or the admin cancels it.
+
+## Replay protection (#872)
+
+Inbound messages are checked in this order, and a rejected message writes
+nothing: pause → destination chain → action type → bridge enabled → proof
+header → trusted sender (per source chain) → processed-hash → strictly
+increasing sequence per source chain. Sequence gaps are allowed, so a late
+message with a lower sequence than one already accepted is rejected as
+`InvalidSequence`.

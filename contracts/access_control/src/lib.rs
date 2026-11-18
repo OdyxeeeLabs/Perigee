@@ -1778,3 +1778,6 @@ impl AccessControl {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod test_batch_atomicity;

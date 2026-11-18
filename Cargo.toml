@@ -60,6 +60,8 @@ members = [
     "contracts/access_control",
     # Cross-chain governance: message passing, remote execution, state sync (#650).
     "contracts/cross_chain_governance",
+    # Deterministic CPU/memory budget report for representative operations (#886).
+    "contracts/resource_budget",
 ]
 
 # CONTRACT-41 (#535): dedicated build profile used by `scripts/coverage.sh`

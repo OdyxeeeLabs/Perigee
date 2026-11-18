@@ -469,3 +469,413 @@ fn test_anti_replay_and_untrusted_sender() {
     );
     assert!(replay.is_err());
 }
+
+// ── #872 — replay protection ────────────────────────────────────────────────
+// ── #873 — timeout and retry state model ────────────────────────────────────
+
+#[contract]
+pub struct FlakyTarget;
+
+#[contractimpl]
+impl FlakyTarget {
+    pub fn set_ready(env: Env, ready: bool) {
+        env.storage().instance().set(&symbol_short!("ready"), &ready);
+    }
+
+    /// Fails until `set_ready(true)` has been called, then records `v`.
+    pub fn run(env: Env, v: u32) -> u32 {
+        let ready: bool = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("ready"))
+            .unwrap_or(false);
+        if !ready {
+            panic!("remote target not ready");
+        }
+        env.storage().instance().set(&symbol_short!("val"), &v);
+        v
+    }
+
+    pub fn get_val(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&symbol_short!("val"))
+            .unwrap_or(0)
+    }
+}
+
+struct Call {
+    message: CrossChainGovMessage,
+    args: Vec<Val>,
+    execution_id: BytesN<32>,
+}
+
+/// Build a `RemoteExecution` message for `target.function(val)` from `source`.
+fn call_for(
+    env: &Env,
+    client: &CrossChainGovernanceClient,
+    target: &Address,
+    function: &Symbol,
+    source: u32,
+    sender: &Bytes,
+    sequence: u64,
+    exec_byte: u8,
+    val: u32,
+) -> Call {
+    let args: Vec<Val> = vec![env, val.into_val(env)];
+    let execution_id = BytesN::from_array(env, &[exec_byte; 32]);
+    let payload = client.encode_execution_payload(target, function, &args, &execution_id);
+    Call {
+        message: CrossChainGovMessage {
+            source_chain_id: source,
+            destination_chain_id: 100,
+            sequence,
+            sender: sender.clone(),
+            action_type: GovernanceActionType::RemoteExecution,
+            payload,
+            timestamp: env.ledger().timestamp(),
+        },
+        args,
+        execution_id,
+    }
+}
+
+fn deliver(
+    client: &CrossChainGovernanceClient,
+    target: &Address,
+    function: &Symbol,
+    call: &Call,
+    proof: &BridgeProof,
+) -> Result<ExecutionStatus, Result<Error, soroban_sdk::InvokeError>> {
+    match client.try_receive_and_execute(
+        &call.message,
+        proof,
+        target,
+        function,
+        &call.args,
+        &call.execution_id,
+    ) {
+        Ok(Ok(status)) => Ok(status),
+        Ok(Err(_)) => panic!("unexpected conversion error"),
+        Err(e) => Err(e),
+    }
+}
+
+#[test]
+fn a_valid_message_executes_exactly_once_and_replays_change_nothing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client, target_id, target_client) = setup_test(&env, 100, 0);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let proof = client.native_proof();
+    let call = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 7, 42);
+
+    assert_eq!(deliver(&client, &target_id, &f, &call, &proof), Ok(ExecutionStatus::Executed));
+    assert_eq!(target_client.get_val(), 42);
+    assert_eq!(client.get_inbound_sequence(&200), 1);
+
+    // Replaying the identical message is a duplicate identifier.
+    assert_eq!(
+        deliver(&client, &target_id, &f, &call, &proof),
+        Err(Ok(Error::MessageAlreadyProcessed))
+    );
+    assert_eq!(target_client.get_val(), 42);
+    assert_eq!(client.get_inbound_sequence(&200), 1);
+    let rec = client.get_execution(&call.execution_id).unwrap();
+    assert_eq!(rec.status, ExecutionStatus::Executed);
+}
+
+#[test]
+fn reusing_a_sequence_with_a_different_payload_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client, target_id, target_client) = setup_test(&env, 100, 0);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let proof = client.native_proof();
+
+    let first = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 1, 10);
+    assert!(deliver(&client, &target_id, &f, &first, &proof).is_ok());
+
+    // Different payload and execution id, same (source, sequence): not a new
+    // message, so it must not execute.
+    let second = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 2, 99);
+    assert_eq!(
+        deliver(&client, &target_id, &f, &second, &proof),
+        Err(Ok(Error::InvalidSequence))
+    );
+    assert_eq!(target_client.get_val(), 10);
+    assert!(client.get_execution(&second.execution_id).is_none());
+}
+
+#[test]
+fn out_of_order_delivery_rejects_the_late_message_without_state_change() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client, target_id, target_client) = setup_test(&env, 100, 0);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let proof = client.native_proof();
+
+    let seq1 = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 1, 11);
+    let seq2 = call_for(&env, &client, &target_id, &f, 200, &sender, 2, 2, 22);
+    let seq3 = call_for(&env, &client, &target_id, &f, 200, &sender, 3, 3, 33);
+
+    // 2 arrives first and is accepted (gaps are allowed)...
+    assert!(deliver(&client, &target_id, &f, &seq2, &proof).is_ok());
+    assert_eq!(target_client.get_val(), 22);
+    // ...so the older 1 is now stale.
+    assert_eq!(
+        deliver(&client, &target_id, &f, &seq1, &proof),
+        Err(Ok(Error::InvalidSequence))
+    );
+    assert_eq!(target_client.get_val(), 22);
+    assert_eq!(client.get_inbound_sequence(&200), 2);
+    assert!(client.get_execution(&seq1.execution_id).is_none());
+    // A newer message still goes through.
+    assert!(deliver(&client, &target_id, &f, &seq3, &proof).is_ok());
+    assert_eq!(client.get_inbound_sequence(&200), 3);
+}
+
+#[test]
+fn sequences_are_tracked_per_source_chain() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client, target_id, _) = setup_test(&env, 100, 0);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    client.set_trusted_sender(&300, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let proof = client.native_proof();
+
+    let a = call_for(&env, &client, &target_id, &f, 200, &sender, 5, 1, 1);
+    let b = call_for(&env, &client, &target_id, &f, 300, &sender, 1, 2, 2);
+    assert!(deliver(&client, &target_id, &f, &a, &proof).is_ok());
+    // Sequence 1 on chain 300 is fresh even though chain 200 is already at 5.
+    assert!(deliver(&client, &target_id, &f, &b, &proof).is_ok());
+    assert_eq!(client.get_inbound_sequence(&200), 5);
+    assert_eq!(client.get_inbound_sequence(&300), 1);
+}
+
+#[test]
+fn a_sender_trusted_on_one_chain_is_rejected_from_another() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client, target_id, target_client) = setup_test(&env, 100, 0);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let proof = client.native_proof();
+
+    let from_other_chain = call_for(&env, &client, &target_id, &f, 300, &sender, 1, 1, 5);
+    assert_eq!(
+        deliver(&client, &target_id, &f, &from_other_chain, &proof),
+        Err(Ok(Error::UntrustedRemoteSender))
+    );
+    assert_eq!(client.get_inbound_sequence(&300), 0);
+    assert_eq!(target_client.get_val(), 0);
+    assert!(client.get_execution(&from_other_chain.execution_id).is_none());
+
+    // The rejection did not poison the legitimate source.
+    let valid = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 2, 5);
+    assert!(deliver(&client, &target_id, &f, &valid, &proof).is_ok());
+}
+
+#[test]
+fn bridge_proofs_naming_the_wrong_source_chain_are_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client, target_id, target_client) = setup_test(&env, 100, 0);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let call = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 1, 5);
+
+    // LayerZero proof claims endpoint 999 as the source.
+    assert_eq!(
+        deliver(&client, &target_id, &f, &call, &client.layerzero_proof(&999, &100)),
+        Err(Ok(Error::InvalidBridgeProof))
+    );
+    // Wormhole proof names a different emitter chain.
+    assert_eq!(
+        deliver(&client, &target_id, &f, &call, &client.wormhole_proof(&13, &999)),
+        Err(Ok(Error::InvalidBridgeProof))
+    );
+    assert_eq!(target_client.get_val(), 0);
+    assert_eq!(client.get_inbound_sequence(&200), 0);
+    assert!(!client.is_message_processed(&client.compute_message_hash(
+        &call.message,
+        &client.layerzero_proof(&999, &100)
+    )));
+
+    // With a matching proof the same message is accepted once.
+    assert!(deliver(&client, &target_id, &f, &call, &client.layerzero_proof(&200, &100)).is_ok());
+}
+
+#[test]
+fn a_message_for_another_destination_chain_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client, target_id, target_client) = setup_test(&env, 100, 0);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let proof = client.native_proof();
+
+    let mut call = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 1, 5);
+    call.message.destination_chain_id = 101;
+    assert_eq!(
+        deliver(&client, &target_id, &f, &call, &proof),
+        Err(Ok(Error::InvalidChain))
+    );
+    assert_eq!(target_client.get_val(), 0);
+    assert_eq!(client.get_inbound_sequence(&200), 0);
+}
+
+// ── #873 ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn queued_execution_boundary_is_inclusive_and_measured_in_seconds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+    let (admin, client, target_id, target_client) = setup_test(&env, 100, 500);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let call = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 1, 8);
+
+    assert_eq!(
+        deliver(&client, &target_id, &f, &call, &client.native_proof()),
+        Ok(ExecutionStatus::Queued)
+    );
+    let rec = client.get_execution(&call.execution_id).unwrap();
+    // The delay is in ledger-timestamp seconds: 1_000 + 500.
+    assert_eq!(rec.queued_at, 1_000);
+    assert_eq!(rec.execute_after, 1_500);
+
+    env.ledger().set_timestamp(1_499);
+    assert!(client.try_execute_queued(&call.execution_id).is_err());
+    assert_eq!(client.get_execution(&call.execution_id).unwrap().status, ExecutionStatus::Queued);
+    assert_eq!(target_client.get_val(), 0);
+
+    env.ledger().set_timestamp(1_500);
+    client.execute_queued(&call.execution_id);
+    assert_eq!(target_client.get_val(), 8);
+    let rec = client.get_execution(&call.execution_id).unwrap();
+    assert_eq!(rec.status, ExecutionStatus::Executed);
+    assert_eq!(rec.executed_at, 1_500);
+}
+
+#[test]
+fn a_finished_execution_cannot_be_executed_or_cancelled_again() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+    let (admin, client, target_id, target_client) = setup_test(&env, 100, 100);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let call = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 1, 8);
+    deliver(&client, &target_id, &f, &call, &client.native_proof()).unwrap();
+
+    env.ledger().set_timestamp(1_100);
+    client.execute_queued(&call.execution_id);
+    let done = client.get_execution(&call.execution_id).unwrap();
+
+    // Duplicate acknowledgement: a second execute / cancel is rejected and the
+    // record, including `executed_at`, is untouched.
+    env.ledger().set_timestamp(2_000);
+    assert!(client.try_execute_queued(&call.execution_id).is_err());
+    assert!(client.try_cancel_queued(&call.execution_id).is_err());
+    assert_eq!(client.get_execution(&call.execution_id).unwrap(), done);
+    assert_eq!(target_client.get_val(), 8);
+}
+
+#[test]
+fn a_cancelled_execution_is_terminal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+    let (admin, client, target_id, target_client) = setup_test(&env, 100, 100);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let call = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 1, 8);
+    deliver(&client, &target_id, &f, &call, &client.native_proof()).unwrap();
+
+    client.cancel_queued(&call.execution_id);
+    assert!(client.try_cancel_queued(&call.execution_id).is_err());
+    env.ledger().set_timestamp(5_000);
+    assert!(client.try_execute_queued(&call.execution_id).is_err());
+    assert_eq!(client.get_execution(&call.execution_id).unwrap().status, ExecutionStatus::Cancelled);
+    assert_eq!(target_client.get_val(), 0);
+}
+
+#[test]
+fn a_failed_remote_call_stays_queued_and_retries_with_the_same_arguments() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+    let (admin, client, _target, _) = setup_test(&env, 100, 100);
+    let flaky_id = env.register(FlakyTarget, ());
+    let flaky = FlakyTargetClient::new(&env, &flaky_id);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("run");
+    let call = call_for(&env, &client, &flaky_id, &f, 200, &sender, 1, 1, 61);
+    deliver(&client, &flaky_id, &f, &call, &client.native_proof()).unwrap();
+    let queued = client.get_execution(&call.execution_id).unwrap();
+
+    // Ready on time, but the remote target fails: the whole call reverts, so the
+    // record is still `Queued` and still eligible for retry.
+    env.ledger().set_timestamp(1_100);
+    assert!(client.try_execute_queued(&call.execution_id).is_err());
+    assert_eq!(client.get_execution(&call.execution_id).unwrap(), queued);
+    assert_eq!(flaky.get_val(), 0);
+
+    // Retry after the target recovers executes the originally approved call.
+    flaky.set_ready(&true);
+    client.execute_queued(&call.execution_id);
+    assert_eq!(flaky.get_val(), 61);
+    let rec = client.get_execution(&call.execution_id).unwrap();
+    assert_eq!(rec.status, ExecutionStatus::Executed);
+    assert_eq!(rec.args, queued.args);
+    assert_eq!(rec.target, queued.target);
+    assert_eq!(rec.function, queued.function);
+}
+
+#[test]
+fn redelivering_an_execution_id_with_new_arguments_cannot_change_the_approved_call() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+    let (admin, client, target_id, target_client) = setup_test(&env, 100, 100);
+    let sender = admin.to_xdr(&env);
+    client.set_trusted_sender(&200, &sender, &true);
+    let f = symbol_short!("upd_val");
+    let proof = client.native_proof();
+
+    let original = call_for(&env, &client, &target_id, &f, 200, &sender, 1, 1, 10);
+    deliver(&client, &target_id, &f, &original, &proof).unwrap();
+    let before = client.get_execution(&original.execution_id).unwrap();
+
+    // A later message (fresh sequence) reuses the execution id with a different
+    // argument. The attempt reverts as a whole: no overwrite, and the new
+    // sequence is not consumed.
+    let retry = call_for(&env, &client, &target_id, &f, 200, &sender, 2, 1, 999);
+    assert_eq!(
+        deliver(&client, &target_id, &f, &retry, &proof),
+        Err(Ok(Error::ExecutionAlreadyExecuted))
+    );
+    assert_eq!(client.get_execution(&original.execution_id).unwrap(), before);
+    assert_eq!(client.get_inbound_sequence(&200), 1);
+
+    env.ledger().set_timestamp(1_100);
+    client.execute_queued(&original.execution_id);
+    assert_eq!(target_client.get_val(), 10);
+}

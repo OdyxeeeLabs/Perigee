@@ -109,6 +109,22 @@ batch that trips a limit half way through leaves no partial grant behind. Each
 batch is additionally capped by `max_batch_size`. The batch operations return
 the number of entries actually applied, which makes them safe to re-run.
 
+### Batch atomicity (#871)
+
+Every batch entry point is **all-or-nothing**:
+
+- If any entry fails — invalid selector, unregistered namespace wildcard, a bound
+  such as `max_grants_per_address` or `max_members_per_role`, an oversized or
+  empty batch — the call returns that error and **nothing** from the batch is
+  applied. For `batch_set_members` / `batch_set_permissions` this includes the
+  removals performed before the additions: a failed replacement leaves the
+  previous roster / selector set exactly as it was.
+- Entries that are merely redundant are skipped without error: `batch_grant`
+  skips pairs already held, `batch_revoke` skips pairs not held. Duplicate
+  entries inside one batch count once.
+- The return value and the emitted events describe only what was **actually
+  applied**: one event per applied entry, none for skipped ones.
+
 ### Events
 
 Exactly **one event per state change**. Idempotent calls that change nothing
