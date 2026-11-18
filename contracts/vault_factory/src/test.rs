@@ -417,3 +417,130 @@ fn set_admin_rotates_the_factory_admin() {
         Err(Ok(Error::Unauthorized))
     );
 }
+// ── #859 — deterministic address prediction ──────────────────────────────────
+//
+// These use `predict_vault_address`, which needs no uploaded WASM. Comparing a
+// prediction with an actual `create_vault` deployment needs a real proxy
+// artifact and belongs in the integration harness.
+
+fn bare_factory(env: &Env) -> (Address, VaultFactoryClient<'_>, Address, Address) {
+    let admin = Address::generate(env);
+    let implementation = Address::generate(env);
+    let factory_id = env.register(VaultFactory, ());
+    let factory = VaultFactoryClient::new(env, &factory_id);
+    factory.initialize(&admin, &implementation);
+    (factory_id, factory, admin, implementation)
+}
+
+#[test]
+fn predicted_address_is_stable_across_repeated_calls() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_id, factory, _admin, implementation) = bare_factory(&env);
+    let owner = Address::generate(&env);
+
+    let first = factory.predict_vault_address(&owner, &seed(&env, 1), &implementation);
+    for _ in 0..3 {
+        assert_eq!(
+            factory.predict_vault_address(&owner, &seed(&env, 1), &implementation),
+            first
+        );
+    }
+}
+
+#[test]
+fn predicted_address_ignores_ledger_and_factory_configuration() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.sequence_number = 10);
+    let (_id, factory, admin, implementation) = bare_factory(&env);
+    let owner = Address::generate(&env);
+
+    let before = factory.predict_vault_address(&owner, &seed(&env, 1), &implementation);
+
+    // Mutable configuration and time must not move the address.
+    env.ledger().with_mut(|li| li.sequence_number = 99_999);
+    factory.set_default_implementation(&admin, &Address::generate(&env));
+    factory.approve_implementation(&admin, &BytesN::from_array(&env, &[3u8; 32]));
+    factory.set_admin(&admin, &Address::generate(&env));
+
+    assert_eq!(
+        factory.predict_vault_address(&owner, &seed(&env, 1), &implementation),
+        before
+    );
+}
+
+#[test]
+fn predicted_address_does_not_depend_on_who_asks_or_call_order() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_id, factory, _admin, implementation) = bare_factory(&env);
+    let owner_a = Address::generate(&env);
+    let owner_b = Address::generate(&env);
+
+    let a_then_b = (
+        factory.predict_vault_address(&owner_a, &seed(&env, 1), &implementation),
+        factory.predict_vault_address(&owner_b, &seed(&env, 1), &implementation),
+    );
+    let b_then_a = (
+        factory.predict_vault_address(&owner_b, &seed(&env, 1), &implementation),
+        factory.predict_vault_address(&owner_a, &seed(&env, 1), &implementation),
+    );
+    assert_eq!(a_then_b.0, b_then_a.1);
+    assert_eq!(a_then_b.1, b_then_a.0);
+}
+
+#[test]
+fn predicted_address_changes_with_owner_seed_or_implementation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_id, factory, _admin, implementation) = bare_factory(&env);
+    let owner = Address::generate(&env);
+    let other_impl = Address::generate(&env);
+
+    let base = factory.predict_vault_address(&owner, &seed(&env, 1), &implementation);
+    assert_ne!(
+        base,
+        factory.predict_vault_address(&Address::generate(&env), &seed(&env, 1), &implementation)
+    );
+    assert_ne!(
+        base,
+        factory.predict_vault_address(&owner, &seed(&env, 2), &implementation)
+    );
+    assert_ne!(
+        base,
+        factory.predict_vault_address(&owner, &seed(&env, 1), &other_impl)
+    );
+}
+
+#[test]
+fn predicted_address_is_scoped_to_the_factory() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_id_a, factory_a, _a, implementation) = bare_factory(&env);
+    let (_id_b, factory_b, _b, _) = bare_factory(&env);
+    let owner = Address::generate(&env);
+
+    assert_ne!(
+        factory_a.predict_vault_address(&owner, &seed(&env, 1), &implementation),
+        factory_b.predict_vault_address(&owner, &seed(&env, 1), &implementation),
+        "the same triple on two factories must not collide"
+    );
+}
+
+#[test]
+fn prediction_is_consistent_with_the_published_salt() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (factory_id, factory, _admin, implementation) = bare_factory(&env);
+    let owner = Address::generate(&env);
+
+    let salt = factory.vault_salt(&owner, &seed(&env, 4), &implementation);
+    let expected = env.as_contract(&factory_id, || {
+        env.deployer().with_current_contract(salt).deployed_address()
+    });
+    assert_eq!(
+        factory.predict_vault_address(&owner, &seed(&env, 4), &implementation),
+        expected
+    );
+}

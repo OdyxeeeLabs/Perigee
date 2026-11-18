@@ -392,3 +392,237 @@ fn the_remaining_delay_counts_down_and_reaches_zero() {
 
     assert_eq!(client.unpause_delay_remaining(), 0);
 }
+// ── #861 — operation × pause-state matrix ────────────────────────────────────
+
+const ALL_OPERATIONS: [(Operation, u32); 5] = [
+    (Operation::Deposit, OP_DEPOSIT),
+    (Operation::Withdraw, OP_WITHDRAW),
+    (Operation::Rotate, crate::OP_ROTATE),
+    (Operation::FeeChange, OP_FEE_CHANGE),
+    (Operation::Upgrade, OP_UPGRADE),
+];
+
+/// Assert `is_paused` for every operation against the set of bits expected to be
+/// blocked.
+fn assert_blocked(client: &VaultGuardClient, blocked_mask: u32, label: &str) {
+    for (op, bit) in ALL_OPERATIONS.iter() {
+        let expected = blocked_mask & bit != 0;
+        assert_eq!(
+            client.is_paused(op),
+            expected,
+            "{label}: operation bit {bit} should be paused={expected}"
+        );
+    }
+}
+
+#[test]
+fn matrix_nothing_paused_blocks_nothing() {
+    let (_env, _cid, client, _admin, _guardian) = setup!();
+    assert_blocked(&client, 0, "fresh guard");
+}
+
+#[test]
+fn matrix_each_single_operation_pause_blocks_only_that_operation() {
+    for (_, bit) in ALL_OPERATIONS.iter() {
+        let (_env, _cid, client, admin, _guardian) = setup!();
+        client.pause_operations(&admin, bit);
+        assert_blocked(&client, *bit, "single-operation pause");
+        assert!(!client.is_globally_paused());
+        assert_eq!(client.paused_mask(), *bit);
+    }
+}
+
+#[test]
+fn matrix_withdraw_stays_available_unless_it_is_in_the_mask() {
+    // Every partial pause that does not name withdrawals leaves the safe exit
+    // open. Enumerate all 2^5 masks rather than sampling.
+    for mask in 0..=OP_ALL {
+        let (_env, _cid, client, admin, _guardian) = setup!();
+        if mask != 0 {
+            client.pause_operations(&admin, &mask);
+        }
+        assert_blocked(&client, mask, "partial mask");
+        assert_eq!(
+            client.is_paused(&Operation::Withdraw),
+            mask & OP_WITHDRAW != 0
+        );
+    }
+}
+
+#[test]
+fn matrix_global_pause_blocks_every_operation_whatever_the_mask() {
+    for mask in 0..=OP_ALL {
+        let (_env, _cid, client, admin, _guardian) = setup!();
+        if mask != 0 {
+            client.pause_operations(&admin, &mask);
+        }
+        client.pause(&admin);
+        assert_blocked(&client, OP_ALL, "global pause over mask");
+        assert_eq!(client.paused_mask(), OP_ALL);
+    }
+}
+
+#[test]
+fn matrix_resume_restores_exactly_the_resumed_operations() {
+    let (_env, _cid, client, admin, _guardian) = setup!();
+    client.pause_operations(&admin, &(OP_DEPOSIT | OP_WITHDRAW | OP_UPGRADE));
+    client.resume_operations(&admin, &OP_WITHDRAW);
+    assert_blocked(&client, OP_DEPOSIT | OP_UPGRADE, "after resuming withdraw");
+
+    client.resume_operations(&admin, &(OP_DEPOSIT | OP_UPGRADE));
+    assert_blocked(&client, 0, "after resuming everything");
+}
+
+#[test]
+fn matrix_lifting_the_global_pause_returns_to_the_partial_mask() {
+    let (env, _cid, client, admin, _guardian) = setup!();
+    client.pause_operations(&admin, &OP_DEPOSIT);
+    client.pause(&admin);
+    assert_blocked(&client, OP_ALL, "global over partial");
+
+    env.ledger()
+        .with_mut(|li| li.sequence_number += UNPAUSE_DELAY_LEDGERS);
+    client.unpause(&admin);
+
+    // The partial pause was never cleared, so deposits are still blocked and
+    // everything else is available again.
+    assert!(!client.is_globally_paused());
+    assert_blocked(&client, OP_DEPOSIT, "after unpause");
+}
+
+#[test]
+fn matrix_a_trip_blocks_every_operation_until_unpaused() {
+    let (env, _cid, client, _admin, guardian) = setup!();
+    client.trip(&guardian);
+    assert_blocked(&client, OP_ALL, "tripped");
+
+    env.ledger()
+        .with_mut(|li| li.sequence_number += UNPAUSE_DELAY_LEDGERS);
+    client.unpause(&guardian);
+    assert_blocked(&client, 0, "after unpause");
+}
+
+// ── #862 — timelocked unpause boundary ───────────────────────────────────────
+
+#[test]
+fn unpause_one_ledger_before_the_threshold_fails_and_keeps_the_pause() {
+    let (env, _cid, client, admin, _guardian) = setup!();
+    client.pause(&admin);
+    let before = client.state();
+
+    env.ledger()
+        .with_mut(|li| li.sequence_number += UNPAUSE_DELAY_LEDGERS - 1);
+    assert_eq!(client.try_unpause(&admin), Err(Ok(Error::UnpauseTooEarly)));
+
+    // Nothing moved: still paused, same pause start, one ledger left to wait.
+    assert_eq!(client.state(), before);
+    assert!(client.is_globally_paused());
+    assert_eq!(client.unpause_delay_remaining(), 1);
+}
+
+#[test]
+fn unpause_exactly_at_the_threshold_succeeds() {
+    // Documented semantics: the delay is inclusive. `elapsed >= UNPAUSE_DELAY_LEDGERS`.
+    let (env, _cid, client, admin, _guardian) = setup!();
+    client.pause(&admin);
+    env.ledger()
+        .with_mut(|li| li.sequence_number += UNPAUSE_DELAY_LEDGERS);
+
+    assert_eq!(client.unpause_delay_remaining(), 0);
+    client.unpause(&admin);
+    assert!(!client.is_globally_paused());
+    assert_eq!(client.state().paused_at, 0);
+}
+
+#[test]
+fn unpause_after_the_threshold_succeeds() {
+    let (env, _cid, client, admin, _guardian) = setup!();
+    client.pause(&admin);
+    env.ledger()
+        .with_mut(|li| li.sequence_number += UNPAUSE_DELAY_LEDGERS + 500);
+
+    client.unpause(&admin);
+    assert!(!client.is_globally_paused());
+}
+
+#[test]
+fn repeated_early_calls_cannot_short_circuit_the_delay() {
+    let (env, _cid, client, admin, _guardian) = setup!();
+    client.pause(&admin);
+
+    // Hammering the call every few thousand ledgers never shortens the window,
+    // because a failed attempt writes nothing.
+    for _ in 0..4 {
+        env.ledger()
+            .with_mut(|li| li.sequence_number += UNPAUSE_DELAY_LEDGERS / 5);
+        assert_eq!(client.try_unpause(&admin), Err(Ok(Error::UnpauseTooEarly)));
+        assert!(client.is_globally_paused());
+    }
+    // 4/5 of the window has passed. One more early attempt still fails...
+    assert!(client.unpause_delay_remaining() > 0);
+    // ...and the clock is still anchored to the original pause ledger.
+    env.ledger()
+        .with_mut(|li| li.sequence_number += UNPAUSE_DELAY_LEDGERS / 5 + 1);
+    client.unpause(&admin);
+    assert!(!client.is_globally_paused());
+}
+
+#[test]
+fn unpause_is_not_repeatable_once_completed() {
+    let (env, _cid, client, admin, _guardian) = setup!();
+    client.pause(&admin);
+    env.ledger()
+        .with_mut(|li| li.sequence_number += UNPAUSE_DELAY_LEDGERS);
+    client.unpause(&admin);
+    assert_eq!(client.try_unpause(&admin), Err(Ok(Error::NotPaused)));
+}
+
+#[test]
+fn a_new_pause_restarts_the_delay_from_the_new_ledger() {
+    let (env, _cid, client, admin, _guardian) = setup!();
+    client.pause(&admin);
+    env.ledger()
+        .with_mut(|li| li.sequence_number += UNPAUSE_DELAY_LEDGERS);
+    client.unpause(&admin);
+
+    // Re-pause later: the old elapsed time must not count towards the new pause.
+    env.ledger().with_mut(|li| li.sequence_number += 10);
+    client.pause(&admin);
+    assert_eq!(client.unpause_delay_remaining(), UNPAUSE_DELAY_LEDGERS);
+    assert_eq!(client.try_unpause(&admin), Err(Ok(Error::UnpauseTooEarly)));
+}
+
+#[test]
+fn pause_and_unpause_events_record_the_start_ledger_and_elapsed_time() {
+    use soroban_sdk::{symbol_short, testutils::Events, vec, IntoVal};
+
+    let (env, cid, client, admin, _guardian) = setup!();
+    client.pause(&admin);
+    let start = env.ledger().sequence();
+    assert_eq!(
+        env.events().all(),
+        vec![
+            &env,
+            (
+                cid.clone(),
+                (symbol_short!("pause"),).into_val(&env),
+                start.into_val(&env)
+            )
+        ]
+    );
+
+    env.ledger()
+        .with_mut(|li| li.sequence_number += UNPAUSE_DELAY_LEDGERS + 3);
+    client.unpause(&admin);
+    assert_eq!(
+        env.events().all(),
+        vec![
+            &env,
+            (
+                cid,
+                (symbol_short!("unpause"),).into_val(&env),
+                (UNPAUSE_DELAY_LEDGERS + 3).into_val(&env)
+            )
+        ]
+    );
+}

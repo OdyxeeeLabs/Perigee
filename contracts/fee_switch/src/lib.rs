@@ -196,6 +196,12 @@ impl FeeSwitch {
         require_admin(&env, &admin)?;
         validate_config(&config)?;
         env.storage().instance().set(&DataKey::Config, &config);
+        // Announce the split that applies to every accrual from now on so
+        // indexers can tell which configuration was active for a given collect.
+        env.events().publish(
+            (Symbol::new(&env, "fee_switch"), Symbol::new(&env, "config")),
+            (config.treasury_bps, config.stakers_bps, config.buyback_bps),
+        );
         Ok(())
     }
 

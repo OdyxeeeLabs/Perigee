@@ -501,16 +501,31 @@ pub fn create_vault(
         Ok(proxy)
     }
 
-/// The salt `create_vault` will use for a given triple.
-///
-/// Exposed so an integrator can compute the address off-chain before the vault
-exists, rather than only learning the salt afterwards. for a given triple.
+    /// The salt `create_vault` will use for a given triple.
     ///
     /// Exposed so an integrator can compute the address off-chain before the
     /// vault exists, rather than only learning the salt afterwards.
     pub fn vault_salt(env: Env, owner: Address, seed: BytesN<32>, implementation: Address) -> BytesN<32> {
         env.crypto()
             .sha256(&(owner, seed, implementation).to_xdr(&env))
+    }
+
+    /// The address `create_vault` will deploy to for `(owner, seed, implementation)`.
+    ///
+    /// Pure function of the factory address and the three arguments: it reads no
+    /// storage and does not depend on the caller, the ledger, the admin, the
+    /// default implementation or the approved-WASM list. `proxy_wasm` is
+    /// deliberately not an input — the salt does not bind it.
+    pub fn predict_vault_address(
+        env: Env,
+        owner: Address,
+        seed: BytesN<32>,
+        implementation: Address,
+    ) -> Address {
+        let salt = env
+            .crypto()
+            .sha256(&(owner, seed, implementation).to_xdr(&env));
+        env.deployer().with_current_contract(salt).deployed_address()
     }
 
     /// How many vaults the factory has created.
