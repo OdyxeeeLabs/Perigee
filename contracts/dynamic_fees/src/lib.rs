@@ -137,6 +137,9 @@ pub fn compute_dynamic_fee(config: &DynamicFeeConfig, signals: &FeeSignals) -> R
         .saturating_add(utilization_component)
         .saturating_add(volatility_component);
 
+    // Intermediate sums are u64 and can exceed u32::MAX for extreme inputs; saturate
+    // before any narrowing cast so a huge value can never wrap to a small fee.
+    fee = fee.min(u32::MAX as u64);
     let mut after_competitor = fee as u32;
     if signals.competitor_enabled {
         let comp = signals.competitor_fee_bps as u64;
@@ -147,6 +150,7 @@ pub fn compute_dynamic_fee(config: &DynamicFeeConfig, signals: &FeeSignals) -> R
         } else if fee > ceil {
             fee = ceil;
         }
+        fee = fee.min(u32::MAX as u64);
         after_competitor = fee as u32;
     }
 
@@ -154,8 +158,8 @@ pub fn compute_dynamic_fee(config: &DynamicFeeConfig, signals: &FeeSignals) -> R
 
     Ok(FeeQuote {
         fee_bps,
-        utilization_component: utilization_component as u32,
-        volatility_component: volatility_component as u32,
+        utilization_component: utilization_component.min(u32::MAX as u64) as u32,
+        volatility_component: volatility_component.min(u32::MAX as u64) as u32,
         after_competitor_clamp: after_competitor,
     })
 }

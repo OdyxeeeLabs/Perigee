@@ -40,6 +40,10 @@ pub enum Error {
     InsufficientReserves = 9,
     MathOverflow = 10,
     NothingToSweep = 11,
+    /// The quote's `expiry_ledger` is in the past.
+    QuoteExpired = 12,
+    /// Settlement would mint fewer tokens than the caller's `min_tokens_out`.
+    SlippageExceeded = 13,
 }
 
 #[contracttype]
@@ -192,9 +196,56 @@ impl ProtocolOwnedLiquidity {
         deposit_value: i128,
         token_price: i128,
     ) -> Result<(u64, i128), Error> {
+        Self::bond_inner(&env, bonder, deposit_value, token_price)
+    }
+
+    /// Tokens a bond of `deposit_value` at `token_price` would settle for under
+    /// the current configuration. Uses exactly the pricing `bond` settles with.
+    pub fn quote_bond(env: Env, deposit_value: i128, token_price: i128) -> Result<i128, Error> {
+        let config = load_config(&env)?;
+        quote_bond_tokens(deposit_value, token_price, config.discount_bps)
+    }
+
+    /// Bond against a quote with an expiry and a slippage bound.
+    ///
+    /// Fails with [`Error::QuoteExpired`] when the current ledger is past
+    /// `expiry_ledger` (the quote is valid *through* that ledger), and with
+    /// [`Error::SlippageExceeded`] when settlement would mint fewer than
+    /// `min_tokens_out`. Both checks run before any state is written.
+    pub fn bond_with_quote(
+        env: Env,
+        bonder: Address,
+        deposit_value: i128,
+        token_price: i128,
+        min_tokens_out: i128,
+        expiry_ledger: u32,
+    ) -> Result<(u64, i128), Error> {
+        if env.ledger().sequence() > expiry_ledger {
+            return Err(Error::QuoteExpired);
+        }
+        let config = load_config(&env)?;
+        let tokens = quote_bond_tokens(deposit_value, token_price, config.discount_bps)?;
+        if tokens < min_tokens_out {
+            return Err(Error::SlippageExceeded);
+        }
+        Self::bond_inner(&env, bonder, deposit_value, token_price)
+    }
+
+    fn bond_inner(
+        env: &Env,
+        bonder: Address,
+        deposit_value: i128,
+        token_price: i128,
+    ) -> Result<(u64, i128), Error> {
+        let env = env.clone();
         bonder.require_auth();
         let config = load_config(&env)?;
         let tokens = quote_bond_tokens(deposit_value, token_price, config.discount_bps)?;
+        // A deposit too small to buy a single token unit would open a zero-value
+        // claim; reject it instead.
+        if tokens <= 0 {
+            return Err(Error::InvalidAmount);
+        }
         let mut state = load_state(&env);
 
         let next_liability = state
