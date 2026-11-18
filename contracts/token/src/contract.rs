@@ -1,7 +1,9 @@
 use crate::admin::{has_administrator, read_administrator, write_administrator};
 use crate::allowance::{read_allowance, spend_allowance, write_allowance};
 use crate::balance::{read_balance, receive_balance, spend_balance};
-use crate::metadata::{read_decimal, read_name, read_symbol, write_metadata};
+use crate::metadata::{
+    read_decimal, read_name, read_symbol, validate_metadata, write_metadata,
+};
 use crate::storage_types::UriInfo;
 use crate::uri;
 use emergency_guard::{EmergencyGuard, GuardError, PauseType};
@@ -59,6 +61,7 @@ impl TokenTrait for Token {
         if has_administrator(&e) {
             panic!("already initialized");
         }
+        validate_metadata(&name, &symbol);
         write_administrator(&e, &admin);
         EmergencyGuard::initialize(e.clone(), vec![&e, admin.clone()], 1)
             .expect("failed to initialize emergency guard");
