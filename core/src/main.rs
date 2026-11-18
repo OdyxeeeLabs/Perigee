@@ -62,6 +62,7 @@ mod simulation;
 mod simulation_service;
 mod signed_receipt;
 mod stellar_service;
+mod transaction_outcome;
 mod two_phase_commit;
 pub mod vault_store;
 mod manager_store;
@@ -1009,6 +1010,10 @@ impl Validate for AnalyzeRequest {
 
 #[derive(Serialize, ToSchema)]
 pub struct ResourceReport {
+    /// Always `simulated` (API-35): this report is a read-only preview and
+    /// never reflects a confirmed ledger change. See
+    /// `crate::transaction_outcome::TransactionStatus`.
+    pub status: crate::transaction_outcome::TransactionStatus,
     /// CPU instructions consumed
     #[schema(example = 1500)]
     pub cpu_instructions: u64,
@@ -1338,6 +1343,7 @@ fn to_report(
     let insights_report = insights_engine.analyze(&result.resources);
 
     ResourceReport {
+        status: crate::transaction_outcome::TransactionStatus::Simulated,
         cpu_instructions: result.resources.cpu_instructions,
         ram_bytes: result.resources.ram_bytes,
         ledger_read_bytes: result.resources.ledger_read_bytes,
@@ -1475,7 +1481,7 @@ async fn analyze(
     path = "/analyze/wasm",
     request_body = AnalyzeWasmRequest,
     responses(
-        (status = 200, description = "Resource analysis successful", body = ResourceReport),
+        (status = 200, description = "Resource analysis successful. `status` is always `simulated`: this is a read-only preview and never a confirmed ledger change.", body = ResourceReport),
         (status = 400, description = "Invalid base64 or WASM data"),
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Analysis failed")
@@ -2397,6 +2403,14 @@ impl utoipa::Modify for SecurityAddon {
         reconciliation::ReconcileRequest, reconciliation::ReconcileResponse,
         reconciliation::ReconciliationReport, reconciliation::ListReportsQuery,
         crate::jobs::Job, crate::jobs::JobStatus, crate::jobs::JobType,
+        // API-35: distinct simulation vs. submission/invocation outcome
+        // types, so a client can tell preview vs. confirmed state change
+        // apart without parsing free-form messages.
+        crate::transaction_outcome::TransactionStatus,
+        crate::transaction_outcome::SimulationOutcome,
+        crate::transaction_outcome::SubmissionAcknowledgement,
+        crate::transaction_outcome::PendingConfirmation,
+        crate::transaction_outcome::FinalizedOutcome,
         // Registered so the public error-code catalog is visible in the
         // served OpenAPI document, not just in `docs/ERROR_VARIANTS.md`.
         // `error_catalog_sync_tests` (below) fails CI if this ever drifts
