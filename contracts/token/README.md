@@ -176,6 +176,21 @@ The token contract stores:
 - **Admin**: Current mint administrator (`DataKey::Admin`)
 - **Guard State**: `GuardDataKey::{PauseState, Admins, SignatureThreshold}` in instance storage
 
+## Metadata Field Limits
+
+Metadata values are validated before they are written. All byte lengths below
+measure UTF-8 bytes; Soroban `String` values must contain valid UTF-8.
+
+| Field | Limit | Encoding / empty behavior |
+| --- | --- | --- |
+| `name` | 32 bytes, inclusive | Valid UTF-8 with no control characters; required and non-empty |
+| `symbol` | 12 bytes, inclusive | Valid UTF-8 with no control characters; required and non-empty |
+| `metadata URI` | 512 bytes, inclusive | Printable ASCII only; supported schemes are `http://`, `https://`, and `ipfs://`; setting it empty is rejected |
+
+An absent or invalidated metadata URI reads as an empty `String`. A URI that
+exceeds the limit, uses an unsupported scheme, or contains whitespace,
+non-printable bytes, or non-ASCII bytes is rejected before the cache is changed.
+
 ## Security Considerations
 
 1. **Authorization**: Sensitive operations require guard admin authentication via `require_auth` (single-admin pause) or `check_multi_sig` (multi-sig actions)
