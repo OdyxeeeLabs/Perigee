@@ -66,6 +66,7 @@ mod transaction_outcome;
 mod two_phase_commit;
 pub mod vault_store;
 mod manager_store;
+mod wasm_analysis_job;
 mod wasm_branch_analysis;
 mod ws;
 
