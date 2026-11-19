@@ -145,6 +145,10 @@ function AssetBar({
     "bg-rose-500",
   ];
 
+  if (breakdown.length === 0 || total <= 0) {
+    return <p className="py-6 text-center text-xs text-slate-500">No assets to display yet.</p>;
+  }
+
   return (
     <div>
       {/* Stacked bar */}
@@ -292,6 +296,7 @@ export default function PortfolioOverviewPage() {
   );
 
   const assetBreakdown = useMemo(() => getAssetBreakdown(vaults), [vaults]);
+  const hasVaults = vaults.length > 0;
 
   const createdInRange = useMemo(() => {
     if (!from) return vaults.length;
@@ -396,7 +401,7 @@ export default function PortfolioOverviewPage() {
             />
             <StatCard
               label="Best APY"
-              value={`${Math.max(...vaults.map((v) => v.apy ?? 0)).toFixed(2)}%`}
+              value={`${(hasVaults ? Math.max(...vaults.map((v) => v.apy ?? 0)) : 0).toFixed(2)}%`}
               sub={topVaults[0]?.name ?? "—"}
               icon={<TrendingUp size={16} />}
               trend="up"
@@ -457,6 +462,17 @@ export default function PortfolioOverviewPage() {
                 <TopVaultRow key={vault.id} vault={vault} locale={locale} />
               ))}
             </div>
+            {hasVaults ? (
+              <div className="space-y-2">
+                {topVaults.map((vault) => (
+                  <TopVaultRow key={vault.id} vault={vault} />
+                ))}
+              </div>
+            ) : (
+              <p role="status" className="py-6 text-center text-xs text-slate-500">
+                No vaults to analyse yet.
+              </p>
+            )}
           </section>
         </div>
       </main>

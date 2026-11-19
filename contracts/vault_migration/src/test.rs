@@ -272,3 +272,50 @@ fn invalid_legacy_state_does_not_advance_the_version() {
     );
     assert_eq!(setup.client().status(&77, &setup.owner).current_version, 1);
 }
+
+// ── #849 — initialization state ─────────────────────────────────────────────
+
+#[test]
+fn registry_initialization_sets_admin_once() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(VaultMigration, ());
+    let client = VaultMigrationClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_admin(), Err(Ok(Error::NotInitialized)));
+
+    client.initialize(&admin);
+
+    assert_eq!(client.admin(), admin);
+    assert_eq!(
+        client.try_initialize(&admin),
+        Err(Ok(Error::AlreadyInitialized))
+    );
+}
+
+#[test]
+fn calls_before_initialization_are_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let adapter = Address::generate(&env);
+    let contract_id = env.register(VaultMigration, ());
+    let client = VaultMigrationClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_admin(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(
+        client.try_latest_version(&0),
+        Err(Ok(Error::NotInitialized))
+    );
+    assert_eq!(
+        client.try_register_vault(&admin, &0, &1, &adapter),
+        Err(Ok(Error::NotInitialized))
+    );
+    assert_eq!(
+        client.try_register_version(&admin, &0, &1, &2, &adapter),
+        Err(Ok(Error::NotInitialized))
+    );
+}

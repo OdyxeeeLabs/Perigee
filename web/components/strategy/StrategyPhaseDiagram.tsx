@@ -1,6 +1,7 @@
 import Mermaid from "@/components/Mermaid";
 
 import { StrategyPhaseTable } from "./StrategyPhaseTable";
+import { StrategyRiskExplanations } from "./StrategyRiskExplanations";
 
 export function StrategyPhaseDiagram() {
   return (
@@ -37,6 +38,7 @@ export function StrategyPhaseDiagram() {
         </p>
 
         <StrategyPhaseTable />
+        <StrategyRiskExplanations />
       </div>
     </section>
   );

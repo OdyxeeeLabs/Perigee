@@ -29,6 +29,8 @@ import {
 import { SEO } from "../../components/SEO";
 import { useDateRange } from "../../hooks/useDateRange";
 import { DATE_RANGE_PRESETS, dateRangeToApiParams } from "../../lib/dateRange";
+import { AnalyticsSection } from "../../components/analytics/AnalyticsSection";
+import { useAnalyticsSection } from "../../hooks/useAnalyticsSection";
 import {
   trackTelemetryEvent,
   trackFunnelEvent,
@@ -39,6 +41,14 @@ import {
 } from "../../lib/telemetry";
 import type { TelemetrySummary } from "../api/telemetry";
 
+async function loadTelemetry(timeframe: string): Promise<TelemetrySummary> {
+  const res = await fetch(`/api/telemetry?timeframe=${timeframe}`);
+  if (!res.ok) {
+    throw new Error(`Analytics request failed with status ${res.status}`);
+  }
+  return (await res.json()) as TelemetrySummary;
+}
+
 export default function AnalyticsDashboardPage() {
   const [summary, setSummary] = useState<TelemetrySummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -47,6 +57,7 @@ export default function AnalyticsDashboardPage() {
     setRange: setTimeframe,
     label: rangeLabel,
   } = useDateRange();
+  const [timeframe, setTimeframe] = useState<"24h" | "7d" | "30d" | "all">("24h");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [testEventSent, setTestEventSent] = useState(false);
   const [optOutStatus, setOptOutStatus] = useState<boolean | null>(null);
@@ -68,12 +79,41 @@ export default function AnalyticsDashboardPage() {
       setLoading(false);
     }
   }, [timeframe]);
+  const overview = useAnalyticsSection<TelemetrySummary>(
+    () => loadTelemetry(timeframe),
+    timeframe,
+  );
+  const features = useAnalyticsSection<TelemetrySummary["topFeatures"]>(
+    () => loadTelemetry(timeframe).then((data) => data.topFeatures),
+    timeframe,
+  );
+  const errors = useAnalyticsSection<TelemetrySummary["recentErrors"]>(
+    () => loadTelemetry(timeframe).then((data) => data.recentErrors),
+    timeframe,
+  );
+  const events = useAnalyticsSection<TelemetrySummary["recentEvents"]>(
+    () => loadTelemetry(timeframe).then((data) => data.recentEvents),
+    timeframe,
+  );
+
+  const retryAll = useCallback(() => {
+    overview.retry();
+    features.retry();
+    errors.retry();
+    events.retry();
+  }, [overview.retry, features.retry, errors.retry, events.retry]);
+
+  const isRefreshing = [
+    overview.state.status,
+    features.state.status,
+    errors.state.status,
+    events.state.status,
+  ].includes("loading");
 
   useEffect(() => {
-    fetchTelemetryData();
     setOptOutStatus(getTelemetryConsent());
     setIsDnt(isDoNotTrackEnabled());
-  }, [fetchTelemetryData]);
+  }, []);
 
   const handleTriggerTestEvent = () => {
     // Send a sample funnel flow to verify pipeline end-to-end
@@ -89,7 +129,7 @@ export default function AnalyticsDashboardPage() {
     setTestEventSent(true);
     setTimeout(() => {
       setTestEventSent(false);
-      fetchTelemetryData();
+      retryAll();
     }, 800);
   };
 
@@ -101,10 +141,11 @@ export default function AnalyticsDashboardPage() {
       optInTelemetry({ performance: true, errors: true, analytics: true });
       setOptOutStatus(true);
     }
-    fetchTelemetryData();
+    retryAll();
   };
 
   const handleExportData = () => {
+    const summary = overview.state.data;
     if (!summary) return;
     const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(
       JSON.stringify(summary, null, 2),
@@ -117,7 +158,7 @@ export default function AnalyticsDashboardPage() {
     downloadAnchor.remove();
   };
 
-  const funnel = summary?.funnel || {
+  const funnel = overview.state.data?.funnel || {
     walletConnect: 0,
     vaultView: 0,
     deposit: 0,
@@ -126,7 +167,7 @@ export default function AnalyticsDashboardPage() {
     overallConversionRate: 0,
   };
 
-  const filteredEvents = (summary?.recentEvents || []).filter((e) => {
+  const filteredEvents = (events.state.data || []).filter((e) => {
     if (selectedCategory === "all") return true;
     return (e.category || "feature") === selectedCategory;
   });
@@ -180,10 +221,10 @@ export default function AnalyticsDashboardPage() {
 
               <button
                 type="button"
-                onClick={fetchTelemetryData}
+                onClick={retryAll}
                 className="flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors"
               >
-                <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin text-cyan-400" : ""}`} />
+                <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin text-cyan-400" : ""}`} />
                 <span className="hidden sm:inline">Refresh</span>
               </button>
             </div>
@@ -286,6 +327,15 @@ export default function AnalyticsDashboardPage() {
           {/* ── TAB 1: OVERVIEW ──────────────────────────────────────────────── */}
           {activeTab === "overview" && (
             <div className="space-y-6">
+              <AnalyticsSection
+                title="Overview"
+                state={overview.state}
+                onRetry={overview.retry}
+                emptyLabel="No telemetry recorded yet for this timeframe."
+                testId="overview"
+              >
+                {() => (
+                  <>
               {/* KPI Cards */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
                 <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 backdrop-blur">
@@ -294,7 +344,7 @@ export default function AnalyticsDashboardPage() {
                     <Activity className="h-4 w-4 text-cyan-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-white">
-                    {summary?.sampleCount?.toLocaleString() || 0}
+                    {overview.state.data?.sampleCount?.toLocaleString() || 0}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">In-memory circular buffer</p>
                 </div>
@@ -305,7 +355,7 @@ export default function AnalyticsDashboardPage() {
                     <UserCheck className="h-4 w-4 text-emerald-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-emerald-400">
-                    {summary?.uniqueSessions?.toLocaleString() || 0}
+                    {overview.state.data?.uniqueSessions?.toLocaleString() || 0}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">Zero cookies / rotating hash</p>
                 </div>
@@ -327,7 +377,7 @@ export default function AnalyticsDashboardPage() {
                     <ShieldAlert className="h-4 w-4 text-amber-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-amber-400">
-                    {summary?.categoryCounts?.error || 0}
+                    {overview.state.data?.categoryCounts?.error || 0}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">Sanitized error traces</p>
                 </div>
@@ -338,7 +388,7 @@ export default function AnalyticsDashboardPage() {
                     <Zap className="h-4 w-4 text-emerald-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-white">
-                    {summary?.categoryCounts?.performance || 0}
+                    {overview.state.data?.categoryCounts?.performance || 0}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">LCP, INP, CLS, TTFB, Hydration</p>
                 </div>
@@ -420,78 +470,99 @@ export default function AnalyticsDashboardPage() {
                   </div>
                 </div>
               </div>
+                  </>
+                )}
+              </AnalyticsSection>
 
               {/* Feature Usage & Error Log Grid */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Feature Usage */}
-                <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-bold text-white text-base">Top Feature Usage</h3>
-                    <span className="text-xs text-slate-500">Sorted by count</span>
-                  </div>
+                <AnalyticsSection
+                  title="Feature usage"
+                  state={features.state}
+                  onRetry={features.retry}
+                  emptyLabel="No feature usage recorded yet in this timeframe."
+                  testId="features"
+                >
+                  {(topFeatures) => (
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-bold text-white text-base">Top Feature Usage</h3>
+                        <span className="text-xs text-slate-500">Sorted by count</span>
+                      </div>
 
-                  {(summary?.topFeatures || []).length === 0 ? (
-                    <div className="py-8 text-center text-xs text-slate-500">
-                      No feature usage recorded yet in this timeframe.
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {summary?.topFeatures.map((feat) => {
-                        const maxCount = summary.topFeatures[0]?.count || 1;
-                        const pct = Math.round((feat.count / maxCount) * 100);
-                        return (
-                          <div key={feat.name} className="space-y-1">
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="font-mono text-cyan-300">{feat.name}</span>
-                              <span className="font-semibold text-white">{feat.count}</span>
-                            </div>
-                            <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
-                              <div
-                                className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-500"
-                                style={{ width: `${pct}%` }}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Sanitized Error Trace Monitor */}
-                <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-bold text-white text-base">Recent Errors (Sanitized)</h3>
-                    <span className="rounded-full bg-slate-800 px-2.5 py-0.5 text-[10px] text-slate-400">
-                      Zero PII
-                    </span>
-                  </div>
-
-                  {(summary?.recentErrors || []).length === 0 ? (
-                    <div className="py-8 text-center text-xs text-emerald-400">
-                      ✓ No errors recorded in this timeframe. System healthy.
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {summary?.recentErrors.map((err, idx) => (
-                        <div
-                          key={idx}
-                          className="rounded-xl border border-red-950/60 bg-red-950/20 p-3 text-xs"
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-mono text-[11px] font-semibold text-red-300 truncate max-w-[200px]">
-                              {err.component || "Global error"}
-                            </span>
-                            <span className="rounded bg-red-900/60 px-2 py-0.5 text-[10px] text-red-200">
-                              {err.count} {err.count === 1 ? "occurrence" : "occurrences"}
-                            </span>
-                          </div>
-                          <p className="text-slate-300 font-mono text-[11px] break-all">{err.message}</p>
+                      {topFeatures.length === 0 ? (
+                        <div className="py-8 text-center text-xs text-slate-500">
+                          No feature usage recorded yet in this timeframe.
                         </div>
-                      ))}
+                      ) : (
+                        <div className="space-y-3">
+                          {topFeatures.map((feat) => {
+                            const maxCount = topFeatures[0]?.count || 1;
+                            const pct = Math.round((feat.count / maxCount) * 100);
+                            return (
+                              <div key={feat.name} className="space-y-1">
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="font-mono text-cyan-300">{feat.name}</span>
+                                  <span className="font-semibold text-white">{feat.count}</span>
+                                </div>
+                                <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-500"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
+                </AnalyticsSection>
+
+                <AnalyticsSection
+                  title="Recent errors"
+                  state={errors.state}
+                  onRetry={errors.retry}
+                  emptyLabel="No errors recorded in this timeframe. System healthy."
+                  testId="errors"
+                >
+                  {(recentErrors) => (
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-bold text-white text-base">Recent Errors (Sanitized)</h3>
+                        <span className="rounded-full bg-slate-800 px-2.5 py-0.5 text-[10px] text-slate-400">
+                          Zero PII
+                        </span>
+                      </div>
+
+                      {recentErrors.length === 0 ? (
+                        <div className="py-8 text-center text-xs text-emerald-400">
+                          ✓ No errors recorded in this timeframe. System healthy.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {recentErrors.map((err, idx) => (
+                            <div
+                              key={idx}
+                              className="rounded-xl border border-red-950/60 bg-red-950/20 p-3 text-xs"
+                            >
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="font-mono text-[11px] font-semibold text-red-300 truncate max-w-[200px]">
+                                  {err.component || "Global error"}
+                                </span>
+                                <span className="rounded bg-red-900/60 px-2 py-0.5 text-[10px] text-red-200">
+                                  {err.count} {err.count === 1 ? "occurrence" : "occurrences"}
+                                </span>
+                              </div>
+                              <p className="text-slate-300 font-mono text-[11px] break-all">{err.message}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </AnalyticsSection>
               </div>
             </div>
           )}
@@ -615,7 +686,14 @@ export default function AnalyticsDashboardPage() {
                 ))}
               </div>
 
-              {/* Event Stream Table */}
+              <AnalyticsSection
+                title="Event stream"
+                state={events.state}
+                onRetry={events.retry}
+                emptyLabel="No events recorded yet for this timeframe."
+                testId="events"
+              >
+                {() => (
               <div className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden backdrop-blur">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
@@ -681,6 +759,8 @@ export default function AnalyticsDashboardPage() {
                   </table>
                 </div>
               </div>
+                )}
+              </AnalyticsSection>
             </div>
           )}
 

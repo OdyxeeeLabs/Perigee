@@ -7,9 +7,11 @@ import { ConnectButton } from "../../components/ConnectButton";
 import { SEO } from "../../components/SEO";
 import { Button } from "../../components/ui/Button";
 import { LiveStatus } from "../../components/LiveRegion";
+import OnboardingChecklist from "../../components/manager/OnboardingChecklist";
 import { useWalletStore } from "../../context/WalletContext";
 import { managerService } from "../../lib/api";
 import { shallow } from "../../lib/createStore";
+import type { OnboardingStatus } from "../../lib/onboardingChecklist";
 
 type Step = "connect" | "register" | "submitted" | "status";
 
@@ -23,6 +25,10 @@ export default function ManagerOnboarding() {
   const [kycRef, setKycRef] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // WEB-20 (#821): progress comes from the manager status API, never from the
+  // local form. Initial value is the documented unregistered lifecycle state.
+  const [onboardingStatus, setOnboardingStatus] =
+    useState<OnboardingStatus>("unregistered");
   const [managerRecord, setManagerRecord] = useState<Awaited<
     ReturnType<typeof managerService.register>
   > | null>(null);
@@ -78,6 +84,7 @@ export default function ManagerOnboarding() {
     try {
       const status = await managerService.checkStatus(addr);
       if (status.status === "approved") {
+        setOnboardingStatus("approved");
         setManagerRecord({
           id: status.id,
           stellar_address: addr,
@@ -91,14 +98,20 @@ export default function ManagerOnboarding() {
         });
         setStep("status");
       } else if (status.status === "pending") {
+        setOnboardingStatus("pending");
         setStep("submitted");
       } else if (status.status === "rejected") {
+        setOnboardingStatus("rejected");
         setError(t("onboarding.rejectedMessage"));
         setStep("status");
       } else {
+        setOnboardingStatus("unregistered");
         setStep("register");
       }
     } catch {
+      // An API failure is not a lifecycle state. Keep the checklist at the
+      // initial state and surface it as an error, never as approval.
+      setOnboardingStatus("unregistered");
       setStep("register");
     }
   }
@@ -120,6 +133,7 @@ export default function ManagerOnboarding() {
         kyc_document_ref: kycRef.trim(),
       });
       setManagerRecord(record);
+      setOnboardingStatus("pending");
       setStep("submitted");
       if (typeof window !== "undefined") {
         sessionStorage.removeItem("onboarding_draft");
@@ -268,16 +282,24 @@ export default function ManagerOnboarding() {
             {step === "status" && (
               <div className="space-y-4">
                 {error ? (
-                  <div className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-400">
+                  <div className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-400" role="alert">
                     {error}
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-green-800 bg-green-950/50 px-4 py-3 text-sm text-green-400">
-                    {t("onboarding.approvedMessage")}
-                  </div>
+                  onboardingStatus === "approved" && (
+                    <div className="rounded-lg border border-green-800 bg-green-950/50 px-4 py-3 text-sm text-green-400">
+                      {t("onboarding.approvedMessage")}
+                    </div>
+                  )
                 )}
               </div>
             )}
+
+            <OnboardingChecklist
+              status={onboardingStatus}
+              walletConnected={Boolean(address)}
+              error={error}
+            />
 
             <div className="mt-8 border-t border-slate-800 pt-4">
               <Button variant="link" onClick={() => router.push("/")}>

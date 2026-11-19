@@ -12,6 +12,8 @@ export interface ServiceWorkerCallbacks {
   /** Failed mutations were queued (offline) or replayed (back online). */
   onMutationQueued?: () => void;
   onMutationsReplayed?: (count: number) => void;
+  /** A signing/mutation request was blocked while offline (never submitted). */
+  onOfflineActionBlocked?: (message: string) => void;
 }
 
 export function isServiceWorkerSupported(): boolean {
@@ -42,9 +44,14 @@ export async function registerServiceWorker(
   });
 
   navigator.serviceWorker.addEventListener("message", (event: MessageEvent) => {
-    const data = event.data as { type?: string; count?: number } | undefined;
+    const data = event.data as { type?: string; count?: number; message?: string } | undefined;
     if (data?.type === "MUTATION_QUEUED") callbacks.onMutationQueued?.();
     if (data?.type === "MUTATIONS_REPLAYED") callbacks.onMutationsReplayed?.(data.count ?? 0);
+    if (data?.type === "OFFLINE_ACTION_BLOCKED") {
+      callbacks.onOfflineActionBlocked?.(
+        data.message ?? "You are offline. Reconnect and try again — this action was not submitted.",
+      );
+    }
   });
 
   return registration;
