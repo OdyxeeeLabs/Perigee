@@ -85,6 +85,7 @@ function SettingsPageContent() {
     validation.syncFromSettings();
     validation.clearErrors();
     setResetStatus("done");
+    announceStatus("Settings reset to defaults.");
     setTimeout(() => setResetStatus("idle"), 2000);
   };
 

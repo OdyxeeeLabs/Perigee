@@ -1,25 +1,33 @@
 import type { Metadata } from 'next';
+import { getTranslations } from 'next-intl/server';
+import AdminManagersClient from '../../../components/admin/AdminManagersClient';
 
-export const metadata: Metadata = {
-  title: 'Manager Administration | Perigee',
-  description: 'Manage white-label wealth managers on the Perigee platform.',
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations();
+  return {
+    title: t('admin.managers.directoryMetaTitle'),
+    description: t('admin.managers.directoryMetaDescription'),
+  };
+}
 
-export default function AdminManagersPage() {
+export default async function AdminManagersPage() {
+  const t = await getTranslations();
+
   return (
     <main className="p-6 max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-        Manager Administration
+        {t('admin.managers.directoryTitle')}
       </h1>
       <p className="mt-2 text-gray-600 dark:text-gray-400">
-        Manage white-label wealth managers and their client fleet allocations.
+        {t('admin.managers.directorySubtitle')}
       </p>
       {/* TODO: wire up manager list from /api/v1/admin/managers */}
       <div className="mt-6 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          No managers configured. Use the API to provision vault fleets.
+          {t('admin.managers.directoryEmpty')}
         </p>
       </div>
+      <AdminManagersClient />
     </main>
   );
 }

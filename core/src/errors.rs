@@ -1,15 +1,16 @@
 use axum::{
     async_trait,
-    extract::{FromRequest, Request},
+    extract::{rejection::JsonRejection, FromRequest, Request},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use std::env;
 use thiserror::Error;
 
-use crate::input_sanitization::{deserialize_sanitized, SanitizedJson};
+use crate::input_sanitization::{self, SanitizationError, SanitizationLimits};
 use crate::simulation::SimulationError;
 
 /// Returns `true` when `APP_ENV=production`.
@@ -258,13 +259,8 @@ impl From<SimulationError> for AppError {
             }
             SimulationError::NodeTimeout => {
                 AppError::with_code(ErrorCode::RpcTimeout, "RPC request timed out")
-
-            // Server errors (HTTP 500)
-            SimulationError::NodeTimeout => AppError::Internal("RPC request timed out".to_string()),
-            SimulationError::Cancelled => AppError::Internal("Request cancelled".to_string()),
-            SimulationError::RpcRequestFailed(msg) => {
-                AppError::Internal(format!("RPC request failed: {}", msg))
             }
+            SimulationError::Cancelled => AppError::Internal("Request cancelled".to_string()),
             SimulationError::RpcRequestFailed(msg) => {
                 AppError::with_code(ErrorCode::RpcRequestFailed, format!("RPC request failed: {}", msg))
             }
@@ -381,6 +377,52 @@ pub struct ValidatedJson<T>(pub T);
 
 pub struct ApiJson<T>(pub T);
 
+/// Parse the request body into a `Value` first and check its structure
+/// (array/object length, nesting depth — API-33) before the caller converts
+/// it into the target type `T`.
+///
+/// Running this ahead of the `T`-specific deserialization means an oversized
+/// or deeply nested payload is rejected before it is forced into business
+/// DTOs (e.g. `Vec<_>` batch fields) and long before a handler — or any
+/// DB-mutating call it makes — ever runs.
+async fn extract_checked_value<S>(req: Request, state: &S) -> Result<Value, AppError>
+where
+    S: Send + Sync,
+{
+    match Json::<Value>::from_request(req, state).await {
+        Ok(Json(value)) => {
+            input_sanitization::check_structural_limits(&value, &SanitizationLimits::from_env())
+                .map_err(structural_limit_error)?;
+            Ok(value)
+        }
+        Err(rejection) => Err(json_rejection_error(&rejection)),
+    }
+}
+
+fn value_conversion_error(error: serde_json::Error) -> AppError {
+    AppError::with_code(ErrorCode::InvalidJson, format!("Invalid JSON data: {error}"))
+}
+
+/// Maps a structural-limit violation (API-33) to the stable
+/// `ErrorCode::ValidationFailed` client error — the same code the rest of the
+/// validation pipeline (`validation_pipeline.rs`) uses for a rejected
+/// request body, so clients see one consistent code for "your request body
+/// didn't pass validation" regardless of which stage caught it.
+fn structural_limit_error(error: SanitizationError) -> AppError {
+    let message = match error {
+        SanitizationError::CollectionTooLong => format!(
+            "request contains an array or object with more than {} items",
+            SanitizationLimits::from_env().max_collection_length
+        ),
+        SanitizationError::DepthExceeded => format!(
+            "request JSON is nested more than {} levels deep",
+            SanitizationLimits::from_env().max_depth
+        ),
+        other => other.to_string(),
+    };
+    AppError::with_code(ErrorCode::ValidationFailed, message)
+}
+
 #[async_trait]
 impl<T, S> FromRequest<S> for ApiJson<T>
 where
@@ -390,10 +432,9 @@ where
     type Rejection = AppError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Json::<T>::from_request(req, state).await {
-            Ok(Json(value)) => Ok(Self(value)),
-            Err(rejection) => Err(json_rejection_error(&rejection)),
-        }
+        let value = extract_checked_value(req, state).await?;
+        let typed: T = serde_json::from_value(value).map_err(value_conversion_error)?;
+        Ok(Self(typed))
     }
 }
 
@@ -406,20 +447,13 @@ where
     type Rejection = AppError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Json::<T>::from_request(req, state).await {
-            Ok(Json(value)) => {
-                // JSON parsed successfully — now run field-level validation.
-                value
-                    .validate()
-                    .map_err(|message| AppError::with_code(ErrorCode::ValidationFailed, message))?;
-                Ok(ValidatedJson(value))
-            }
-            Err(rejection) => Err(json_rejection_error(&rejection)),
-        }
-        let SanitizedJson(value) = SanitizedJson::<serde_json::Value>::from_request(req, state).await?;
-        let value: T = deserialize_sanitized(value)?;
-        value.validate().map_err(AppError::BadRequest)?;
-        Ok(ValidatedJson(value))
+        let value = extract_checked_value(req, state).await?;
+        let typed: T = serde_json::from_value(value).map_err(value_conversion_error)?;
+        // JSON parsed successfully — now run field-level validation.
+        typed
+            .validate()
+            .map_err(|message| AppError::with_code(ErrorCode::ValidationFailed, message))?;
+        Ok(ValidatedJson(typed))
     }
 }
 
@@ -436,6 +470,19 @@ fn json_rejection_error(rejection: &JsonRejection) -> AppError {
         JsonRejection::MissingJsonContentType(_) => (
             ErrorCode::BadRequest,
             "Content-Type must be application/json".to_string(),
+        ),
+        // Axum reports an oversized body (beyond `DefaultBodyLimit` / the
+        // `Content-Length` the server enforces) as a `BytesRejection` whose
+        // own status is already `413`. Surface that precisely as
+        // `PayloadTooLarge` (API-33) instead of the generic "failed to read"
+        // code, so clients can distinguish "body too big" from a transport
+        // hiccup and retry accordingly.
+        JsonRejection::BytesRejection(e) if e.body_text().to_lowercase().contains("length limit exceeded") => (
+            ErrorCode::PayloadTooLarge,
+            format!(
+                "Request body exceeds the {} byte limit",
+                input_sanitization::max_body_bytes()
+            ),
         ),
         JsonRejection::BytesRejection(_) => (
             ErrorCode::RequestBodyReadFailed,
@@ -639,6 +686,26 @@ mod validated_json_tests {
             "message should name the failing field: {}",
             v["message"]
         );
+    }
+
+    /// API-33: an oversized array anywhere in the body is rejected by the
+    /// extractor itself — before `T`'s own fields are even looked at, and
+    /// long before a handler could run a DB-mutating call.
+    #[tokio::test]
+    async fn oversized_array_is_rejected_before_the_handler_runs() {
+        let _env = env_guard();
+        unsafe { env::set_var("MAX_COLLECTION_LENGTH", "3") };
+
+        // `tags` isn't a field `SimpleRequest` knows about, but the
+        // structural check runs on the raw JSON `Value`, before conversion
+        // into `SimpleRequest`, so it still catches the oversized array.
+        let oversized = serde_json::json!({"name": "ok", "tags": ["a", "b", "c", "d"]});
+        let (status, body) = send(&oversized.to_string(), "application/json").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {}", body);
+        let v: serde_json::Value = serde_json::from_str(&body).expect("response must be JSON");
+        assert_eq!(v["code"], "VALIDATION_FAILED");
+
+        unsafe { env::remove_var("MAX_COLLECTION_LENGTH") };
     }
 
     // ── Validate trait unit tests (no HTTP layer needed) ──────────────────────

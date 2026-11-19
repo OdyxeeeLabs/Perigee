@@ -5,8 +5,8 @@ import {
   FOCUSABLE_SELECTOR,
   nextFocusIndex,
   orderByTabIndex,
+  pickFocusRestoreTarget,
   resolveInitialFocus,
-  shouldRestoreFocus,
   tabbability,
   type FocusableLike,
   type InitialFocus,
@@ -74,6 +74,19 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
   const ref = useRef<T>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
 
+  const restoreFocusTarget = useCallback((target: HTMLElement | null) => {
+    const fallback =
+      document.getElementById("main-content") ??
+      document.querySelector<HTMLElement>("[data-focus-fallback]") ??
+      document.querySelector<HTMLElement>("main");
+    const destination = pickFocusRestoreTarget<HTMLElement>(target, fallback);
+    if (!destination) return;
+    if (destination.tabIndex < 0 && !destination.hasAttribute("tabindex")) {
+      destination.setAttribute("tabindex", "-1");
+    }
+    destination.focus();
+  }, []);
+
   const focusInitial = useCallback(() => {
     const container = ref.current;
     if (!container) return;
@@ -97,13 +110,9 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>(
 
     return () => {
       if (!restoreFocus) return;
-      const target = previouslyFocused.current;
-      // Unconditional restoration is a bug: if the trigger was removed while
-      // the dialog was open, `.focus()` on a detached node silently drops the
-      // user at the top of the document.
-      if (shouldRestoreFocus(target)) target?.focus();
+      restoreFocusTarget(previouslyFocused.current);
     };
-  }, [active, restoreFocus, focusInitial]);
+  }, [active, restoreFocus, focusInitial, restoreFocusTarget]);
 
   useEffect(() => {
     if (!active) return;

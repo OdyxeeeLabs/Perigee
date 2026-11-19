@@ -2,6 +2,10 @@
 
 This guide is the contract for error handling in the Perigee HTTP API. Error responses use stable, human-readable identifiers so clients can make retry, authentication, validation, and support decisions without parsing English messages.
 
+> **Keeping this document in sync**: `core/src/main.rs`'s `error_catalog_sync_tests::error_code_catalog_is_synchronized` test
+> fails CI whenever `ErrorCode` (in `core/src/error_codes.rs`), this document's "Named error codes" table, and the generated
+> OpenAPI schema disagree about which codes exist. See [Adding a new error code](#adding-a-new-error-code) below.
+
 ## Response envelope
 
 Structured application errors use this shape:
@@ -74,6 +78,7 @@ The canonical spelling is uppercase snake case. The values below are the stable 
 | `INVALID_XDR` | 400 | XDR input could not be decoded or encoded. |
 | `PAYLOAD_TOO_LARGE` | 413 | Request body exceeds the applicable route limit. |
 | `UNSUPPORTED_MEDIA_TYPE` | 415 | Request content type is not supported. |
+| `NOT_ACCEPTABLE` | 406 | None of the client's acceptable response representations can be produced. |
 | `PARSE_ERROR` | 400 | A parser rejected a request value. |
 | `VALIDATION_FAILED` | 400 | DTO validation failed. |
 | `NOT_FOUND` | 404 | Generic resource was not found. |
@@ -105,7 +110,7 @@ The canonical spelling is uppercase snake case. The values below are the stable 
 | `INSUFFICIENT_ALLOWANCE` | 400 | Token allowance is insufficient. |
 | `SLIPPAGE_EXCEEDED` | 400 | Price movement exceeds the accepted slippage. |
 | `INVALID_FEE` | 400 | Fee value is invalid. |
-| `ORACLE_NOT_CONFIGURE` | 500 | No usable oracle is configured. |
+| `ORACLE_NOT_CONFIGURED` | 500 | No usable oracle is configured. |
 | `INVALID_ORACLE_PRICE` | 500 | Oracle returned an unusable price. |
 | `CONTRACT_PAUSED` | 400 | Contract is paused. |
 | `INTERNAL_SERVER_ERROR` | 500 | Unexpected server failure. |
@@ -176,6 +181,34 @@ The canonical spelling is uppercase snake case. The values below are the stable 
 | `ReconciliationError::NoData` | `INVALID_INPUT` |
 | `ReconciliationError::InvalidRange` | `INVALID_INPUT` |
 | `ReconciliationError::StoreError` | `DATABASE_ERROR` |
+
+## Adding a new error code
+
+`ErrorCode` (`core/src/error_codes.rs`), this document, and the generated OpenAPI schema must always agree on the
+full set of public codes. A CI test (`error_catalog_sync_tests::error_code_catalog_is_synchronized` in
+`core/src/main.rs`) enforces this: it fails the build if a code exists in one place but not the others. To add a
+new error code intentionally:
+
+1. **Add the enum variant** to `ErrorCode` in `core/src/error_codes.rs`, in the section matching its category
+   (auth, validation, resource lifecycle, blockchain/RPC, or infrastructure).
+2. **Add the HTTP mapping**: a `Self::Variant => "SCREAMING_SNAKE_CASE"` arm in `ErrorCode::as_str`, and include
+   the variant in the appropriate status-code bucket in `ErrorCode::status_code`. If the underlying detail is
+   sensitive (stack traces, internal hostnames, raw DB errors, etc.), also add it to `ErrorCode::is_sensitive` so
+   it gets redacted in production (see `AppError::client_message` in `core/src/errors.rs`).
+3. **Add a doc row** to the "Named error codes" table above with the code, its HTTP status, and a one-line
+   description of the condition and recovery guidance. If the code replaces or maps from another error type
+   (a `SimulationError`, `StellarServiceError`, store error, etc.), add a row to the relevant conversion table too.
+4. **Re-run the sync check**: `cargo test -p Perigee-core error_code_catalog_is_synchronized`. It re-derives the
+   codes from `ErrorCode::as_str` (not a hand-maintained list, so it can't itself drift), reads this document's
+   table, and reads the `ErrorCode` schema out of `ApiDoc::openapi()` — all three must match exactly.
+5. There is no separate step to register the code with OpenAPI: `ErrorCode` is already listed in `ApiDoc`'s
+   `components(schemas(...))` in `core/src/main.rs`, so every variant is picked up automatically the next time
+   the spec is generated.
+
+Every `ErrorCode` variant is considered public (the enum's doc comment calls it the "machine-readable error codes
+for API consumers"), so there is no internal-only exemption from this process — if a condition should never reach
+a client, represent it with a private error type and convert it to an appropriate public `ErrorCode` (often
+`InternalServerError`) at the `AppError` boundary instead of adding it to this enum.
 
 ## Client handling rules
 

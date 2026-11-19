@@ -11,6 +11,7 @@ import { trackTelemetryEvent, trackFunnelEvent } from "../lib/telemetry";
 import { useTranslations } from "next-intl";
 import { Spinner } from "./ui/Spinner";
 import { blurDataUri } from "../lib/imagePlaceholder";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 export function WalletModal() {
   const t = useTranslations("walletModal");
@@ -21,6 +22,12 @@ export function WalletModal() {
   const isConnecting = useWalletStore((s) => s.isConnecting);
   const error = useWalletStore((s) => s.error);
   const shouldReduceMotion = useReducedMotion();
+  const titleId = React.useId();
+  const { ref: modalRef } = useFocusTrap<HTMLDivElement>({
+    active: isModalOpen,
+    onEscape: closeModal,
+    initialFocus: "container",
+  });
 
   const [activeSelection, setActiveSelection] = React.useState<string | null>(
     null,
@@ -60,6 +67,7 @@ export function WalletModal() {
           {/* Backdrop */}
           <div
             className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+            aria-hidden="true"
             onClick={closeModal}
           />
           <motion.div
@@ -85,10 +93,16 @@ export function WalletModal() {
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
           >
             {/* Modal card — centred, responsive width */}
-            <div className="w-96 max-w-[calc(100vw-2rem)] rounded-2xl bg-[#161E22] border border-[#2A3338] p-8 shadow-2xl">
+            <div
+              ref={modalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              className="w-96 max-w-[calc(100vw-2rem)] rounded-2xl bg-[#161E22] border border-[#2A3338] p-8 shadow-2xl"
+            >
               <div className="flex flex-col items-center">
                 <div className="text-center mb-6">
-                  <h2 className="text-2xl font-medium text-white">
+                  <h2 id={titleId} className="text-2xl font-medium text-white">
                     {t("title")}
                   </h2>
                   <p className="mt-2 text-[#92A5A8] text-sm">

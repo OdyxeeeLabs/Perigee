@@ -5,6 +5,8 @@ import { X } from "lucide-react";
 import type { Vault, VaultDetail } from "@/types/vault";
 import { useVaultDetail } from "@/hooks/useVaultDetail";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { useTransactionNetwork } from "@/hooks/useTransactionNetwork";
+import { TransactionNetworkNotice } from "@/components/TransactionNetworkNotice";
 import { VaultDetailContent } from "./VaultDetailContent";
 import { VaultDetailSkeleton } from "./VaultDetailSkeleton";
 
@@ -29,6 +31,7 @@ export interface VaultDetailModalProps {
 export function VaultDetailModal({ vault, onClose, onDeposit, onWithdraw, onManage }: VaultDetailModalProps) {
   const isOpen = vault !== null;
   const detail = useVaultDetail(vault?.id ?? null);
+  const network = useTransactionNetwork();
   const { ref, focusInitial } = useFocusTrap<HTMLDivElement>({
     active: isOpen,
     onEscape: onClose,
@@ -56,6 +59,7 @@ export function VaultDetailModal({ vault, onClose, onDeposit, onWithdraw, onMana
         role="dialog"
         aria-modal="true"
         aria-labelledby="vault-detail-modal-title"
+        aria-describedby="vault-detail-modal-description"
         className="relative z-10 w-full max-w-2xl rounded-xl border border-slate-800 bg-slate-950 shadow-2xl"
       >
         <header className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
@@ -63,7 +67,7 @@ export function VaultDetailModal({ vault, onClose, onDeposit, onWithdraw, onMana
             <h2 id="vault-detail-modal-title" className="text-lg font-semibold text-slate-100">
               {vault.name}
             </h2>
-            <p className="text-xs text-slate-500">Vault details</p>
+            <p id="vault-detail-modal-description" className="text-xs text-slate-500">Vault details</p>
           </div>
           <button
             type="button"
@@ -76,6 +80,7 @@ export function VaultDetailModal({ vault, onClose, onDeposit, onWithdraw, onMana
         </header>
 
         <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
+          <TransactionNetworkNotice network={network} />
           {detail.status === "loading" && <VaultDetailSkeleton />}
 
           {detail.status === "error" && (
@@ -90,6 +95,8 @@ export function VaultDetailModal({ vault, onClose, onDeposit, onWithdraw, onMana
               onDeposit={onDeposit}
               onWithdraw={onWithdraw}
               onManage={onManage}
+              transactionsEnabled={network.canTransact}
+              disabledReason={network.disabledReason}
             />
           )}
         </div>

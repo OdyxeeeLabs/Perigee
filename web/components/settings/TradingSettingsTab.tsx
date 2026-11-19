@@ -1,5 +1,7 @@
 "use client";
 
+import { useLocale } from "@/components/LocaleSync";
+import { FormattedPercent } from "@/components/ui/FormattedAmount";
 import { useSettingsStore } from "@/lib/settingsStore";
 import { GAS_PRICE_STRATEGIES, MAX_SLIPPAGE, MIN_SLIPPAGE } from "@/lib/settings";
 import { validateSettingsValues } from "@/lib/settingsValidation";
@@ -54,8 +56,8 @@ export function TradingSettingsTab() {
             aria-invalid={Boolean(errors.slippage)}
             aria-describedby={`slippage-value${errors.slippage ? " slippage-error" : ""}`}
           />
-          <span id="slippage-value" className="w-16 shrink-0 text-right font-mono text-sm text-cyan-400">
-            {trading.slippageTolerance.toFixed(1)}%
+          <span id="slippage-value" className="w-16 shrink-0 text-end font-mono text-sm text-cyan-400">
+            <FormattedPercent value={trading.slippageTolerance} locale={locale} digits={1} />
           </span>
         </div>
         {errors.slippage ? (

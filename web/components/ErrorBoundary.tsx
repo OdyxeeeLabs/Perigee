@@ -1,7 +1,8 @@
 import React from 'react';
 import { reportError, type ErrorBoundaryVariant, type ReportingContext } from '../lib/error-reporting';
+import { focusRecovery } from '../lib/a11y/focus';
 import { logger } from '../lib/logger';
-import { trackTelemetryError } from '../lib/telemetry';
+import { getTelemetryConsent, trackTelemetryError } from '../lib/telemetry';
 
 type ErrorBoundaryProps = {
   children?: React.ReactNode;
@@ -23,6 +24,8 @@ type ErrorBoundaryState = {
   errorInfo: React.ErrorInfo | null;
 };
 
+let boundarySequence = 0;
+
 const getCurrentRoute = (): string => {
   if (typeof window === 'undefined') {
     return '/';
@@ -42,6 +45,9 @@ const resolveContext = (props: ErrorBoundaryProps): ReportingContext => ({
 export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { error: null, errorInfo: null };
 
+  private readonly headingId = `error-boundary-title-${++boundarySequence}`;
+  private recoveryRef = React.createRef<HTMLDivElement>();
+
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { error, errorInfo: null };
   }
@@ -49,14 +55,24 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     this.setState({ errorInfo });
     reportError(error, resolveContext(this.props));
+    logger.error('Unhandled UI error:', error, errorInfo);
+    trackTelemetryError(error, { component: 'ErrorBoundary' });
+
+    if (getTelemetryConsent() === true) {
+      trackTelemetryError(error, {
+        component: resolveContext(this.props).component,
+        path: getCurrentRoute(),
+      });
+    }
   }
 
-  componentDidUpdate(prevProps: ErrorBoundaryProps) {
+  componentDidUpdate(prevProps: ErrorBoundaryProps, prevState: ErrorBoundaryState) {
+    if (!prevState.error && this.state.error) {
+      focusRecovery(this.recoveryRef.current);
+    }
     if (this.state.error && prevProps.resetKeys !== this.props.resetKeys) {
       this.reset();
     }
-    logger.error('Unhandled UI error:', error, errorInfo);
-    trackTelemetryError(error, { component: 'ErrorBoundary' });
   }
 
   reset = () => {
@@ -88,27 +104,24 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
             ? 'This page hit an unexpected rendering error. Try again or reload the page to recover.'
             : 'This section could not render correctly, but the rest of the dashboard is still available.');
 
+      const isRootOrRoute = this.props.variant === 'root' || this.props.variant === 'route';
+
       return (
         <div className="flex min-h-[260px] items-center justify-center rounded-lg border border-red-900/60 bg-[#0d1117] p-6 text-red-100">
-          <div className="w-full max-w-xl rounded-lg border border-red-800/60 bg-red-950/30 p-6 shadow-xl shadow-black/20">
+          <div
+            ref={this.recoveryRef}
+            role="alert"
+            aria-labelledby={this.headingId}
+            tabIndex={-1}
+            className="w-full max-w-xl rounded-lg border border-red-800/60 bg-red-950/30 p-6 shadow-xl shadow-black/20 focus:outline-none focus:ring-2 focus:ring-red-400"
+          >
             <div className="flex items-start gap-4">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-red-700/70 bg-red-950 text-lg font-bold">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-red-700/70 bg-red-950 text-lg font-bold" aria-hidden="true">
                 !
               </div>
               <div className="min-w-0 flex-1">
-                <h2 className="text-base font-semibold text-red-50">{title}</h2>
+                <h2 id={this.headingId} className="text-base font-semibold text-red-50">{title}</h2>
                 <p className="mt-2 text-sm leading-6 text-red-100/80">{description}</p>
-                <p className="mt-3 rounded-md border border-red-900/70 bg-black/20 px-3 py-2 font-mono text-xs text-red-100/80">
-                  {this.state.error.message || this.state.error.name}
-                </p>
-                {process.env.NODE_ENV !== 'production' && this.state.errorInfo?.componentStack && (
-                  <details className="mt-3 text-xs text-red-100/70">
-                    <summary className="cursor-pointer text-red-100">Component stack</summary>
-                    <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-black/30 p-3">
-                      {this.state.errorInfo.componentStack}
-                    </pre>
-                  </details>
-                )}
                 <div className="mt-5 flex flex-wrap gap-3">
                   <button
                     type="button"
@@ -117,17 +130,27 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                   >
                     Try again
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (typeof window !== 'undefined') {
-                        window.location.reload();
-                      }
-                    }}
-                    className="rounded-md border border-slate-700 px-4 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-slate-800"
-                  >
-                    Reload page
-                  </button>
+                  {this.props.variant === 'route' && (
+                    <a
+                      href="/"
+                      className="rounded-md border border-slate-700 px-4 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-slate-800"
+                    >
+                      Back to dashboard
+                    </a>
+                  )}
+                  {isRootOrRoute && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof window !== 'undefined') {
+                          window.location.reload();
+                        }
+                      }}
+                      className="rounded-md border border-slate-700 px-4 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-slate-800"
+                    >
+                      Reload page
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
