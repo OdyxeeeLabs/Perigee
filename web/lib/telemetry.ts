@@ -1,15 +1,12 @@
 /**
- * Privacy-first telemetry module with consent gating, granular preferences,
- * zero PII leakage, and multi-provider support (Plausible, Umami, PostHog, Internal).
+ * Privacy-first telemetry helpers with consent gating, granular preferences,
+ * PII scrubbing, and multi-provider support (Plausible, Umami, PostHog, Internal).
  *
- * Compliance:
- *  - GDPR & CCPA compliant
- *  - Automatic Global Privacy Control (GPC) and Do Not Track (DNT) detection
- *  - Instant opt-out mechanism with full local state revocation
+ * Signals:
+ *  - Global Privacy Control (GPC) and Do Not Track (DNT) detection
+ *  - Local opt-out with stored preference revocation
  *  - 30-day consent TTL
- *
- * Funnel tracking:
- *  - Connect Wallet -> View Vault -> Deposit
+ *  - Connect Wallet -> View Vault -> Deposit funnel tracking
  */
 
 import {
@@ -31,7 +28,7 @@ export type { TelemetryEvent } from "./telemetrySchema";
 export interface TelemetryPreferences {
   /** Anonymous performance analytics (page-loads, timings, feature usage). */
   performance: boolean;
-  /** Anonymous error reporting (stack traces without PII). */
+  /** Anonymous error reporting (stack traces with PII scrubbing). */
   errors: boolean;
   /** Anonymous product & funnel analytics (connect wallet, view vault, deposit). */
   analytics?: boolean;
@@ -91,7 +88,7 @@ function getInternalDriver(): InternalDriver {
 }
 
 // ---------------------------------------------------------------------------
-// Consent Management (GDPR / CCPA)
+// Consent Management (signals and stored choices)
 // ---------------------------------------------------------------------------
 
 /**
@@ -324,7 +321,7 @@ export function trackFeatureUsage(
 }
 
 /**
- * Tracks an error with zero PII (sanitized message, safe component name, no local file paths).
+ * Tracks an error with PII scrubbing (sanitized message, safe component name, no local file paths).
  */
 export function trackTelemetryError(
   error: Error | string,

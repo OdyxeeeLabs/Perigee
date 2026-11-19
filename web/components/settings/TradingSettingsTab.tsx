@@ -4,12 +4,31 @@ import { useLocale } from "@/components/LocaleSync";
 import { FormattedPercent } from "@/components/ui/FormattedAmount";
 import { useSettingsStore } from "@/lib/settingsStore";
 import { GAS_PRICE_STRATEGIES, MAX_SLIPPAGE, MIN_SLIPPAGE } from "@/lib/settings";
+import { validateSettingsValues } from "@/lib/settingsValidation";
+import { usePreferenceUndoToast } from "@/hooks/usePreferenceUndoToast";
+import { useSettingsValidation } from "./SettingsValidationContext";
 
 /** Trading tab — issue #682: slippage, gas strategy, transaction deadline. */
 export function TradingSettingsTab() {
   const trading = useSettingsStore((s) => s.settings.trading);
+  const settings = useSettingsStore((s) => s.settings);
   const updateTrading = useSettingsStore((s) => s.updateTrading);
-  const locale = useLocale();
+  const { values, errors, setValue, setError, fieldProps } = useSettingsValidation();
+  usePreferenceUndoToast("trading");
+
+  function validateDraft(id: string, value: string) {
+    if (!errors[id]) return;
+    const message = validateSettingsValues({ ...values, [id]: value }, settings).find(
+      (error) => error.id === id,
+    );
+    setError(id, message?.message ?? null);
+  }
+
+  function handleNumberField(id: string, value: string, patch: (parsed: number) => void) {
+    setValue(id, value);
+    validateDraft(id, value);
+    if (value.trim() !== "" && Number.isFinite(Number(value))) patch(Number(value));
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -28,26 +47,47 @@ export function TradingSettingsTab() {
             max={MAX_SLIPPAGE}
             step={0.1}
             value={trading.slippageTolerance}
-            onChange={(e) => updateTrading({ slippageTolerance: Number(e.target.value) })}
+            onChange={(e) => {
+              setValue("slippage", e.target.value);
+              validateDraft("slippage", e.target.value);
+              updateTrading({ slippageTolerance: Number(e.target.value) });
+            }}
             className="flex-1 accent-cyan-500"
-            aria-describedby="slippage-value"
+            aria-invalid={Boolean(errors.slippage)}
+            aria-describedby={`slippage-value${errors.slippage ? " slippage-error" : ""}`}
           />
           <span id="slippage-value" className="w-16 shrink-0 text-end font-mono text-sm text-cyan-400">
             <FormattedPercent value={trading.slippageTolerance} locale={locale} digits={1} />
           </span>
         </div>
+        {errors.slippage ? (
+          <p id="slippage-error" className="mt-1 text-xs text-red-400">
+            {errors.slippage}
+          </p>
+        ) : null}
       </section>
 
       <section>
         <span className="text-sm font-semibold text-slate-200" id="gas-strategy-label">
           Gas price strategy
         </span>
-        <div className="mt-2 flex flex-wrap gap-2" role="group" aria-labelledby="gas-strategy-label">
+        <div
+          id="gas-strategy"
+          tabIndex={-1}
+          role="group"
+          aria-labelledby="gas-strategy-label"
+          aria-invalid={Boolean(errors["gas-strategy"])}
+          aria-describedby={errors["gas-strategy"] ? "gas-strategy-error" : undefined}
+          className="mt-2 flex flex-wrap gap-2 focus:outline-none"
+        >
           {GAS_PRICE_STRATEGIES.map((strategy) => (
             <button
               key={strategy}
               type="button"
-              onClick={() => updateTrading({ gasPriceStrategy: strategy })}
+              onClick={() => {
+                setValue("gas-strategy", strategy);
+                updateTrading({ gasPriceStrategy: strategy });
+              }}
               aria-pressed={trading.gasPriceStrategy === strategy}
               className={`rounded px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
                 trading.gasPriceStrategy === strategy
@@ -59,6 +99,11 @@ export function TradingSettingsTab() {
             </button>
           ))}
         </div>
+        {errors["gas-strategy"] ? (
+          <p id="gas-strategy-error" className="mt-1 text-xs text-red-400">
+            {errors["gas-strategy"]}
+          </p>
+        ) : null}
 
         {trading.gasPriceStrategy === "custom" && (
           <div className="mt-3">
@@ -66,13 +111,22 @@ export function TradingSettingsTab() {
               Custom gas price (stroops)
             </label>
             <input
-              id="custom-gas"
+              {...fieldProps("custom-gas")}
               type="number"
               min={0}
-              value={trading.customGasPrice}
-              onChange={(e) => updateTrading({ customGasPrice: Number(e.target.value) })}
+              value={values["custom-gas"] ?? String(trading.customGasPrice)}
+              onChange={(e) =>
+                handleNumberField("custom-gas", e.target.value, (parsed) =>
+                  updateTrading({ customGasPrice: parsed }),
+                )
+              }
               className="mt-1 w-40 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
             />
+            {errors["custom-gas"] ? (
+              <p id="custom-gas-error" className="mt-1 text-xs text-red-400">
+                {errors["custom-gas"]}
+              </p>
+            ) : null}
           </div>
         )}
       </section>
@@ -85,14 +139,23 @@ export function TradingSettingsTab() {
           How long an unconfirmed transaction remains valid before it is treated as expired.
         </p>
         <input
-          id="tx-deadline"
+          {...fieldProps("tx-deadline")}
           type="number"
           min={1}
           max={180}
-          value={trading.transactionDeadlineMinutes}
-          onChange={(e) => updateTrading({ transactionDeadlineMinutes: Number(e.target.value) })}
+          value={values["tx-deadline"] ?? String(trading.transactionDeadlineMinutes)}
+          onChange={(e) =>
+            handleNumberField("tx-deadline", e.target.value, (parsed) =>
+              updateTrading({ transactionDeadlineMinutes: parsed }),
+            )
+          }
           className="mt-2 w-32 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
         />
+        {errors["tx-deadline"] ? (
+          <p id="tx-deadline-error" className="mt-1 text-xs text-red-400">
+            {errors["tx-deadline"]}
+          </p>
+        ) : null}
       </section>
     </div>
   );

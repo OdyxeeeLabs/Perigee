@@ -126,6 +126,44 @@ export function clampGasPrice(value: number): number {
   return Math.round(value);
 }
 
+export const PREFERENCE_UNDO_WINDOW_MS = 7000;
+
+export type LocalPreferenceSection = "display" | "trading";
+
+export interface PendingPreferenceUndo {
+  section: LocalPreferenceSection;
+  field: string;
+  previousValue: unknown;
+  changedAt: number;
+  sequence: number;
+}
+
+export function canUndoPreference(
+  pending: PendingPreferenceUndo | null,
+  now: number = Date.now(),
+): boolean {
+  return pending !== null && now - pending.changedAt <= PREFERENCE_UNDO_WINDOW_MS;
+}
+
+export function recordPreferenceUndo(
+  pending: PendingPreferenceUndo | null,
+  section: LocalPreferenceSection,
+  field: string,
+  previousValue: unknown,
+  now: number = Date.now(),
+  sequence: number = now,
+): PendingPreferenceUndo {
+  if (
+    pending &&
+    pending.section === section &&
+    pending.field === field &&
+    canUndoPreference(pending, now)
+  ) {
+    return pending;
+  }
+  return { section, field, previousValue, changedAt: now, sequence };
+}
+
 /**
  * Deep-merges a partial/untrusted object onto the defaults so that:
  *  - a corrupted or partially-written localStorage blob never crashes the UI
