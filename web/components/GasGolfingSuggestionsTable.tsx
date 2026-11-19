@@ -2,6 +2,7 @@
 
 import React from 'react';
 import clsx from 'clsx';
+import { useLocale } from '@/components/LocaleSync';
 import { DataTable, type ColumnDef } from './ui/DataTable';
 import type {
   GasGolfingSuggestion,
@@ -63,9 +64,6 @@ const columns: ColumnDef<GasGolfingSuggestion>[] = [
     sortable: true,
     align: 'right',
     className: 'font-mono text-xs',
-    cell: (row) => (
-      <span>{row.gas_saved_estimate ?? '—'}</span>
-    ),
   },
 ];
 
@@ -78,6 +76,8 @@ function GasGolfingSuggestionsTableImpl({
 }: {
   suggestions: GasGolfingSuggestion[];
 }) {
+  const locale = useLocale();
+
   if (!suggestions.length) {
     return (
       <div className="rounded-lg border border-[#30363d] bg-[#0d1117] p-4 text-sm text-[#8b949e]">
@@ -96,6 +96,7 @@ function GasGolfingSuggestionsTableImpl({
       filterPlaceholder="Filter suggestions…"
       emptyMessage="No matching suggestions."
       data-testid="gas-golfing-suggestions-table"
+      locale={locale}
     />
   );
 }

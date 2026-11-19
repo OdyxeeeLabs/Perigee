@@ -13,6 +13,14 @@ import {
 } from "lucide-react";
 
 import { SEO } from "@/components/SEO";
+import { useLocale } from "@/components/LocaleSync";
+import { FormattedAmount, FormattedPercent } from "@/components/ui/FormattedAmount";
+import {
+  formatNumber,
+  formatPercent,
+  formatRawNumber,
+  pluralize,
+} from "@/lib/locale/format";
 import { Vault, VaultStatus } from "@/types/vault";
 
 // ---------------------------------------------------------------------------
@@ -25,7 +33,7 @@ const MOCK_VAULTS: Vault[] = Array.from({ length: 12 }, (_, i) => ({
   owner: "GAXI...B7QK",
   balance: Math.round(Math.random() * 500_000 + 1_000),
   asset: ["XLM", "USDC", "BTC", "ETH"][i % 4],
-  apy: parseFloat((Math.random() * 18 + 1).toFixed(2)),
+  apy: Math.random() * 18 + 1,
   status: (["ACTIVE", "ACTIVE", "ACTIVE", "LOCKED", "PENDING", "ARCHIVED"] as VaultStatus[])[
     i % 6
   ],
@@ -90,7 +98,7 @@ function StatCard({
   trend,
 }: {
   label: string;
-  value: string;
+  value: React.ReactNode;
   sub?: string;
   icon: React.ReactNode;
   trend?: "up" | "down" | "neutral";
@@ -137,6 +145,7 @@ function AssetBar({
     "bg-emerald-500",
     "bg-rose-500",
   ];
+  const locale = useLocale();
 
   return (
     <div>
@@ -147,7 +156,7 @@ function AssetBar({
             key={item.asset}
             className={`${COLORS[i % COLORS.length]} transition-all`}
             style={{ width: `${(item.balance / total) * 100}%` }}
-            title={`${item.asset}: ${((item.balance / total) * 100).toFixed(1)}%`}
+            title={`${item.asset}: ${formatPercent((item.balance / total) * 100, locale, 1)} (${formatRawNumber((item.balance / total) * 100, locale)}%)`}
           />
         ))}
       </div>
@@ -161,12 +170,14 @@ function AssetBar({
                 className={`h-2.5 w-2.5 rounded-full ${COLORS[i % COLORS.length]}`}
               />
               <span className="text-slate-300">{item.asset}</span>
-              <span className="text-xs text-slate-500">({item.count} vault{item.count !== 1 ? "s" : ""})</span>
+              <span className="text-xs text-slate-500">
+                ({pluralize(item.count, { one: "{count} vault", other: "{count} vaults" }, locale)})
+              </span>
             </span>
             <span className="font-medium text-slate-200">
-              {item.balance.toLocaleString()}{" "}
+              <FormattedAmount value={item.balance} locale={locale} />{" "}
               <span className="text-xs text-slate-500">
-                ({((item.balance / total) * 100).toFixed(1)}%)
+                (<FormattedPercent value={(item.balance / total) * 100} locale={locale} digits={1} />)
               </span>
             </span>
           </li>
@@ -177,6 +188,7 @@ function AssetBar({
 }
 
 function StatusBreakdown({ vaults }: { vaults: Vault[] }) {
+  const locale = useLocale();
   const counts = useMemo(() => {
     const m: Partial<Record<VaultStatus, number>> = {};
     for (const v of vaults) m[v.status] = (m[v.status] ?? 0) + 1;
@@ -195,7 +207,9 @@ function StatusBreakdown({ vaults }: { vaults: Vault[] }) {
           >
             {meta.icon}
             <span className="text-sm font-medium">{meta.label}</span>
-            <span className="ml-auto text-lg font-bold">{count}</span>
+            <span className="ms-auto text-lg font-bold">
+              {formatNumber(count, locale, { maximumFractionDigits: 0 })}
+            </span>
           </div>
         );
       })}
@@ -204,6 +218,8 @@ function StatusBreakdown({ vaults }: { vaults: Vault[] }) {
 }
 
 function TopVaultRow({ vault }: { vault: Vault }) {
+  const locale = useLocale();
+
   return (
     <Link
       href={`/vault/${vault.id}`}
@@ -228,11 +244,13 @@ function TopVaultRow({ vault }: { vault: Vault }) {
       </div>
 
       <div className="flex items-center gap-4">
-        <div className="text-right">
+        <div className="text-end">
           <p className="text-sm font-semibold text-white">
-            {vault.balance.toLocaleString()}
+            <FormattedAmount value={vault.balance} locale={locale} />
           </p>
-          <p className="text-xs text-emerald-400">{vault.apy}% APY</p>
+          <p className="text-xs text-emerald-400">
+            <FormattedPercent value={vault.apy ?? 0} locale={locale} digits={2} /> APY
+          </p>
         </div>
         <ArrowUpRight size={14} className="text-slate-500" />
       </div>
@@ -258,6 +276,7 @@ function TopVaultRow({ vault }: { vault: Vault }) {
 export default function PortfolioOverviewPage() {
   // In production wire this to a real data-fetching hook / SWR call.
   const [vaults] = useState<Vault[]>(MOCK_VAULTS);
+  const locale = useLocale();
 
   const totalBalance = useMemo(
     () => vaults.reduce((s, v) => s + v.balance, 0),
@@ -296,7 +315,7 @@ export default function PortfolioOverviewPage() {
               <Link href="/" className="text-2xl font-bold text-cyan-400 hover:text-cyan-300">
                 Perigee
               </Link>
-              <span className="ml-3 text-xs uppercase tracking-wider text-slate-500">
+              <span className="ms-3 text-xs uppercase tracking-wider text-slate-500">
                 Portfolio Overview
               </span>
             </div>
@@ -325,28 +344,34 @@ export default function PortfolioOverviewPage() {
           <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Total Balance"
-              value={totalBalance.toLocaleString()}
+              value={<FormattedAmount value={totalBalance} locale={locale} />}
               sub="Across all assets"
               icon={<Wallet size={16} />}
               trend="neutral"
             />
             <StatCard
               label="Total Vaults"
-              value={String(vaults.length)}
-              sub={`${vaults.filter((v) => v.status === "ACTIVE").length} active`}
+              value={formatNumber(vaults.length, locale, { maximumFractionDigits: 0 })}
+              sub={`${formatNumber(vaults.filter((v) => v.status === "ACTIVE").length, locale, { maximumFractionDigits: 0 })} active`}
               icon={<BarChart2 size={16} />}
               trend="up"
             />
             <StatCard
               label="Average APY"
-              value={`${avgApy.toFixed(2)}%`}
+              value={<FormattedPercent value={avgApy} locale={locale} digits={2} />}
               sub="Across active vaults"
               icon={<TrendingUp size={16} />}
               trend="up"
             />
             <StatCard
               label="Best APY"
-              value={`${Math.max(...vaults.map((v) => v.apy ?? 0)).toFixed(2)}%`}
+              value={
+                <FormattedPercent
+                  value={Math.max(...vaults.map((v) => v.apy ?? 0))}
+                  locale={locale}
+                  digits={2}
+                />
+              }
               sub={topVaults[0]?.name ?? "—"}
               icon={<TrendingUp size={16} />}
               trend="up"

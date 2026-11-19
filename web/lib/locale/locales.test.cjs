@@ -215,6 +215,28 @@ function pluralize(count, forms, locale = "en") {
   return (forms[category] ?? forms.other ?? "{count}").replace(/\{count\}/g, String(count));
 }
 
+function formatAmount(value, locale = "en", options = {}) {
+  return formatNumber(value, locale, { maximumFractionDigits: 2, ...options });
+}
+
+function formatAssetAmount(value, asset, locale = "en", options = {}) {
+  const amount = formatAmount(value, locale, options);
+  return asset ? `${amount} ${asset}` : amount;
+}
+
+function formatRawNumber(value, locale = "en") {
+  return formatNumber(value, locale, { maximumFractionDigits: 20 });
+}
+
+function formatSignedPercent(value, locale = "en", digits = 2) {
+  const formatted = formatPercent(value, locale, digits);
+  return value > 0 ? `+${formatted}` : formatted;
+}
+
+function formatTime(value, locale = "en") {
+  return formatDate(value, locale, { timeStyle: "short" });
+}
+
 const date = new Date("2026-03-04T10:20:00Z");
 
 test("numbers use the locale grouping and decimal marks", () => {
@@ -239,6 +261,34 @@ test("percentages honour the requested precision", () => {
   assert.equal(formatPercent(12.345, "en", 1), "12.3%");
   assert.equal(formatPercent(12.345, "en", 2), "12.35%");
   assert.equal(formatPercent(50, "en", 0), "50%");
+});
+
+test("amounts cap visual precision but keep exact values available", () => {
+  const value = 1.234567890123456;
+  const visual = formatAmount(value, "en");
+  const raw = formatRawNumber(value, "en");
+  assert.equal(visual, "1.23");
+  assert.ok(raw.length > visual.length, `${raw} should retain more digits than ${visual}`);
+  assert.ok(raw.startsWith("1.234567"), raw);
+});
+
+test("asset amounts place the asset code after the localized number", () => {
+  const de = formatAssetAmount(1234.5, "XLM", "de");
+  assert.match(de, /1\.234,5\s*XLM/);
+  assert.equal(formatAssetAmount(1234.5, "", "en"), "1,234.5");
+});
+
+test("signed percentages mark gains explicitly", () => {
+  assert.equal(formatSignedPercent(2.5, "en", 1), "+2.5%");
+  assert.equal(formatSignedPercent(-2.5, "en", 1), "-2.5%");
+  assert.equal(formatSignedPercent(0, "en", 1), "0.0%");
+});
+
+test("time-only formatting uses the locale clock", () => {
+  const en = formatTime(date, "en");
+  const de = formatTime(date, "de");
+  assert.notEqual(en, de);
+  assert.ok(en.length > 0);
 });
 
 test("currency formats with the requested code and locale", () => {

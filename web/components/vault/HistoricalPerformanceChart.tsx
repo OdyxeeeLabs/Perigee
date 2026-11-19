@@ -1,4 +1,6 @@
 import type { VaultHistoryPoint } from "@/types/vault";
+import { useLocale } from "@/components/LocaleSync";
+import { formatAmount } from "@/lib/locale/format";
 
 export interface HistoricalPerformanceChartProps {
   history: VaultHistoryPoint[];
@@ -26,6 +28,8 @@ export function HistoricalPerformanceChart({
   height = 120,
   className = "",
 }: HistoricalPerformanceChartProps) {
+  const locale = useLocale();
+
   if (history.length === 0) {
     return (
       <div
@@ -63,6 +67,7 @@ export function HistoricalPerformanceChart({
 
   return (
     <svg
+      data-no-mirror-rtl="true"
       viewBox={`0 0 ${width} ${height}`}
       width="100%"
       height={height}
@@ -70,7 +75,7 @@ export function HistoricalPerformanceChart({
       role="img"
       aria-label={`Historical ${metric === "apy" ? "APY" : "TVL"} chart, ${history.length} data points, trending ${
         trendUp ? "up" : "down"
-      } from ${first.toLocaleString()} to ${last.toLocaleString()}`}
+      } from ${formatAmount(first, locale)} to ${formatAmount(last, locale)}`}
     >
       <path d={areaPath} fill={trendUp ? "rgba(52,211,153,0.12)" : "rgba(248,113,113,0.12)"} stroke="none" />
       <polyline

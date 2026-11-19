@@ -26,6 +26,7 @@
 
 import React, { useMemo, useState, useId } from 'react';
 import { cn } from '../../lib/utils';
+import { formatNumber, formatRawNumber } from '../../lib/locale/format';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -82,6 +83,7 @@ export interface DataTableProps<T> {
   className?: string;
   /** data-testid applied to the root element (WEB-34 compatibility). */
   'data-testid'?: string;
+  locale?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -90,14 +92,22 @@ export interface DataTableProps<T> {
 
 function alignClass(align: ColumnDef<unknown>['align']) {
   if (align === 'center') return 'text-center';
-  if (align === 'right') return 'text-right';
-  return 'text-left';
+  if (align === 'right') return 'text-end';
+  return 'text-start';
 }
 
-function cellValue<T>(row: T, col: ColumnDef<T>): React.ReactNode {
+function cellValue<T>(row: T, col: ColumnDef<T>, locale?: string): React.ReactNode {
   if (col.cell) return col.cell(row);
   const raw = (row as Record<string, unknown>)[col.key as string];
   if (raw === null || raw === undefined) return '—';
+  if (typeof raw === 'number' && Number.isFinite(raw) && locale) {
+    return (
+      <span>
+        <span className="sr-only">{formatRawNumber(raw, locale)}</span>
+        <span aria-hidden="true">{formatNumber(raw, locale, { maximumFractionDigits: 2 })}</span>
+      </span>
+    );
+  }
   return String(raw);
 }
 
@@ -152,13 +162,13 @@ function SortIcon({
 }) {
   if (!active) {
     return (
-      <span className="ml-1 inline-block select-none text-[10px] text-[#6e7681]" aria-hidden>
+        <span className="ms-1 inline-block select-none text-[10px] text-[#6e7681]" aria-hidden>
         ↕
       </span>
     );
   }
   return (
-    <span className="ml-1 inline-block select-none text-[10px] text-[#00d9ff]" aria-hidden>
+    <span className="ms-1 inline-block select-none text-[10px] text-[#00d9ff]" aria-hidden>
       {direction === 'asc' ? '↑' : '↓'}
     </span>
   );
@@ -170,12 +180,14 @@ function PaginationBar({
   pageSize,
   total,
   onPageChange,
+  locale,
 }: {
   page: number;
   pageCount: number;
   pageSize: number;
   total: number;
   onPageChange: (p: number) => void;
+  locale?: string;
 }) {
   const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const to = Math.min(page * pageSize, total);
@@ -183,7 +195,9 @@ function PaginationBar({
   return (
     <div className="flex items-center justify-between border-t border-[#30363d] px-4 py-2 text-xs text-[#8b949e]">
       <span>
-        {total === 0 ? 'No results' : `${from}–${to} of ${total}`}
+        {total === 0
+          ? 'No results'
+          : `${formatNumber(from, locale, { maximumFractionDigits: 0 })}–${formatNumber(to, locale, { maximumFractionDigits: 0 })} of ${formatNumber(total, locale, { maximumFractionDigits: 0 })}`}
       </span>
 
       <div className="flex items-center gap-1">
@@ -207,7 +221,7 @@ function PaginationBar({
         </button>
 
         <span className="px-2 tabular-nums">
-          {page} / {pageCount || 1}
+          {formatNumber(page, locale, { maximumFractionDigits: 0 })} / {formatNumber(pageCount || 1, locale, { maximumFractionDigits: 0 })}
         </span>
 
         <button
@@ -249,6 +263,7 @@ export function DataTable<T>({
   subtitle,
   className,
   'data-testid': dataTestId,
+  locale,
 }: DataTableProps<T>) {
   const filterId = useId();
 
@@ -354,7 +369,7 @@ export function DataTable<T>({
       {/* ── Table ──────────────────────────────────────────────────────────── */}
       <div className="overflow-x-auto">
         <table
-          className="min-w-full text-left text-sm"
+          className="min-w-full text-start text-sm"
           data-testid={dataTestId ? `${dataTestId}-table` : undefined}
         >
           <thead className="bg-[#161b22] text-xs text-[#8b949e]">
@@ -428,7 +443,7 @@ export function DataTable<T>({
                           col.className,
                         )}
                       >
-                        {cellValue(row, col)}
+                        {cellValue(row, col, locale)}
                       </td>
                     ))}
                   </tr>
@@ -447,6 +462,7 @@ export function DataTable<T>({
           pageSize={pageSize}
           total={sorted.length}
           onPageChange={setPage}
+          locale={locale}
         />
       )}
     </div>

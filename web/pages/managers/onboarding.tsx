@@ -183,7 +183,8 @@ export default function ManagerOnboarding() {
                   <input
                     value={address || ""}
                     disabled
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-400"
+                    dir="ltr"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-start font-mono text-sm text-slate-400"
                   />
                 </div>
                 <div>
@@ -207,7 +208,8 @@ export default function ManagerOnboarding() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder={t("onboarding.emailPlaceholder")}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500"
+                    dir="ltr"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-start text-sm text-slate-100 placeholder-slate-500"
                   />
                 </div>
                 <div>
@@ -218,7 +220,8 @@ export default function ManagerOnboarding() {
                     value={kycRef}
                     onChange={(e) => setKycRef(e.target.value)}
                     placeholder={t("onboarding.kycRefPlaceholder")}
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-500"
+                    dir="ltr"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-start text-sm text-slate-100 placeholder-slate-500"
                   />
                 </div>
                 {error && (

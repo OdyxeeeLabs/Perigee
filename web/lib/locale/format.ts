@@ -34,9 +34,39 @@ export function formatCompactNumber(value: number, locale: Locale | string = "en
   return formatNumber(value, locale, { notation: "compact", maximumFractionDigits: 1 });
 }
 
+/** Balance / amount with a bounded number of fraction digits. */
+export function formatAmount(
+  value: number,
+  locale: Locale | string = "en",
+  options: Intl.NumberFormatOptions = {},
+): string {
+  return formatNumber(value, locale, { maximumFractionDigits: 2, ...options });
+}
+
+/** Balance plus its asset code, e.g. `1.234,56 XLM` in German. */
+export function formatAssetAmount(
+  value: number,
+  asset: string,
+  locale: Locale | string = "en",
+  options: Intl.NumberFormatOptions = {},
+): string {
+  const amount = formatAmount(value, locale, options);
+  return asset ? `${amount} ${asset}` : amount;
+}
+
+/**
+ * The unrounded value, for the assistive-technology counterpart of a rounded
+ * visual amount. Formatting is still locale-aware; only the precision is not
+ * capped. Protocol values are never rounded before calculations or submits.
+ */
+export function formatRawNumber(value: number, locale: Locale | string = "en"): string {
+  return formatNumber(value, locale, { maximumFractionDigits: 20 });
+}
+
 /**
  * Percentage with a fixed number of fraction digits, because "12.3456%" in a
- * stat tile is a bug report waiting to happen.
+ * stat tile is a bug report waiting to happen. `value` is in percentage
+ * points: pass 12.3 for 12.3%, not 0.123.
  */
 export function formatPercent(value: number, locale: Locale | string = "en", digits = 1): string {
   return formatNumber(value / 100, locale, {
@@ -44,6 +74,16 @@ export function formatPercent(value: number, locale: Locale | string = "en", dig
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+/** Signed change, with an explicit "+" for gains and the locale's minus for losses. */
+export function formatSignedPercent(
+  value: number,
+  locale: Locale | string = "en",
+  digits = 2,
+): string {
+  const formatted = formatPercent(value, locale, digits);
+  return value > 0 ? `+${formatted}` : formatted;
 }
 
 /**
@@ -92,6 +132,14 @@ export function formatDateTime(
   locale: Locale | string = "en",
 ): string {
   return formatDate(value, locale, { dateStyle: "medium", timeStyle: "short" });
+}
+
+/** Time-only rendering for event streams and recent activity rows. */
+export function formatTime(
+  value: Date | string | number,
+  locale: Locale | string = "en",
+): string {
+  return formatDate(value, locale, { timeStyle: "short" });
 }
 
 /** Relative time ("3 minutes ago") with an absolute fallback. */
