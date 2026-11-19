@@ -115,6 +115,18 @@ pub struct VaultMetadata {
     pub updated_ledger: u32,
 }
 
+/// Mutable display fields accepted by the display-only update path.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisplayMetadataUpdate {
+    /// Display name.
+    pub name: String,
+    /// Token symbol.
+    pub symbol: String,
+    /// Off-chain documentation or dashboard pointer.
+    pub metadata_uri: String,
+}
+
 /// One recorded metadata change.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -326,13 +338,53 @@ impl VaultMetadata {
 
         let version = previous.version.checked_add(1).ok_or(Error::Overflow)?;
         let metadata = VaultMetadata {
-            vault: vault.clone(),
+            vault: previous.vault.clone(),
             name,
             symbol,
             strategy,
             risk_tier,
             risk_score,
             metadata_uri,
+            version,
+            updated_ledger: env.ledger().sequence(),
+        };
+
+        write_metadata(&env, &vault, &metadata);
+
+        env.events().publish(
+            (symbol_short!("meta"), vault, symbol_short!("up")),
+            (previous.version, version),
+        );
+        Ok(version)
+    }
+
+    /// Update only mutable display fields while preserving canonical identity.
+    pub fn update_display(
+        env: Env,
+        caller: Address,
+        vault: Address,
+        update: DisplayMetadataUpdate,
+    ) -> Result<u32, Error> {
+        require_admin(&env, &caller)?;
+
+        validate_field(&update.name, MAX_NAME_LEN)?;
+        validate_field(&update.symbol, MAX_SYMBOL_LEN)?;
+        validate_field(&update.metadata_uri, MAX_URI_LEN)?;
+
+        let previous = Self::get_metadata(env.clone(), vault.clone())?;
+
+        // Reconstruct identity and protocol traits from the stored record.
+        // The update payload cannot replace the controlling address or move
+        // discovery traits, which keeps this path canonical by construction.
+        let version = previous.version.checked_add(1).ok_or(Error::Overflow)?;
+        let metadata = VaultMetadata {
+            vault: previous.vault.clone(),
+            name: update.name,
+            symbol: update.symbol,
+            strategy: previous.strategy,
+            risk_tier: previous.risk_tier,
+            risk_score: previous.risk_score,
+            metadata_uri: update.metadata_uri,
             version,
             updated_ledger: env.ledger().sequence(),
         };
