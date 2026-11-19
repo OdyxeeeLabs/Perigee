@@ -5,6 +5,7 @@
 
 mod admin_overview;
 mod agent_fleet;
+mod api_keys;
 mod agent_health;
 mod agent_identity;
 mod audit_log;
@@ -3463,6 +3464,9 @@ async fn main() {
     // API-37: per-manager quotas; defaults from PERIGEE_QUOTA_DEFAULT_*.
     let manager_quotas = Arc::new(manager_quota::ManagerQuotaRegistry::from_env());
 
+    // API-38: scoped API keys for server-to-server integrations.
+    let api_key_store = Arc::new(api_keys::ApiKeyStore::new());
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
@@ -3548,13 +3552,36 @@ async fn main() {
             "/admin/quotas/:manager/:class",
             axum::routing::delete(manager_quota::clear_manager_quota_handler),
         )
+        // API-key lifecycle; managing keys requires a wallet session (API-38)
+        .route(
+            "/api-keys",
+            get(api_keys::list_api_keys_handler).post(api_keys::create_api_key_handler),
+        )
+        .route(
+            "/api-keys/:key_id/rotate",
+            post(api_keys::rotate_api_key_handler),
+        )
+        .route(
+            "/api-keys/:key_id",
+            axum::routing::delete(api_keys::revoke_api_key_handler),
+        )
         // Runs inside auth so the authenticated manager is known.
         .route_layer(axum::middleware::from_fn(
             manager_quota::manager_quota_middleware,
         ))
         .route_layer(axum::middleware::from_fn(auth::auth_middleware))
         .layer(Extension(admin_overview))
-        .layer(Extension(manager_quotas));
+        .layer(Extension(manager_quotas))
+        .layer(Extension(Arc::clone(&api_key_store)));
+
+    // Routes authenticated with `X-API-Key` instead of a wallet session (API-38).
+    let integration_routes = Router::new()
+        .route(
+            "/integrations/api-key",
+            get(api_keys::introspect_api_key_handler),
+        )
+        .route_layer(axum::middleware::from_fn(api_keys::api_key_middleware))
+        .layer(Extension(api_key_store));
 
     let public_rate_limit_config = RateLimitConfig::from_env();
     tracing::info!(
@@ -3661,7 +3688,8 @@ async fn main() {
 
     let api_routes = Router::new()
         .merge(public_routes)
-        .merge(protected);
+        .merge(protected)
+        .merge(integration_routes);
 
     let app = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))

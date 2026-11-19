@@ -6,6 +6,7 @@
 
 pub mod admin_overview;
 pub mod agent_fleet;
+pub mod api_keys;
 pub mod backpressure;
 pub mod billing_service;
 pub mod config;
