@@ -62,9 +62,11 @@ mod simulation;
 mod simulation_service;
 mod signed_receipt;
 mod stellar_service;
+mod transaction_outcome;
 mod two_phase_commit;
 pub mod vault_store;
 mod manager_store;
+mod wasm_analysis_job;
 mod wasm_branch_analysis;
 mod ws;
 
@@ -1009,6 +1011,10 @@ impl Validate for AnalyzeRequest {
 
 #[derive(Serialize, ToSchema)]
 pub struct ResourceReport {
+    /// Always `simulated` (API-35): this report is a read-only preview and
+    /// never reflects a confirmed ledger change. See
+    /// `crate::transaction_outcome::TransactionStatus`.
+    pub status: crate::transaction_outcome::TransactionStatus,
     /// CPU instructions consumed
     #[schema(example = 1500)]
     pub cpu_instructions: u64,
@@ -1338,6 +1344,7 @@ fn to_report(
     let insights_report = insights_engine.analyze(&result.resources);
 
     ResourceReport {
+        status: crate::transaction_outcome::TransactionStatus::Simulated,
         cpu_instructions: result.resources.cpu_instructions,
         ram_bytes: result.resources.ram_bytes,
         ledger_read_bytes: result.resources.ledger_read_bytes,
@@ -1475,7 +1482,7 @@ async fn analyze(
     path = "/analyze/wasm",
     request_body = AnalyzeWasmRequest,
     responses(
-        (status = 200, description = "Resource analysis successful", body = ResourceReport),
+        (status = 200, description = "Resource analysis successful. `status` is always `simulated`: this is a read-only preview and never a confirmed ledger change.", body = ResourceReport),
         (status = 400, description = "Invalid base64 or WASM data"),
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Analysis failed")
@@ -2396,7 +2403,22 @@ impl utoipa::Modify for SecurityAddon {
         manager_store::ApproveManagerRequest, manager_store::ManagerStatusResponse,
         reconciliation::ReconcileRequest, reconciliation::ReconcileResponse,
         reconciliation::ReconciliationReport, reconciliation::ListReportsQuery,
-        crate::jobs::Job, crate::jobs::JobStatus, crate::jobs::JobType
+        crate::jobs::Job, crate::jobs::JobStatus, crate::jobs::JobType,
+        // API-35: distinct simulation vs. submission/invocation outcome
+        // types, so a client can tell preview vs. confirmed state change
+        // apart without parsing free-form messages.
+        crate::transaction_outcome::TransactionStatus,
+        crate::transaction_outcome::SimulationOutcome,
+        crate::transaction_outcome::SubmissionAcknowledgement,
+        crate::transaction_outcome::PendingConfirmation,
+        crate::transaction_outcome::FinalizedOutcome,
+        // Registered so the public error-code catalog is visible in the
+        // served OpenAPI document, not just in `docs/ERROR_VARIANTS.md`.
+        // `error_catalog_sync_tests` (below) fails CI if this ever drifts
+        // from `ErrorCode`'s source or from the docs table. See
+        // CONTRIBUTING.md "Adding a new error code" before touching
+        // `ErrorCode`.
+        crate::error_codes::ErrorCode
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -4321,6 +4343,209 @@ mod openapi_tests {
         assert!(json.contains("/fees/analytics"), "OpenAPI spec should contain /fees/analytics path");
         assert!(json.contains("/managers"), "OpenAPI spec should contain /managers path");
         assert!(json.contains("/reconcile"), "OpenAPI spec should contain /reconcile path");
+    }
+}
+
+/// Synchronization check for [API-32]: keeps the public `ErrorCode` catalog
+/// (`core/src/error_codes.rs`), its documentation (`docs/ERROR_VARIANTS.md`),
+/// and the generated OpenAPI schema from drifting apart.
+///
+/// `ErrorCode`'s doc comment calls it the "machine-readable error codes for
+/// API consumers", so every variant is treated as public here -- there is no
+/// internal-only subset to exclude (see `AppError` in `core/src/errors.rs`:
+/// every variant resolves to an `ErrorCode` that is serialized to clients).
+///
+/// See CONTRIBUTING.md's "Adding a new error code" section for the steps to
+/// take when this test fails after an intentional change.
+#[cfg(test)]
+mod error_catalog_sync_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// Resolves a path relative to the `core` crate root (`CARGO_MANIFEST_DIR`).
+    fn core_path(relative: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+    }
+
+    /// Resolves a path relative to the repository root (one level above `core`).
+    fn repo_root_path(relative: &str) -> PathBuf {
+        core_path("..").join(relative)
+    }
+
+    /// `true` for non-empty strings that look like a `SCREAMING_SNAKE_CASE`
+    /// error code identifier (upper-case letters, digits, underscores only,
+    /// starting with a letter).
+    fn is_screaming_snake_case(s: &str) -> bool {
+        let starts_with_letter = s.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+        starts_with_letter
+            && s.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    }
+
+    /// Extracts the full public error-code catalog straight from
+    /// `ErrorCode::as_str`'s match arms.
+    ///
+    /// That match is exhaustive over every `ErrorCode` variant -- the
+    /// compiler rejects the crate if a variant is missing an arm -- so the
+    /// string literals found here are guaranteed to contain exactly one
+    /// entry per variant that currently exists in source. No hand-maintained
+    /// "list of all variants" is needed (and so there is nothing extra to
+    /// forget to update).
+    fn codes_from_source() -> BTreeSet<String> {
+        let text = fs::read_to_string(core_path("src/error_codes.rs"))
+            .expect("read core/src/error_codes.rs");
+
+        let fn_marker = "pub const fn as_str(&self) -> &'static str {";
+        let fn_start = text
+            .find(fn_marker)
+            .expect("locate `ErrorCode::as_str` in error_codes.rs -- did its signature change?");
+        let body = &text[fn_start..];
+        let fn_end = body
+            .find("\n    }\n")
+            .expect("locate the end of `ErrorCode::as_str`'s body");
+        let body = &body[..fn_end];
+
+        let mut codes = BTreeSet::new();
+        for line in body.lines() {
+            let line = line.trim();
+            let Some(arrow) = line.find("=>") else {
+                continue;
+            };
+            let rhs = line[arrow + 2..].trim();
+            let Some(open) = rhs.find('"') else {
+                continue;
+            };
+            let Some(close) = rhs[open + 1..].find('"') else {
+                continue;
+            };
+            codes.insert(rhs[open + 1..open + 1 + close].to_string());
+        }
+
+        assert!(
+            !codes.is_empty(),
+            "parsed zero codes out of ErrorCode::as_str -- the parser above no \
+             longer matches the source format"
+        );
+        codes
+    }
+
+    /// Extracts every `CODE_LIKE_THIS` token found in backtick-quoted table
+    /// cells in `docs/ERROR_VARIANTS.md`.
+    fn codes_from_docs() -> BTreeSet<String> {
+        let text = fs::read_to_string(repo_root_path("docs/ERROR_VARIANTS.md"))
+            .expect("read docs/ERROR_VARIANTS.md");
+
+        let mut codes = BTreeSet::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if !line.starts_with('|') {
+                continue;
+            }
+            let mut rest = line;
+            while let Some(start) = rest.find('`') {
+                let after = &rest[start + 1..];
+                let Some(end) = after.find('`') else {
+                    break;
+                };
+                let candidate = &after[..end];
+                if is_screaming_snake_case(candidate) {
+                    codes.insert(candidate.to_string());
+                }
+                rest = &after[end + 1..];
+            }
+        }
+        codes
+    }
+
+    /// Recursively collects every `SCREAMING_SNAKE_CASE` string leaf under a
+    /// JSON value. Used to read the codes back out of the generated OpenAPI
+    /// schema without depending on `utoipa`'s exact enum-schema shape.
+    fn collect_screaming_snake_strings(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+        match value {
+            serde_json::Value::String(s) if is_screaming_snake_case(s) => {
+                out.insert(s.clone());
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_screaming_snake_strings(item, out);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for v in map.values() {
+                    collect_screaming_snake_strings(v, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Extracts the codes advertised by the `ErrorCode` schema in the
+    /// generated OpenAPI document.
+    fn codes_from_openapi_schema() -> BTreeSet<String> {
+        let openapi = ApiDoc::openapi();
+        let json = serde_json::to_value(&openapi).expect("serialize OpenAPI document to JSON");
+        let schema = json.pointer("/components/schemas/ErrorCode").unwrap_or_else(|| {
+            panic!(
+                "`ErrorCode` schema is missing from the generated OpenAPI document -- \
+                 register `crate::error_codes::ErrorCode` in `ApiDoc`'s \
+                 `components(schemas(...))` list in core/src/main.rs"
+            )
+        });
+
+        let mut codes = BTreeSet::new();
+        collect_screaming_snake_strings(schema, &mut codes);
+        assert!(
+            !codes.is_empty(),
+            "the `ErrorCode` OpenAPI schema produced zero recognizable codes"
+        );
+        codes
+    }
+
+    /// Regression check for API-32 ("Keep the API error catalog synchronized
+    /// with code"): the public `ErrorCode` catalog (source),
+    /// `docs/ERROR_VARIANTS.md`, and the generated OpenAPI schema must all
+    /// list exactly the same set of codes.
+    ///
+    /// A failure here means an `ErrorCode` variant was added, renamed, or
+    /// removed without updating the documentation (or, less likely, without
+    /// registering `ErrorCode` in the OpenAPI schema) -- see CONTRIBUTING.md
+    /// "Adding a new error code".
+    #[test]
+    fn error_code_catalog_is_synchronized() {
+        let source = codes_from_source();
+        let docs = codes_from_docs();
+        let openapi = codes_from_openapi_schema();
+
+        let undocumented: Vec<_> = source.difference(&docs).collect();
+        let stale_docs: Vec<_> = docs.difference(&source).collect();
+        let missing_from_openapi: Vec<_> = source.difference(&openapi).collect();
+        let extra_in_openapi: Vec<_> = openapi.difference(&source).collect();
+
+        assert!(
+            undocumented.is_empty(),
+            "ErrorCode variant(s) exist in source but are undocumented in \
+             docs/ERROR_VARIANTS.md: {undocumented:?}. Add a row to the \
+             \"Named error codes\" table (see CONTRIBUTING.md \"Adding a new \
+             error code\")."
+        );
+        assert!(
+            stale_docs.is_empty(),
+            "docs/ERROR_VARIANTS.md documents code(s) that no longer exist on \
+             ErrorCode: {stale_docs:?}. Remove the stale row(s)."
+        );
+        assert!(
+            missing_from_openapi.is_empty(),
+            "ErrorCode variant(s) exist in source but are missing from the \
+             generated OpenAPI schema: {missing_from_openapi:?}. Check the \
+             `components(schemas(...))` registration in core/src/main.rs."
+        );
+        assert!(
+            extra_in_openapi.is_empty(),
+            "the OpenAPI schema advertises code(s) that do not exist on \
+             ErrorCode: {extra_in_openapi:?}."
+        );
     }
 }
 
