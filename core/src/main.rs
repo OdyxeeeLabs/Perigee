@@ -67,6 +67,8 @@ pub mod vault_store;
 mod manager_store;
 mod wasm_branch_analysis;
 mod ws;
+mod pagination;
+mod rest_api;
 
 use crate::cache::{ContractCache, SimulationCache};
 use crate::config::{FeatureFlag, FeatureFlagService};
@@ -2243,7 +2245,8 @@ async fn require_vault_v2(
     get,
     path = "/fees/history",
     params(
-        ("limit" = Option<i64>, Query, description = "Number of recent ledgers to retrieve"),
+        ("limit" = Option<i64>, Query, description = "Page size, 1-100 (default 25)"),
+        ("cursor" = Option<String>, Query, description = "Signed cursor from the previous page's next_cursor"),
         ("from_ledger" = Option<i64>, Query, description = "Starting ledger sequence"),
         ("to_ledger" = Option<i64>, Query, description = "Ending ledger sequence")
     ),
@@ -2255,27 +2258,29 @@ async fn require_vault_v2(
 )]
 async fn fee_history(
     State(state): State<Arc<AppState>>,
-    SanitizedQuery(req): SanitizedQuery<FeeHistoryRequest>,
     Extension(cancellation): Extension<RequestCancellation>,
-    Query(req): Query<FeeHistoryRequest>,
-) -> Result<Json<FeeHistoryResponse>, AppError> {
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<Json<serde_json::Value>, AppError> {
     tracing::info!("Fetching fee history");
 
-    let result = state
-        .fee_service
-        .history(fee::calculation::FeeHistoryQuery {
+    let codec = crate::pagination::cursor_codec();
+    let request = crate::pagination::PageRequest::parse(&crate::pagination::FEE_HISTORY, codec, &params)?;
+    let ledger_param = |name: &str| params.iter().find(|(k, _)| k == name).and_then(|(_, v)| v.parse().ok());
+
+    // Bounded window of the most recent ledgers; the cursor pages through it.
     let result = cancellation
         .wait(state.fee_service.history(billing_service::FeeHistoryQuery {
-            limit: req.limit,
-            from_ledger: req.from_ledger,
-            to_ledger: req.to_ledger,
+            limit: Some(1_000),
+            from_ledger: ledger_param("from_ledger"),
+            to_ledger: ledger_param("to_ledger"),
         }))
         .await
         .map_err(|_| AppError::Internal("Request cancelled".into()))??;
-    Ok(Json(FeeHistoryResponse {
-        samples: result.samples,
-        total_count: result.total_count,
-    }))
+    let page = crate::pagination::paginate_slice(&result.samples, &request, codec, |s| {
+        let ledger = format!("{:020}", s.ledger_sequence);
+        (ledger.clone(), ledger)
+    })?;
+    Ok(Json(serde_json::to_value(page).map_err(|e| AppError::Internal(e.to_string()))?))
 }
 
 #[utoipa::path(
