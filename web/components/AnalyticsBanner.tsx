@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
+import { PrivacyNotice } from "./PrivacyNotice";
 import {
   getTelemetryConsent,
   getTelemetryPreferences,
@@ -135,6 +136,8 @@ export function AnalyticsBanner() {
           </div>
           <p className="text-slate-400 mb-3">{t("analytics.description")}</p>
 
+          <PrivacyNotice />
+
           {dntActive && (
             <p className="mb-3 rounded bg-slate-800/80 p-2 text-[11px] text-cyan-300 border border-slate-700">
               {t("analytics.gpcDetected")}
@@ -183,6 +186,13 @@ export function AnalyticsBanner() {
             {t("analytics.preferencesTitle")}
           </p>
           <p className="text-slate-400 mb-3">{t("analytics.preferencesBody")}</p>
+
+          <a
+            href="/settings?tab=privacy"
+            className="mb-3 block text-cyan-400 underline underline-offset-2 hover:text-cyan-300"
+          >
+            {t("analytics.settingsPrivacyLink")}
+          </a>
 
           {dntActive && (
             <div className="mb-3 rounded bg-cyan-950/40 border border-cyan-800/60 p-2 text-[11px] text-cyan-300">

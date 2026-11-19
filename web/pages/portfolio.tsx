@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import Head from "next/head";
 import Link from "next/link";
+import { useRouter } from "next/router";
 import {
   BarChart2,
   TrendingUp,
@@ -15,6 +16,14 @@ import {
 import { SEO } from "@/components/SEO";
 import { useDataRefresh } from "@/hooks/useDataRefresh";
 import { useRouteChangePause } from "@/hooks/useRouteChangePause";
+import { useLocale } from "@/components/LocaleSync";
+import { FormattedAmount, FormattedPercent } from "@/components/ui/FormattedAmount";
+import {
+  formatNumber,
+  formatPercent,
+  formatRawNumber,
+  pluralize,
+} from "@/lib/locale/format";
 import { Vault, VaultStatus } from "@/types/vault";
 
 // ---------------------------------------------------------------------------
@@ -27,7 +36,7 @@ const MOCK_VAULTS: Vault[] = Array.from({ length: 12 }, (_, i) => ({
   owner: "GAXI...B7QK",
   balance: Math.round(Math.random() * 500_000 + 1_000),
   asset: ["XLM", "USDC", "BTC", "ETH"][i % 4],
-  apy: parseFloat((Math.random() * 18 + 1).toFixed(2)),
+  apy: Math.random() * 18 + 1,
   status: (["ACTIVE", "ACTIVE", "ACTIVE", "LOCKED", "PENDING", "ARCHIVED"] as VaultStatus[])[
     i % 6
   ],
@@ -116,7 +125,7 @@ function StatCard({
   trend,
 }: {
   label: string;
-  value: string;
+  value: React.ReactNode;
   sub?: string;
   icon: React.ReactNode;
   trend?: "up" | "down" | "neutral";
@@ -152,9 +161,11 @@ function StatCard({
 function AssetBar({
   breakdown,
   total,
+  locale,
 }: {
   breakdown: AssetBreakdown[];
   total: number;
+  locale: string;
 }) {
   const COLORS = [
     "bg-sky-500",
@@ -163,6 +174,11 @@ function AssetBar({
     "bg-emerald-500",
     "bg-rose-500",
   ];
+  const locale = useLocale();
+
+  if (breakdown.length === 0 || total <= 0) {
+    return <p className="py-6 text-center text-xs text-slate-500">No assets to display yet.</p>;
+  }
 
   return (
     <div>
@@ -173,7 +189,7 @@ function AssetBar({
             key={item.asset}
             className={`${COLORS[i % COLORS.length]} transition-all`}
             style={{ width: `${(item.balance / total) * 100}%` }}
-            title={`${item.asset}: ${((item.balance / total) * 100).toFixed(1)}%`}
+            title={`${item.asset}: ${formatPercent((item.balance / total) * 100, locale, 1)} (${formatRawNumber((item.balance / total) * 100, locale)}%)`}
           />
         ))}
       </div>
@@ -187,12 +203,14 @@ function AssetBar({
                 className={`h-2.5 w-2.5 rounded-full ${COLORS[i % COLORS.length]}`}
               />
               <span className="text-slate-300">{item.asset}</span>
-              <span className="text-xs text-slate-500">({item.count} vault{item.count !== 1 ? "s" : ""})</span>
+              <span className="text-xs text-slate-500">
+                ({pluralize(item.count, { one: "{count} vault", other: "{count} vaults" }, locale)})
+              </span>
             </span>
             <span className="font-medium text-slate-200">
-              {item.balance.toLocaleString()}{" "}
+              <FormattedAmount value={item.balance} locale={locale} />{" "}
               <span className="text-xs text-slate-500">
-                ({((item.balance / total) * 100).toFixed(1)}%)
+                (<FormattedPercent value={(item.balance / total) * 100} locale={locale} digits={1} />)
               </span>
             </span>
           </li>
@@ -203,6 +221,7 @@ function AssetBar({
 }
 
 function StatusBreakdown({ vaults }: { vaults: Vault[] }) {
+  const locale = useLocale();
   const counts = useMemo(() => {
     const m: Partial<Record<VaultStatus, number>> = {};
     for (const v of vaults) m[v.status] = (m[v.status] ?? 0) + 1;
@@ -221,7 +240,9 @@ function StatusBreakdown({ vaults }: { vaults: Vault[] }) {
           >
             {meta.icon}
             <span className="text-sm font-medium">{meta.label}</span>
-            <span className="ml-auto text-lg font-bold">{count}</span>
+            <span className="ms-auto text-lg font-bold">
+              {formatNumber(count, locale, { maximumFractionDigits: 0 })}
+            </span>
           </div>
         );
       })}
@@ -230,6 +251,8 @@ function StatusBreakdown({ vaults }: { vaults: Vault[] }) {
 }
 
 function TopVaultRow({ vault }: { vault: Vault }) {
+  const locale = useLocale();
+
   return (
     <Link
       href={`/vault/${vault.id}`}
@@ -254,11 +277,13 @@ function TopVaultRow({ vault }: { vault: Vault }) {
       </div>
 
       <div className="flex items-center gap-4">
-        <div className="text-right">
+        <div className="text-end">
           <p className="text-sm font-semibold text-white">
-            {vault.balance.toLocaleString()}
+            <FormattedAmount value={vault.balance} locale={locale} />
           </p>
-          <p className="text-xs text-emerald-400">{vault.apy}% APY</p>
+          <p className="text-xs text-emerald-400">
+            <FormattedPercent value={vault.apy ?? 0} locale={locale} digits={2} /> APY
+          </p>
         </div>
         <ArrowUpRight size={14} className="text-slate-500" />
       </div>
@@ -299,6 +324,9 @@ export default function PortfolioOverviewPage() {
   useEffect(() => {
     void refreshVaults();
   }, [refreshVaults]);
+  // In production wire this to a real data-fetching hook / SWR call.
+  const [vaults] = useState<Vault[]>(MOCK_VAULTS);
+  const locale = useLocale();
 
   const totalBalance = useMemo(
     () => vaults.reduce((s, v) => s + v.balance, 0),
@@ -317,6 +345,17 @@ export default function PortfolioOverviewPage() {
   );
 
   const assetBreakdown = useMemo(() => getAssetBreakdown(vaults), [vaults]);
+  const hasVaults = vaults.length > 0;
+
+  const createdInRange = useMemo(() => {
+    if (!from) return vaults.length;
+    const start = from.getTime();
+    const end = to.getTime();
+    return vaults.filter((vault) => {
+      const created = Date.parse(vault.createdAt);
+      return Number.isFinite(created) && created >= start && created <= end;
+    }).length;
+  }, [vaults, from, to]);
 
   return (
     <>
@@ -332,12 +371,12 @@ export default function PortfolioOverviewPage() {
       <main className="min-h-screen bg-slate-950 text-slate-100">
         {/* Header */}
         <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
-          <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-            <div>
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-4 sm:px-6 lg:px-8">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <Link href="/" className="text-2xl font-bold text-cyan-400 hover:text-cyan-300">
                 Perigee
               </Link>
-              <span className="ml-3 text-xs uppercase tracking-wider text-slate-500">
+              <span className="ms-3 text-xs uppercase tracking-wider text-slate-500">
                 Portfolio Overview
               </span>
             </div>
@@ -365,37 +404,74 @@ export default function PortfolioOverviewPage() {
             <p className="mt-1 text-sm text-slate-400">
               All vaults &mdash; balances, allocations, and performance at a glance.
             </p>
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+              <label
+                htmlFor="comparison-range"
+                className="text-xs font-medium text-slate-400"
+              >
+                Comparison period
+              </label>
+              <select
+                id="comparison-range"
+                data-testid="comparison-range"
+                value={range}
+                onChange={(event) => setRange(event.target.value as DateRangeId)}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+              >
+                {DATE_RANGE_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-slate-500" data-testid="range-label">
+                {rangeLabel}
+              </span>
+            </div>
           </div>
 
           {/* KPI cards */}
           <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Total Balance"
-              value={totalBalance.toLocaleString()}
+              value={<FormattedAmount value={totalBalance} locale={locale} />}
               sub="Across all assets"
               icon={<Wallet size={16} />}
               trend="neutral"
             />
             <StatCard
               label="Total Vaults"
-              value={String(vaults.length)}
-              sub={`${vaults.filter((v) => v.status === "ACTIVE").length} active`}
+              value={formatNumber(vaults.length, locale, { maximumFractionDigits: 0 })}
+              sub={`${formatNumber(vaults.filter((v) => v.status === "ACTIVE").length, locale, { maximumFractionDigits: 0 })} active`}
               icon={<BarChart2 size={16} />}
               trend="up"
             />
             <StatCard
               label="Average APY"
-              value={`${avgApy.toFixed(2)}%`}
+              value={<FormattedPercent value={avgApy} locale={locale} digits={2} />}
               sub="Across active vaults"
               icon={<TrendingUp size={16} />}
               trend="up"
             />
             <StatCard
               label="Best APY"
-              value={`${Math.max(...vaults.map((v) => v.apy ?? 0)).toFixed(2)}%`}
+              value={
+                <FormattedPercent
+                  value={Math.max(...vaults.map((v) => v.apy ?? 0))}
+                  locale={locale}
+                  digits={2}
+                />
+              }
               sub={topVaults[0]?.name ?? "—"}
               icon={<TrendingUp size={16} />}
               trend="up"
+            />
+            <StatCard
+              label="New Vaults (Period)"
+              value={formatNumber(createdInRange, locale)}
+              sub={rangeLabel}
+              icon={<Clock size={16} />}
+              trend="neutral"
             />
           </div>
 
@@ -412,7 +488,7 @@ export default function PortfolioOverviewPage() {
               >
                 Asset Allocation
               </h2>
-              <AssetBar breakdown={assetBreakdown} total={totalBalance} />
+              <AssetBar breakdown={assetBreakdown} total={totalBalance} locale={locale} />
             </section>
 
             {/* Vault status */}
@@ -443,9 +519,20 @@ export default function PortfolioOverviewPage() {
             </h2>
             <div className="space-y-2">
               {topVaults.map((vault) => (
-                <TopVaultRow key={vault.id} vault={vault} />
+                <TopVaultRow key={vault.id} vault={vault} locale={locale} />
               ))}
             </div>
+            {hasVaults ? (
+              <div className="space-y-2">
+                {topVaults.map((vault) => (
+                  <TopVaultRow key={vault.id} vault={vault} />
+                ))}
+              </div>
+            ) : (
+              <p role="status" className="py-6 text-center text-xs text-slate-500">
+                No vaults to analyse yet.
+              </p>
+            )}
           </section>
         </div>
       </main>

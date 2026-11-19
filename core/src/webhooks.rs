@@ -8,7 +8,8 @@
 //!   timestamps ([`verify_signature`]), which also stops replays.
 //! * **Retries.** A failed delivery (transport error or non-2xx) is retried after
 //!   1 minute, 5 minutes, 15 minutes, 1 hour, 6 hours and 24 hours
-//!   ([`RETRY_SCHEDULE_SECS`]). After the last retry it is dead-lettered.
+//!   ([`RETRY_SCHEDULE_SECS`]). After the last retry, or at once for a
+//!   non-retryable response ([`crate::webhook_retry`]), it is dead-lettered.
 //! * **Idempotency.** `X-Perigee-Event-Id` is stable across retries so receivers
 //!   can deduplicate, and publishing the same event id twice to an endpoint
 //!   creates one delivery, not two.
@@ -184,6 +185,8 @@ pub struct Endpoint {
     pub id: String,
     pub url: String,
     pub secret: String,
+    /// Retiring secret and its expiry (unix secs) during a key rotation.
+    pub retiring: Option<(String, u64)>,
     pub headers: Vec<(String, String)>,
     /// Event types to receive; empty means all.
     pub events: Vec<String>,
@@ -197,6 +200,7 @@ impl Endpoint {
             id: id.to_string(),
             url: url.to_string(),
             secret: secret.to_string(),
+            retiring: None,
             headers: Vec::new(),
             events: Vec::new(),
             enabled: true,
@@ -393,7 +397,7 @@ impl<T: Transport> WebhookService<T> {
             ("User-Agent".to_string(), "Perigee-Webhooks/1".to_string()),
             (EVENT_ID_HEADER.to_string(), delivery.event_id.clone()),
             (DELIVERY_ID_HEADER.to_string(), delivery.id.clone()),
-            (SIGNATURE_HEADER.to_string(), signature_header(endpoint.secret.as_bytes(), now, &body)),
+            (SIGNATURE_HEADER.to_string(), crate::webhook_keys::signature_header_for(endpoint, now, &body)),
         ];
         headers.extend(endpoint.headers.iter().cloned());
 
@@ -415,7 +419,10 @@ impl<T: Transport> WebhookService<T> {
             delivery.next_attempt_at = None;
             return;
         }
-        match RETRY_SCHEDULE_SECS.get(delivery.cycle_failures) {
+        let wait = crate::webhook_retry::is_retryable(&outcome)
+            .then(|| RETRY_SCHEDULE_SECS.get(delivery.cycle_failures))
+            .flatten();
+        match wait {
             Some(wait) => {
                 delivery.status = DeliveryStatus::Retrying;
                 delivery.next_attempt_at = Some(now + wait);

@@ -17,6 +17,7 @@ export interface ErrorSummaryProps {
   /** Set false to render the summary without taking focus (e.g. after a client-side re-check). */
   autoFocus?: boolean;
   onDismiss?: () => void;
+  onNavigate?: (id: string) => void;
 }
 
 /**
@@ -43,6 +44,7 @@ export function ErrorSummary({
   title = "There is a problem",
   autoFocus = true,
   onDismiss,
+  onNavigate,
 }: ErrorSummaryProps) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -73,14 +75,19 @@ export function ErrorSummary({
               href={`#${error.id}`}
               className="text-sm text-red-100 underline underline-offset-2 hover:text-white"
               onClick={(event) => {
-                const target = document.getElementById(error.id);
-                if (!target) return;
-                // Move focus, not just the scroll position: a hash link that
-                // only scrolls leaves a keyboard user still focused on the
-                // summary, so the next Tab goes somewhere unrelated.
                 event.preventDefault();
-                target.focus();
-                target.scrollIntoView({ block: "center" });
+                onNavigate?.(error.id);
+                const focusField = () => {
+                  const target = document.getElementById(error.id);
+                  if (!target) return;
+                  target.focus();
+                  target.scrollIntoView({ block: "center" });
+                };
+                if (onNavigate) {
+                  requestAnimationFrame(() => requestAnimationFrame(focusField));
+                } else {
+                  focusField();
+                }
               }}
             >
               {error.message}

@@ -17,6 +17,7 @@ export function ServiceWorkerManager() {
   const t = useTranslations();
   const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
   const [queued, setQueued] = useState(false);
+  const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -26,15 +27,21 @@ export function ServiceWorkerManager() {
       },
       onMutationQueued: () => setQueued(true),
       onMutationsReplayed: () => setQueued(false),
+      onOfflineActionBlocked: (message) => {
+        if (!cancelled) setBlockedMessage(message);
+      },
     }).catch(() => {
       // Registration failure must never break the app.
     });
+    const clearBlocked = () => setBlockedMessage(null);
+    window.addEventListener("online", clearBlocked);
     return () => {
       cancelled = true;
+      window.removeEventListener("online", clearBlocked);
     };
   }, []);
 
-  if (!registration && !queued) return null;
+  if (!registration && !queued && !blockedMessage) return null;
 
   return (
     <div
@@ -42,6 +49,11 @@ export function ServiceWorkerManager() {
       aria-live="polite"
       className="fixed bottom-4 left-4 z-50 max-w-sm rounded-xl border border-slate-800 bg-slate-900/95 p-4 text-xs text-slate-200 shadow-xl backdrop-blur"
     >
+      {blockedMessage && (
+        <p role="alert" data-testid="service-worker-reconnect" className="mb-2 text-amber-300">
+          {blockedMessage}
+        </p>
+      )}
       {queued && <p className="mb-2 text-slate-400">{t("serviceWorker.queued")}</p>}
       {registration && (
         <div className="flex items-center justify-between gap-3">

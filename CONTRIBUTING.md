@@ -64,6 +64,15 @@ The `core` server uses [`tracing`](https://docs.rs/tracing) + `tracing-subscribe
 - Set `LOG_FORMAT=json` in production / container deployments to emit line-delimited JSON for log aggregators; omit it for the default pretty text format during local development.
 - The CLI subcommands (`merkle`, `compare`, `export`, `restore`) intentionally keep `println!`/`eprintln!` because their output is meant for shell pipelines, not log aggregation.
 
+### API error codes
+
+`ErrorCode` (`core/src/error_codes.rs`), `docs/ERROR_VARIANTS.md`, and the generated OpenAPI schema must list
+exactly the same set of public error codes. A CI test
+(`error_catalog_sync_tests::error_code_catalog_is_synchronized` in `core/src/main.rs`) fails the build if they
+drift apart. See [`docs/ERROR_VARIANTS.md` → "Adding a new error code"](./docs/ERROR_VARIANTS.md#adding-a-new-error-code)
+for the steps: add the enum variant, add its HTTP status mapping, add a row to the docs table, then re-run the
+sync check.
+
 ### Graceful shutdown
 
 The `core` HTTP server listens for `SIGINT` (Ctrl-C) and `SIGTERM` on Unix targets. On either signal it stops accepting new connections and drains in-flight requests before exiting. Any long-lived background task spawned from `main` should be cancelable via `tokio::select!` or `CancellationToken` so that the process exits cleanly within a few seconds of the signal.

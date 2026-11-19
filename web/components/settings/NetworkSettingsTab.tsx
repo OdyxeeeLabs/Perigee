@@ -3,6 +3,8 @@
 import { useSettingsStore } from "@/lib/settingsStore";
 import { getStage } from "@/lib/contracts.config";
 import type { PreferredNetwork } from "@/lib/settings";
+import { validateSettingsValues } from "@/lib/settingsValidation";
+import { useSettingsValidation } from "./SettingsValidationContext";
 
 const stageLabels: Record<ReturnType<typeof getStage>, string> = {
   mainnet: "Mainnet",
@@ -23,8 +25,20 @@ const stageLabels: Record<ReturnType<typeof getStage>, string> = {
  */
 export function NetworkSettingsTab() {
   const network = useSettingsStore((s) => s.settings.network);
+  const settings = useSettingsStore((s) => s.settings);
   const updateNetwork = useSettingsStore((s) => s.updateNetwork);
+  const { values, errors, setValue, setError, fieldProps } = useSettingsValidation();
   const activeStage = getStage();
+
+  function handleField(id: string, value: string) {
+    setValue(id, value);
+    if (errors[id]) {
+      const message = validateSettingsValues({ ...values, [id]: value }, settings).find(
+        (error) => error.id === id,
+      );
+      setError(id, message?.message ?? null);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -54,14 +68,22 @@ export function NetworkSettingsTab() {
           contract network.
         </p>
         <select
-          id="preferred-network"
-          value={network.preferredNetwork}
-          onChange={(e) => updateNetwork({ preferredNetwork: e.target.value as PreferredNetwork })}
+          {...fieldProps("preferred-network")}
+          value={values["preferred-network"] ?? network.preferredNetwork}
+          onChange={(e) => {
+            handleField("preferred-network", e.target.value);
+            updateNetwork({ preferredNetwork: e.target.value as PreferredNetwork });
+          }}
           className="mt-2 w-full max-w-xs rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
         >
           <option value="mainnet">Mainnet</option>
           <option value="testnet">Testnet</option>
         </select>
+        {errors["preferred-network"] ? (
+          <p id="preferred-network-error" className="mt-1 text-xs text-red-400">
+            {errors["preferred-network"]}
+          </p>
+        ) : null}
       </section>
 
       <section>
@@ -69,14 +91,22 @@ export function NetworkSettingsTab() {
           Custom RPC endpoint
         </label>
         <input
-          id="custom-rpc"
+          {...fieldProps("custom-rpc")}
           type="url"
           inputMode="url"
           placeholder="https://soroban-rpc.example.com"
-          value={network.customRpcEndpoint}
-          onChange={(e) => updateNetwork({ customRpcEndpoint: e.target.value })}
+          value={values["custom-rpc"] ?? network.customRpcEndpoint}
+          onChange={(e) => {
+            handleField("custom-rpc", e.target.value);
+            updateNetwork({ customRpcEndpoint: e.target.value });
+          }}
           className="mt-2 w-full max-w-md rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500"
         />
+        {errors["custom-rpc"] ? (
+          <p id="custom-rpc-error" className="mt-1 text-xs text-red-400">
+            {errors["custom-rpc"]}
+          </p>
+        ) : null}
       </section>
 
       <section>
@@ -84,13 +114,21 @@ export function NetworkSettingsTab() {
           Chain ID
         </label>
         <input
-          id="chain-id"
+          {...fieldProps("chain-id")}
           type="text"
           placeholder="Testnet SDF Network ; September 2015"
-          value={network.chainId}
-          onChange={(e) => updateNetwork({ chainId: e.target.value })}
+          value={values["chain-id"] ?? network.chainId}
+          onChange={(e) => {
+            handleField("chain-id", e.target.value);
+            updateNetwork({ chainId: e.target.value });
+          }}
           className="mt-2 w-full max-w-md rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-cyan-500"
         />
+        {errors["chain-id"] ? (
+          <p id="chain-id-error" className="mt-1 text-xs text-red-400">
+            {errors["chain-id"]}
+          </p>
+        ) : null}
       </section>
     </div>
   );

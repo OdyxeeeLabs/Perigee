@@ -919,6 +919,214 @@ impl<E: Executor> Gateway<E> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Vault event subscriptions (bounded)
+// ---------------------------------------------------------------------------
+
+pub const DEFAULT_MAX_SUBSCRIPTIONS: usize = 100;
+pub const DEFAULT_MAX_SUBSCRIPTIONS_PER_USER: usize = 5;
+/// Events buffered per subscription before it is dropped as a slow consumer.
+pub const DEFAULT_SUBSCRIPTION_BUFFER: usize = 64;
+/// Recent events kept so a reconnecting client can resume from its cursor.
+pub const DEFAULT_REPLAY_EVENTS: usize = 256;
+
+/// A committed vault event. `seq` is the cursor: strictly increasing, and a
+/// client resumes with the last `seq` it applied (exclusive), so replays never
+/// deliver an event twice.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VaultEvent {
+    pub seq: u64,
+    pub tenant_id: String,
+    pub vault_id: String,
+    pub kind: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum SubscriptionError {
+    #[error("too many active subscriptions")]
+    TooManySubscriptions,
+    #[error("the cursor is ahead of the event stream")]
+    InvalidCursor,
+    #[error("the cursor is older than the retained events; resync and subscribe again")]
+    CursorExpired,
+    #[error("subscriber fell behind its buffer of {0} events; reconnect with the last cursor")]
+    Overflowed(usize),
+    #[error("unknown subscription")]
+    UnknownSubscription,
+}
+
+impl SubscriptionError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            SubscriptionError::TooManySubscriptions | SubscriptionError::Overflowed(_) => "RATE_LIMITED",
+            SubscriptionError::InvalidCursor | SubscriptionError::CursorExpired => "BAD_USER_INPUT",
+            SubscriptionError::UnknownSubscription => "BAD_REQUEST",
+        }
+    }
+}
+
+struct Subscriber {
+    user_id: String,
+    tenant_id: String,
+    queue: std::collections::VecDeque<VaultEvent>,
+    overflowed: bool,
+}
+
+#[derive(Default)]
+struct HubState {
+    last_seq: u64,
+    next_id: u64,
+    log: std::collections::VecDeque<VaultEvent>,
+    subscribers: HashMap<u64, Subscriber>,
+}
+
+/// Fan-out of vault events with hard limits on subscriptions and buffering.
+/// A subscriber only ever receives events of the tenant it subscribed for.
+pub struct SubscriptionHub {
+    max_total: usize,
+    max_per_user: usize,
+    buffer: usize,
+    replay: usize,
+    state: Mutex<HubState>,
+}
+
+impl Default for SubscriptionHub {
+    fn default() -> Self {
+        SubscriptionHub::new(
+            DEFAULT_MAX_SUBSCRIPTIONS,
+            DEFAULT_MAX_SUBSCRIPTIONS_PER_USER,
+            DEFAULT_SUBSCRIPTION_BUFFER,
+            DEFAULT_REPLAY_EVENTS,
+        )
+    }
+}
+
+impl SubscriptionHub {
+    pub fn new(max_total: usize, max_per_user: usize, buffer: usize, replay: usize) -> Self {
+        SubscriptionHub { max_total, max_per_user, buffer, replay, state: Mutex::new(HubState::default()) }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HubState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Open a subscription for `tenant_id`, which the caller must take from the
+    /// verified claims. `after` is the last `seq` the client applied.
+    pub fn subscribe(&self, context: &Context, tenant_id: &str, after: Option<u64>) -> Result<u64, SubscriptionError> {
+        let mut state = self.lock();
+        let per_user = state.subscribers.values().filter(|s| s.user_id == context.user_id).count();
+        if state.subscribers.len() >= self.max_total || per_user >= self.max_per_user {
+            return Err(SubscriptionError::TooManySubscriptions);
+        }
+        let mut queue = std::collections::VecDeque::new();
+        if let Some(cursor) = after {
+            if cursor > state.last_seq {
+                return Err(SubscriptionError::InvalidCursor);
+            }
+            let oldest = state.log.front().map(|e| e.seq).unwrap_or(state.last_seq + 1);
+            if cursor + 1 < oldest {
+                return Err(SubscriptionError::CursorExpired);
+            }
+            queue.extend(state.log.iter().filter(|e| e.seq > cursor && e.tenant_id == tenant_id).cloned());
+            if queue.len() > self.buffer {
+                return Err(SubscriptionError::CursorExpired);
+            }
+        }
+        state.next_id += 1;
+        let id = state.next_id;
+        state.subscribers.insert(
+            id,
+            Subscriber { user_id: context.user_id.clone(), tenant_id: tenant_id.to_string(), queue, overflowed: false },
+        );
+        Ok(id)
+    }
+
+    /// Publish an event. Call this only after the change it describes has been
+    /// committed, so no subscriber sees state that could still roll back.
+    pub fn publish(&self, tenant_id: &str, vault_id: &str, kind: &str, payload: Value) -> u64 {
+        let mut state = self.lock();
+        state.last_seq += 1;
+        let event = VaultEvent {
+            seq: state.last_seq,
+            tenant_id: tenant_id.to_string(),
+            vault_id: vault_id.to_string(),
+            kind: kind.to_string(),
+            payload,
+        };
+        state.log.push_back(event.clone());
+        while state.log.len() > self.replay {
+            state.log.pop_front();
+        }
+        for subscriber in state.subscribers.values_mut().filter(|s| s.tenant_id == tenant_id) {
+            if subscriber.queue.len() >= self.buffer {
+                subscriber.overflowed = true;
+            } else {
+                subscriber.queue.push_back(event.clone());
+            }
+        }
+        event.seq
+    }
+
+    /// Take the buffered events. A subscriber that overflowed is closed; it must
+    /// reconnect with the last `seq` it applied.
+    pub fn poll(&self, id: u64) -> Result<Vec<VaultEvent>, SubscriptionError> {
+        let mut state = self.lock();
+        let subscriber = state.subscribers.get_mut(&id).ok_or(SubscriptionError::UnknownSubscription)?;
+        if subscriber.overflowed {
+            state.subscribers.remove(&id);
+            return Err(SubscriptionError::Overflowed(self.buffer));
+        }
+        Ok(subscriber.queue.drain(..).collect())
+    }
+
+    pub fn unsubscribe(&self, id: u64) {
+        self.lock().subscribers.remove(&id);
+    }
+}
+
+#[cfg(test)]
+mod subscription_tests {
+    use super::*;
+
+    fn user(id: &str) -> Context {
+        Context { user_id: id.to_string(), roles: vec![] }
+    }
+
+    #[test]
+    fn delivers_only_to_the_subscribed_tenant() {
+        let hub = SubscriptionHub::default();
+        let mine = hub.subscribe(&user("a"), "t1", None).unwrap();
+        let theirs = hub.subscribe(&user("b"), "t2", None).unwrap();
+        hub.publish("t1", "v1", "updated", json!({}));
+        assert_eq!(hub.poll(mine).unwrap().len(), 1);
+        assert!(hub.poll(theirs).unwrap().is_empty());
+    }
+
+    #[test]
+    fn limits_subscriptions_and_drops_slow_consumers() {
+        let hub = SubscriptionHub::new(10, 1, 2, 8);
+        let id = hub.subscribe(&user("a"), "t1", None).unwrap();
+        assert_eq!(hub.subscribe(&user("a"), "t1", None), Err(SubscriptionError::TooManySubscriptions));
+        for _ in 0..3 {
+            hub.publish("t1", "v1", "updated", json!({}));
+        }
+        assert_eq!(hub.poll(id), Err(SubscriptionError::Overflowed(2)));
+        assert_eq!(hub.poll(id), Err(SubscriptionError::UnknownSubscription));
+    }
+
+    #[test]
+    fn resuming_from_a_cursor_does_not_repeat_events() {
+        let hub = SubscriptionHub::default();
+        let first = hub.publish("t1", "v1", "created", json!({}));
+        hub.publish("t1", "v1", "updated", json!({}));
+        let id = hub.subscribe(&user("a"), "t1", Some(first)).unwrap();
+        let events = hub.poll(id).unwrap();
+        assert_eq!(events.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(hub.subscribe(&user("b"), "t1", Some(99)), Err(SubscriptionError::InvalidCursor));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

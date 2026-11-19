@@ -5,6 +5,8 @@ import { CURRENCIES, NUMBER_FORMATS, type Currency, type NumberFormat } from "@/
 import { REFRESH_INTERVAL_OPTIONS, type RefreshIntervalMs } from "@/lib/refreshInterval";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { LOCALE_NAMES, SUPPORTED_LOCALES } from "@/lib/locale/locales";
+import { usePreferenceUndoToast } from "@/hooks/usePreferenceUndoToast";
+import { useSettingsValidation } from "./SettingsValidationContext";
 
 /**
  * Display tab — issue #682: currency, number format, theme, language.
@@ -24,6 +26,8 @@ import { LOCALE_NAMES, SUPPORTED_LOCALES } from "@/lib/locale/locales";
 export function DisplaySettingsTab() {
   const display = useSettingsStore((s) => s.settings.display);
   const updateDisplay = useSettingsStore((s) => s.updateDisplay);
+  const { values, errors, setValue, fieldProps } = useSettingsValidation();
+  usePreferenceUndoToast("display");
 
   return (
     <div className="flex flex-col gap-6">
@@ -32,9 +36,12 @@ export function DisplaySettingsTab() {
           Currency
         </label>
         <select
-          id="currency"
-          value={display.currency}
-          onChange={(e) => updateDisplay({ currency: e.target.value as Currency })}
+          {...fieldProps("currency")}
+          value={values.currency ?? display.currency}
+          onChange={(e) => {
+            setValue("currency", e.target.value);
+            updateDisplay({ currency: e.target.value as Currency });
+          }}
           className="mt-2 w-full max-w-xs rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
         >
           {CURRENCIES.map((currency) => (
@@ -43,6 +50,9 @@ export function DisplaySettingsTab() {
             </option>
           ))}
         </select>
+        {errors.currency ? (
+          <p id="currency-error" className="mt-1 text-xs text-red-400">{errors.currency}</p>
+        ) : null}
       </section>
 
       <section>
@@ -50,9 +60,12 @@ export function DisplaySettingsTab() {
           Number format
         </label>
         <select
-          id="number-format"
-          value={display.numberFormat}
-          onChange={(e) => updateDisplay({ numberFormat: e.target.value as NumberFormat })}
+          {...fieldProps("number-format")}
+          value={values["number-format"] ?? display.numberFormat}
+          onChange={(e) => {
+            setValue("number-format", e.target.value);
+            updateDisplay({ numberFormat: e.target.value as NumberFormat });
+          }}
           className="mt-2 w-full max-w-xs rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
         >
           {NUMBER_FORMATS.map((format) => (
@@ -61,6 +74,11 @@ export function DisplaySettingsTab() {
             </option>
           ))}
         </select>
+        {errors["number-format"] ? (
+          <p id="number-format-error" className="mt-1 text-xs text-red-400">
+            {errors["number-format"]}
+          </p>
+        ) : null}
       </section>
 
       <section>
@@ -101,9 +119,12 @@ export function DisplaySettingsTab() {
           language right now, use the language picker in the navigation bar.
         </p>
         <select
-          id="preferred-language"
-          value={display.preferredLanguage}
-          onChange={(e) => updateDisplay({ preferredLanguage: e.target.value })}
+          {...fieldProps("preferred-language")}
+          value={values["preferred-language"] ?? display.preferredLanguage}
+          onChange={(e) => {
+            setValue("preferred-language", e.target.value);
+            updateDisplay({ preferredLanguage: e.target.value });
+          }}
           className="mt-2 w-full max-w-xs rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
         >
           {SUPPORTED_LOCALES.map((locale) => (
@@ -112,6 +133,11 @@ export function DisplaySettingsTab() {
             </option>
           ))}
         </select>
+        {errors["preferred-language"] ? (
+          <p id="preferred-language-error" className="mt-1 text-xs text-red-400">
+            {errors["preferred-language"]}
+          </p>
+        ) : null}
       </section>
     </div>
   );

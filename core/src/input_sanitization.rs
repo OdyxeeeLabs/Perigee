@@ -17,6 +17,18 @@ pub const DEFAULT_MAX_STRING_LENGTH: usize = 2 * 1024 * 1024;
 pub const DEFAULT_MAX_COLLECTION_LENGTH: usize = 16_384;
 pub const DEFAULT_MAX_DEPTH: usize = 64;
 
+/// Default maximum JSON request body size (API-33), matching the
+/// `DefaultBodyLimit` value already used across the router. Override with
+/// `MAX_REQUEST_BODY_BYTES` (bytes).
+pub const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+
+/// The configured max request body size in bytes, read fresh from
+/// `MAX_REQUEST_BODY_BYTES` on every call (falls back to
+/// [`DEFAULT_MAX_BODY_BYTES`] when unset, empty, non-numeric, or zero).
+pub fn max_body_bytes() -> usize {
+    env_limit("MAX_REQUEST_BODY_BYTES", DEFAULT_MAX_BODY_BYTES)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SanitizationLimits {
     pub max_string_length: usize,
@@ -32,6 +44,39 @@ impl Default for SanitizationLimits {
             max_depth: DEFAULT_MAX_DEPTH,
         }
     }
+}
+
+impl SanitizationLimits {
+    /// Load limits from the environment (API-33), falling back to the
+    /// defaults above whenever a variable is absent, empty, non-numeric, or
+    /// zero. Keeping a single `from_env()` here means every call site that
+    /// enforces these limits — [`sanitize_json`], [`check_structural_limits`],
+    /// and `sanitize_request_middleware` — can be retuned per-deployment
+    /// without a recompile.
+    ///
+    /// | Variable                 | Meaning                                   | Default |
+    /// |--------------------------|--------------------------------------------|-------:|
+    /// | `MAX_STRING_LENGTH`      | max characters per string field             | 2 MiB chars |
+    /// | `MAX_COLLECTION_LENGTH`  | max items in an array / keys in an object   | 16384  |
+    /// | `MAX_NESTING_DEPTH`      | max levels of nested arrays/objects         | 64     |
+    pub fn from_env() -> Self {
+        Self {
+            max_string_length: env_limit("MAX_STRING_LENGTH", DEFAULT_MAX_STRING_LENGTH),
+            max_collection_length: env_limit("MAX_COLLECTION_LENGTH", DEFAULT_MAX_COLLECTION_LENGTH),
+            max_depth: env_limit("MAX_NESTING_DEPTH", DEFAULT_MAX_DEPTH),
+        }
+    }
+}
+
+/// Parses `key` as a positive `usize`, falling back to `default` when the
+/// variable is unset, empty, non-numeric, or zero (zero would make every
+/// request fail, which is never the intent of an unset/misconfigured limit).
+fn env_limit(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|parsed| *parsed > 0)
+        .unwrap_or(default)
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -108,7 +153,7 @@ fn is_format_control(character: char) -> bool {
 }
 
 pub fn sanitize_json(value: &Value) -> Result<Value, SanitizationError> {
-    sanitize_json_with_limits(value, SanitizationLimits::default())
+    sanitize_json_with_limits(value, SanitizationLimits::from_env())
 }
 
 pub fn sanitize_json_with_limits(
@@ -116,6 +161,53 @@ pub fn sanitize_json_with_limits(
     limits: SanitizationLimits,
 ) -> Result<Value, SanitizationError> {
     sanitize_json_inner(value, 0, limits)
+}
+
+/// Checks only structure — array/object length and nesting depth — without
+/// touching string content (API-33).
+///
+/// Used at the request-extractor boundary (`ApiJson`, `ValidatedJson` in
+/// `errors.rs`) to reject oversized or deeply nested payloads *before* a
+/// handler, or any DB-mutating call it makes, ever sees them. Unlike
+/// [`sanitize_json_with_limits`], this never rewrites the value and never
+/// rejects on string content (control characters, length) — it is a narrow
+/// defence against memory blow-up from huge/deeply-nested collections, not a
+/// replacement for the existing content sanitization pipelines.
+pub fn check_structural_limits(
+    value: &Value,
+    limits: &SanitizationLimits,
+) -> Result<(), SanitizationError> {
+    check_structural_limits_at(value, 0, limits)
+}
+
+fn check_structural_limits_at(
+    value: &Value,
+    depth: usize,
+    limits: &SanitizationLimits,
+) -> Result<(), SanitizationError> {
+    if depth > limits.max_depth {
+        return Err(SanitizationError::DepthExceeded);
+    }
+    match value {
+        Value::Array(items) => {
+            if items.len() > limits.max_collection_length {
+                return Err(SanitizationError::CollectionTooLong);
+            }
+            for item in items {
+                check_structural_limits_at(item, depth + 1, limits)?;
+            }
+        }
+        Value::Object(entries) => {
+            if entries.len() > limits.max_collection_length {
+                return Err(SanitizationError::CollectionTooLong);
+            }
+            for item in entries.values() {
+                check_structural_limits_at(item, depth + 1, limits)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn sanitize_json_inner(
@@ -1291,6 +1383,7 @@ pub fn sanitize_file_upload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_sanitize_text_normal() {
@@ -1420,5 +1513,111 @@ mod tests {
         // Suspicious script detection
         let script = b"<script>alert(1)</script>";
         assert!(sanitize_file_upload("script.txt", "text/plain", script, &config).is_err());
+    }
+
+    // ── API-33: structural limits (array/collection length, nesting depth) ──
+
+    /// Serializes tests that touch process-global env vars so they don't race
+    /// `errors.rs`/`config.rs` tests that also mutate `APP_ENV` et al.
+    /// Reuses the crate-wide lock rather than adding a second one.
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::errors::env_guard()
+    }
+
+    fn nested_array(depth: usize) -> Value {
+        let mut value = json!([]);
+        for _ in 0..depth {
+            value = json!([value]);
+        }
+        value
+    }
+
+    #[test]
+    fn collection_length_just_below_at_and_above_the_limit_is_allowed_then_rejected() {
+        let limits = SanitizationLimits {
+            max_string_length: DEFAULT_MAX_STRING_LENGTH,
+            max_collection_length: 3,
+            max_depth: DEFAULT_MAX_DEPTH,
+        };
+
+        let below = Value::Array((0..2).map(Value::from).collect());
+        let at = Value::Array((0..3).map(Value::from).collect());
+        let above = Value::Array((0..4).map(Value::from).collect());
+
+        assert!(check_structural_limits(&below, &limits).is_ok(), "2 items (below 3) must pass");
+        assert!(check_structural_limits(&at, &limits).is_ok(), "3 items (at the limit) must pass");
+        assert_eq!(
+            check_structural_limits(&above, &limits).unwrap_err(),
+            SanitizationError::CollectionTooLong,
+            "4 items (above 3) must be rejected"
+        );
+    }
+
+    #[test]
+    fn object_key_count_is_checked_with_the_same_collection_limit() {
+        let limits = SanitizationLimits {
+            max_string_length: DEFAULT_MAX_STRING_LENGTH,
+            max_collection_length: 2,
+            max_depth: DEFAULT_MAX_DEPTH,
+        };
+
+        assert!(check_structural_limits(&json!({"a": 1, "b": 2}), &limits).is_ok());
+        assert_eq!(
+            check_structural_limits(&json!({"a": 1, "b": 2, "c": 3}), &limits).unwrap_err(),
+            SanitizationError::CollectionTooLong
+        );
+    }
+
+    #[test]
+    fn nesting_depth_just_below_at_and_above_the_limit_is_allowed_then_rejected() {
+        let limits = SanitizationLimits {
+            max_string_length: DEFAULT_MAX_STRING_LENGTH,
+            max_collection_length: DEFAULT_MAX_COLLECTION_LENGTH,
+            max_depth: 3,
+        };
+
+        // `nested_array(n)` wraps `n` arrays around an empty one, so the
+        // deepest child sits at depth `n`.
+        assert!(check_structural_limits(&nested_array(2), &limits).is_ok(), "depth 2 (below 3) must pass");
+        assert!(check_structural_limits(&nested_array(3), &limits).is_ok(), "depth 3 (at the limit) must pass");
+        assert_eq!(
+            check_structural_limits(&nested_array(4), &limits).unwrap_err(),
+            SanitizationError::DepthExceeded,
+            "depth 4 (above 3) must be rejected"
+        );
+    }
+
+    #[test]
+    fn structural_limits_never_rewrite_or_reject_string_content() {
+        // Control characters and over-length strings are a *content*
+        // sanitization concern (`sanitize_json`), not a structural one —
+        // `check_structural_limits` must leave them alone.
+        let limits = SanitizationLimits {
+            max_string_length: 1,
+            max_collection_length: DEFAULT_MAX_COLLECTION_LENGTH,
+            max_depth: DEFAULT_MAX_DEPTH,
+        };
+        let value = json!({"name": "a very long string that exceeds max_string_length\u{0007}"});
+        assert!(check_structural_limits(&value, &limits).is_ok());
+    }
+
+    #[test]
+    fn sanitization_limits_from_env_overrides_defaults_and_falls_back_on_bad_values() {
+        let _env = env_guard();
+        unsafe {
+            std::env::set_var("MAX_COLLECTION_LENGTH", "7");
+            std::env::set_var("MAX_NESTING_DEPTH", "0"); // invalid: falls back to default
+            std::env::remove_var("MAX_STRING_LENGTH");
+        }
+
+        let limits = SanitizationLimits::from_env();
+        assert_eq!(limits.max_collection_length, 7);
+        assert_eq!(limits.max_depth, DEFAULT_MAX_DEPTH);
+        assert_eq!(limits.max_string_length, DEFAULT_MAX_STRING_LENGTH);
+
+        unsafe {
+            std::env::remove_var("MAX_COLLECTION_LENGTH");
+            std::env::remove_var("MAX_NESTING_DEPTH");
+        }
     }
 }

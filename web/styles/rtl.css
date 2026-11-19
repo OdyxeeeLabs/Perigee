@@ -23,13 +23,14 @@
     transform: scaleX(-1);
   }
 
-  /* Same idea for lucide chevrons, which carry no data attribute. */
-  [dir="rtl"] .lucide-chevron-right,
-  [dir="rtl"] .lucide-arrow-right,
-  [dir="rtl"] .lucide-chevrons-right,
-  [dir="rtl"] .lucide-move-right {
-    transform: scaleX(-1);
-  }
+}
+
+/* Same idea for lucide chevrons, which carry no data attribute. */
+[dir="rtl"] .lucide-chevron-right,
+[dir="rtl"] .lucide-arrow-right,
+[dir="rtl"] .lucide-chevrons-right,
+[dir="rtl"] .lucide-move-right {
+  transform: scaleX(-1);
 }
 
 /*

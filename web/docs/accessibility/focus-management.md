@@ -31,16 +31,23 @@ hook is left containing only wiring. The DOM adapters (`isFocusableElement`,
 
 | Module | Responsibility |
 |---|---|
-| `lib/a11y/focus.ts` | Pure decisions. No DOM. 27 assertions. |
+| `lib/a11y/focus.ts` | Pure decisions. No DOM. |
 | `hooks/useFocusTrap.ts` | Listeners, focus calls, DOM adapters. |
+
+`WalletModal` joins `NavDrawer` and `VaultDetailModal` in using the shared
+hook, so Escape and focus restoration behave the same in every overlay.
 
 ## Decisions worth knowing about
 
-**Focus is restored only if the trigger survived.** Closing a dialog whose
-trigger was deleted in the meantime — a list row, a toast — and calling
+**Focus is restored to the trigger if it survived, otherwise to a stable
+fallback.** Closing a dialog whose trigger was deleted in the meantime — a
+list row, a toast, a control removed by a route transition — and calling
 `.focus()` on the detached node silently drops the user at the top of the
 document. `shouldRestoreFocus` checks `isConnected`, `disabled`, `tabIndex`
-and visibility first.
+and visibility first; `pickFocusRestoreTarget` then falls back to
+`#main-content` (or `[data-focus-fallback]`, or `<main>`). The fallback is
+programmatically focusable, so focus never lands on `<body>` after a close,
+an error state, or a navigation that removed the opener.
 
 **`tabindex` is compared with `getClientRects()`, not `offsetParent`.** A
 `position: fixed` dialog has a null `offsetParent`; using it would report the
@@ -109,6 +116,12 @@ merging, with a keyboard only:
 - [ ] Escape closes the drawer **and** focus returns to the hamburger button.
 - [ ] Close the drawer after the page has re-rendered behind it — focus must
       still return, not jump to the top of the document.
+- [ ] Open the wallet modal, press Escape, and confirm focus returns to the
+      button that opened it.
+- [ ] Navigate away from a page while an overlay is open: closing the overlay
+      must leave focus on the main content, never on `<body>`.
+- [ ] Remove the opener (e.g. delete its list row) while a modal is open, then
+      close it: focus moves to `#main-content`, not the document top.
 - [ ] Submit a form with several invalid fields: the summary takes focus, each
       entry moves focus to its field, and nothing scrolls the other errors
       out of view.

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import '../styles/globals.css';
 import { Inter } from 'next/font/google';
+import { LocaleSync } from '@/components/LocaleSync';
 import { NetworkStatusBanner } from '@/components/NetworkStatusBanner';
 import { API_URL } from '@/lib/api';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -50,7 +51,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <CommandPaletteLauncher />
                 <NetworkStatusBanner apiUrl={API_URL} />
                 <main id="main-content" tabIndex={-1}>
-                  {children}
+                  <LocaleSync>{children}</LocaleSync>
                 </main>
               </AnnouncerProvider>
             </WalletProvider>
