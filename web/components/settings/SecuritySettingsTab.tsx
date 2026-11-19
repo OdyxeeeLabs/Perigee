@@ -3,6 +3,7 @@
 import { useSettingsStore } from "@/lib/settingsStore";
 import { SESSION_TIMEOUT_OPTIONS, type SessionTimeoutMinutes } from "@/lib/settings";
 import { useWallet } from "@/context/WalletContext";
+import { useSettingsValidation } from "./SettingsValidationContext";
 
 const timeoutLabel = (minutes: SessionTimeoutMinutes) => (minutes === 0 ? "Never" : `${minutes} minutes`);
 
@@ -17,6 +18,7 @@ export function SecuritySettingsTab() {
   const security = useSettingsStore((s) => s.settings.security);
   const updateSecurity = useSettingsStore((s) => s.updateSecurity);
   const { address, isConnected, selectedWalletId, supportedWallets, disconnect, openModal } = useWallet();
+  const { values, errors, setValue, fieldProps } = useSettingsValidation();
 
   const walletLabel = supportedWallets.find((w) => w.id === selectedWalletId)?.name ?? selectedWalletId;
 
@@ -56,11 +58,12 @@ export function SecuritySettingsTab() {
           Session timeout
         </label>
         <select
-          id="session-timeout"
-          value={security.sessionTimeoutMinutes}
-          onChange={(e) =>
-            updateSecurity({ sessionTimeoutMinutes: Number(e.target.value) as SessionTimeoutMinutes })
-          }
+          {...fieldProps("session-timeout")}
+          value={values["session-timeout"] ?? String(security.sessionTimeoutMinutes)}
+          onChange={(e) => {
+            setValue("session-timeout", e.target.value);
+            updateSecurity({ sessionTimeoutMinutes: Number(e.target.value) as SessionTimeoutMinutes });
+          }}
           className="mt-2 w-full max-w-xs rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
         >
           {SESSION_TIMEOUT_OPTIONS.map((minutes) => (
@@ -69,6 +72,11 @@ export function SecuritySettingsTab() {
             </option>
           ))}
         </select>
+        {errors["session-timeout"] ? (
+          <p id="session-timeout-error" className="mt-1 text-xs text-red-400">
+            {errors["session-timeout"]}
+          </p>
+        ) : null}
       </section>
 
       <section>

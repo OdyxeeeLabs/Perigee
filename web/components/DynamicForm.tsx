@@ -5,6 +5,7 @@ import React from "react"
 import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { ErrorSummary, type FieldError } from './ErrorSummary';
 import { sanitizeUserInput } from '../lib/sanitize';
 import type { ContractFunction, SimulationInputs } from '../lib/sorobantypes';
 
@@ -139,8 +140,17 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
     color: '#c9d1d9',
   });
 
+  const summaryErrors: FieldError[] = func.inputs
+    .filter((input) => Boolean(fieldErrors[input.name]))
+    .map((input) => ({
+      id: `field-${input.name}`,
+      message: fieldErrors[input.name],
+      label: input.name,
+    }));
+
   return (
     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <ErrorSummary errors={summaryErrors} title={t("settings.errorSummaryTitle")} autoFocus={false} />
       {func.inputs.length === 0 ? (
         <p style={{ color: '#8b949e', fontSize: '14px' }}>{t("dynamicForm.noInputs")}</p>
       ) : (
@@ -216,6 +226,8 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
                 disabled={loading}
+                aria-invalid={Boolean(fieldErrors[input.name])}
+                aria-describedby={fieldErrors[input.name] ? `error-${input.name}` : undefined}
                 style={inputStyle(input.name)}
               />
             ) : input.type === 'string' || input.type === 'symbol' ? (
@@ -227,6 +239,8 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
                 disabled={loading}
+                aria-invalid={Boolean(fieldErrors[input.name])}
+                aria-describedby={fieldErrors[input.name] ? `error-${input.name}` : undefined}
                 style={inputStyle(input.name)}
               />
             ) : input.type === 'bool' ? (
@@ -236,6 +250,8 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 onChange={(e) => handleChange(input.name, input.type, e.target.value === 'true')}
                 required={!input.optional}
                 disabled={loading}
+                aria-invalid={Boolean(fieldErrors[input.name])}
+                aria-describedby={fieldErrors[input.name] ? `error-${input.name}` : undefined}
                 style={inputStyle(input.name)}
               >
                 <option value="">{t("dynamicForm.selectValue")}</option>
@@ -251,6 +267,8 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
                 disabled={loading}
+                aria-invalid={Boolean(fieldErrors[input.name])}
+                aria-describedby={fieldErrors[input.name] ? `error-${input.name}` : undefined}
                 style={inputStyle(input.name)}
               />
             )}
