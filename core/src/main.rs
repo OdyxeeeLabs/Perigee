@@ -3,7 +3,9 @@
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod admin_overview;
 mod agent_fleet;
+mod api_keys;
 mod agent_health;
 mod agent_identity;
 mod audit_log;
@@ -35,6 +37,7 @@ pub mod fee_store {
 }
 
 mod namespaced_errors;
+mod outbox;
 pub mod fee_analytics;
 pub mod fee_collector;
 pub mod fee_store;
@@ -43,6 +46,7 @@ mod gas_golfing;
 mod middleware;
 pub mod insights;
 mod input_sanitization;
+mod job_queue;
 mod jobs;
 mod log_redaction;
 mod logging;
@@ -63,9 +67,11 @@ mod simulation;
 mod simulation_service;
 mod signed_receipt;
 mod stellar_service;
+mod timestamps;
 mod transaction_outcome;
 mod two_phase_commit;
 pub mod vault_store;
+mod manager_quota;
 mod manager_store;
 #[cfg(test)]
 mod tenant_isolation_tests;
@@ -3409,6 +3415,66 @@ async fn main() {
         database_pool_monitor,
     );
 
+    // API-31: read-only admin overview of queue and dependency health.
+    let admin_overview = {
+        let overview_pool = db_pool.clone();
+        let overview_registry = Arc::clone(&registry);
+        let overview_jobs = job_queue.clone();
+        Arc::new(
+            admin_overview::AdminOverviewService::default()
+                .with_probe(Arc::new(admin_overview::DependencyProbe::new(
+                    "database",
+                    move || {
+                        let pool = overview_pool.clone();
+                        async move {
+                            let mut connection =
+                                pool.acquire().await.map_err(|e| e.to_string())?;
+                            sqlx::query("SELECT 1")
+                                .execute(&mut *connection)
+                                .await
+                                .map(|_| ())
+                                .map_err(|e| e.to_string())
+                        }
+                    },
+                )))
+                .with_probe(Arc::new(admin_overview::DependencyProbe::new(
+                    "job_queue",
+                    move || {
+                        let jobs = overview_jobs.clone();
+                        async move {
+                            if jobs
+                                .health_check(admin_overview::DEFAULT_PROBE_TIMEOUT)
+                                .await
+                            {
+                                Ok(())
+                            } else {
+                                Err("job queue store is unhealthy".to_string())
+                            }
+                        }
+                    },
+                )))
+                .with_probe(Arc::new(admin_overview::DependencyProbe::new(
+                    "stellar_rpc",
+                    move || {
+                        let registry = Arc::clone(&overview_registry);
+                        async move {
+                            if registry.healthy_providers().await.is_empty() {
+                                Err("no healthy RPC providers".to_string())
+                            } else {
+                                Ok(())
+                            }
+                        }
+                    },
+                ))),
+        )
+    };
+
+    // API-37: per-manager quotas; defaults from PERIGEE_QUOTA_DEFAULT_*.
+    let manager_quotas = Arc::new(manager_quota::ManagerQuotaRegistry::from_env());
+
+    // API-38: scoped API keys for server-to-server integrations.
+    let api_key_store = Arc::new(api_keys::ApiKeyStore::new());
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
@@ -3479,7 +3545,51 @@ async fn main() {
             "/admin/vaults/deleted",
             get(vault_store::list_deleted_vaults_handler),
         )
-        .route_layer(axum::middleware::from_fn(auth::auth_middleware));
+        // Read-only operational overview, administrators only (API-31)
+        .route(
+            "/admin/overview",
+            get(admin_overview::admin_overview_handler),
+        )
+        // Administrator-controlled per-manager quotas (API-37)
+        .route(
+            "/admin/quotas/:manager",
+            get(manager_quota::get_manager_quotas_handler)
+                .put(manager_quota::set_manager_quota_handler),
+        )
+        .route(
+            "/admin/quotas/:manager/:class",
+            axum::routing::delete(manager_quota::clear_manager_quota_handler),
+        )
+        // API-key lifecycle; managing keys requires a wallet session (API-38)
+        .route(
+            "/api-keys",
+            get(api_keys::list_api_keys_handler).post(api_keys::create_api_key_handler),
+        )
+        .route(
+            "/api-keys/:key_id/rotate",
+            post(api_keys::rotate_api_key_handler),
+        )
+        .route(
+            "/api-keys/:key_id",
+            axum::routing::delete(api_keys::revoke_api_key_handler),
+        )
+        // Runs inside auth so the authenticated manager is known.
+        .route_layer(axum::middleware::from_fn(
+            manager_quota::manager_quota_middleware,
+        ))
+        .route_layer(axum::middleware::from_fn(auth::auth_middleware))
+        .layer(Extension(admin_overview))
+        .layer(Extension(manager_quotas))
+        .layer(Extension(Arc::clone(&api_key_store)));
+
+    // Routes authenticated with `X-API-Key` instead of a wallet session (API-38).
+    let integration_routes = Router::new()
+        .route(
+            "/integrations/api-key",
+            get(api_keys::introspect_api_key_handler),
+        )
+        .route_layer(axum::middleware::from_fn(api_keys::api_key_middleware))
+        .layer(Extension(api_key_store));
 
     let public_rate_limit_config = RateLimitConfig::from_env();
     tracing::info!(
@@ -3586,7 +3696,8 @@ async fn main() {
 
     let api_routes = Router::new()
         .merge(public_routes)
-        .merge(protected);
+        .merge(protected)
+        .merge(integration_routes);
 
     let app = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))

@@ -4,7 +4,9 @@
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod admin_overview;
 pub mod agent_fleet;
+pub mod api_keys;
 pub mod backpressure;
 pub mod billing_service;
 pub mod config;
@@ -82,6 +84,7 @@ pub mod rounding;
 pub mod agent_identity;
 pub mod agent_health;
 pub mod failover;
+pub mod manager_quota;
 pub mod rate_limiter;
 pub mod validation;
 pub mod fee_validation;
@@ -95,6 +98,7 @@ pub mod idempotency_sqlite;
 pub mod pagination;
 pub mod validation_pipeline;
 pub mod notifications;
+pub mod timestamps;
 pub mod db;
 
 #[cfg(test)]
