@@ -220,13 +220,26 @@ impl IntoResponse for AppError {
             "Request failed"
         );
 
-        let body = Json(ErrorResponse::from_error_code_with_legacy(
+        // RFC 7807 body. The legacy `code`/`message`/`error` members stay as
+        // extensions so existing clients keep working.
+        let legacy = ErrorResponse::from_error_code_with_legacy(
             code,
             self.legacy_error_code(),
             self.client_message(),
-        ));
+        );
+        let mut problem = crate::rest_api::ProblemDetails::from_status(status.as_u16(), &legacy.message);
+        if let Ok(serde_json::Value::Object(members)) = serde_json::to_value(&legacy) {
+            for (name, value) in members {
+                problem = problem.with_extension(&name, value);
+            }
+        }
 
-        (status, body).into_response()
+        (
+            status,
+            [(axum::http::header::CONTENT_TYPE, crate::rest_api::PROBLEM_CONTENT_TYPE)],
+            problem.to_json().to_string(),
+        )
+            .into_response()
     }
 }
 
