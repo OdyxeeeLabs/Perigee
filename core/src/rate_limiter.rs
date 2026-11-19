@@ -975,6 +975,16 @@ impl ApiRateLimiter {
             }
         }
 
+        if !used_redis && crate::rate_limit_failure_policy::fail_closed() {
+            tracing::warn!("rate-limit shared store unavailable; failing closed");
+            return RateLimitDecision {
+                allowed: false,
+                limit: policy.max_requests,
+                remaining: 0,
+                retry_after: policy.window,
+            };
+        }
+
         if !used_redis {
             let key = (bucket_id, normalized_endpoint);
             let mut buckets = self
