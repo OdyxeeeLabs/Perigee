@@ -9,6 +9,7 @@
     "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"./__tests__/**/*.test.cjs\" \"./lib/**/*.test.cjs\" \"./components/**/*.test.cjs\"",
+    "budget:routes": "node scripts/check-route-budgets.mjs .next",
     "docs:build": "node scripts/docs/generate.mjs",
     "docs:check": "node scripts/docs/generate.mjs --check",
     "docs:release": "node scripts/docs/generate.mjs --release",

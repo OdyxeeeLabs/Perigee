@@ -1,6 +1,8 @@
 import type { KeyboardEvent } from "react";
 import type { Vault } from "@/types/vault";
+import { shortenAddress } from "@/lib/utils";
 import { PrefetchLink } from "./PrefetchLink";
+import { CopyButton } from "./ui/CopyButton";
 
 export interface VaultRowProps {
   vault: Vault;
@@ -20,7 +22,7 @@ export function VaultRow({ vault, style, href, onClick }: VaultRowProps) {
   const interactive = Boolean(onClick);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!onClick) return;
+    if (!onClick || event.target !== event.currentTarget) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onClick(vault);
@@ -53,7 +55,10 @@ export function VaultRow({ vault, style, href, onClick }: VaultRowProps) {
         ) : (
           <span className="text-sm font-medium text-white">{vault.name}</span>
         )}
-        <span className="text-xs text-slate-400">{vault.owner}</span>
+        <span className="flex items-center gap-1 text-xs text-slate-400">
+          <span title={vault.owner}>{shortenAddress(vault.owner)}</span>
+          <CopyButton value={vault.owner} label="vault owner address" />
+        </span>
       </div>
       <div className="flex items-center gap-4 text-xs text-slate-400">
         <span className="font-mono text-cyan-400">{vault.balance.toLocaleString()} {vault.asset}</span>

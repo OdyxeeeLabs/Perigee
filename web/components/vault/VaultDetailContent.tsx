@@ -1,5 +1,7 @@
 import { Fragment } from "react";
 import type { VaultDetail } from "@/types/vault";
+import { shortenAddress } from "@/lib/utils";
+import { CopyButton } from "../ui/CopyButton";
 import { HistoricalPerformanceChart } from "./HistoricalPerformanceChart";
 
 const auditBadgeClasses: Record<VaultDetail["risk"]["auditStatus"], string> = {
@@ -7,11 +9,6 @@ const auditBadgeClasses: Record<VaultDetail["risk"]["auditStatus"], string> = {
   pending: "bg-amber-950 text-amber-400",
   unaudited: "bg-rose-950 text-rose-400",
 };
-
-function truncateAddress(address: string): string {
-  if (address.length <= 12) return address;
-  return `${address.slice(0, 6)}…${address.slice(-6)}`;
-}
 
 export interface VaultDetailContentProps {
   vault: VaultDetail;
@@ -40,14 +37,20 @@ export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: V
           <dt className="text-slate-500">Underlying</dt>
           <dd className="text-right font-mono text-slate-200">{vault.tokenInfo.underlyingAsset}</dd>
           <dt className="text-slate-500">Underlying address</dt>
-          <dd className="text-right font-mono text-xs text-slate-400" title={vault.tokenInfo.underlyingAddress}>
-            {truncateAddress(vault.tokenInfo.underlyingAddress)}
+          <dd className="flex items-center justify-end gap-1 font-mono text-xs text-slate-400">
+            <span title={vault.tokenInfo.underlyingAddress}>
+              {shortenAddress(vault.tokenInfo.underlyingAddress)}
+            </span>
+            <CopyButton value={vault.tokenInfo.underlyingAddress} label="underlying token address" />
           </dd>
           <dt className="text-slate-500">Share token</dt>
           <dd className="text-right font-mono text-slate-200">{vault.tokenInfo.shareToken}</dd>
           <dt className="text-slate-500">Share token address</dt>
-          <dd className="text-right font-mono text-xs text-slate-400" title={vault.tokenInfo.shareTokenAddress}>
-            {truncateAddress(vault.tokenInfo.shareTokenAddress)}
+          <dd className="flex items-center justify-end gap-1 font-mono text-xs text-slate-400">
+            <span title={vault.tokenInfo.shareTokenAddress}>
+              {shortenAddress(vault.tokenInfo.shareTokenAddress)}
+            </span>
+            <CopyButton value={vault.tokenInfo.shareTokenAddress} label="share token address" />
           </dd>
           <dt className="text-slate-500">Decimals</dt>
           <dd className="text-right font-mono text-slate-200">{vault.tokenInfo.decimals}</dd>

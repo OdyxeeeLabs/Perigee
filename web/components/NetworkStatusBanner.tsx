@@ -4,10 +4,10 @@ import React, { useEffect, useState, useCallback } from "react";
 import { useTranslations } from "next-intl";
 import { supportLinks } from "../lib/config";
 import { getStage } from "../lib/contracts.config";
+import { useRefreshInterval } from "../hooks/useDataRefresh";
 
 type NetworkStatus = "online" | "offline" | "api-down";
 
-const API_CHECK_INTERVAL_MS = 20_000;
 const API_TIMEOUT_MS = 4_000;
 
 async function pingApi(apiUrl: string): Promise<boolean> {
@@ -45,6 +45,7 @@ export function NetworkStatusBanner({ apiUrl }: NetworkStatusBannerProps) {
   const t = useTranslations();
   const [status, setStatus] = useState<NetworkStatus>("online");
   const [retryCount, setRetryCount] = useState(0);
+  const refreshIntervalMs = useRefreshInterval();
 
   const stage = getStage();
   const isProduction = process.env.NODE_ENV === "production";
@@ -97,9 +98,9 @@ export function NetworkStatusBanner({ apiUrl }: NetworkStatusBannerProps) {
 
   useEffect(() => {
     checkStatus();
-    const interval = setInterval(checkStatus, API_CHECK_INTERVAL_MS);
+    const interval = setInterval(checkStatus, refreshIntervalMs);
     return () => clearInterval(interval);
-  }, [checkStatus, retryCount]);
+  }, [checkStatus, retryCount, refreshIntervalMs]);
 
   const handleRetry = useCallback(() => {
     setRetryCount((c) => c + 1);

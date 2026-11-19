@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useHydrateSettings, useSettingsStore } from "@/lib/settingsStore";
 import { FormSkeleton } from "@/components/FormSkeleton";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { NetworkSettingsTab } from "./NetworkSettingsTab";
 import { TradingSettingsTab } from "./TradingSettingsTab";
 import { DisplaySettingsTab } from "./DisplaySettingsTab";
@@ -34,6 +35,7 @@ export function SettingsPage() {
   const resetSettings = useSettingsStore((s) => s.resetSettings);
   const [activeTab, setActiveTab] = useState<TabId>("network");
   const [resetStatus, setResetStatus] = useState<"idle" | "done">("idle");
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const handleReset = () => {
     resetSettings();
@@ -54,7 +56,7 @@ export function SettingsPage() {
         </div>
         <button
           type="button"
-          onClick={handleReset}
+          onClick={() => setConfirmReset(true)}
           className="rounded border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
         >
           {resetStatus === "done" ? "Reset ✓" : "Reset to defaults"}
@@ -100,6 +102,18 @@ export function SettingsPage() {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={confirmReset}
+        action="Reset settings"
+        target="saved preferences"
+        consequence="Every preference in this browser returns to its default value."
+        confirmLabel="Reset settings"
+        onConfirm={() => {
+          setConfirmReset(false);
+          handleReset();
+        }}
+        onCancel={() => setConfirmReset(false)}
+      />
     </div>
   );
 }

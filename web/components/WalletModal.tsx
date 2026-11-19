@@ -11,6 +11,7 @@ import { trackTelemetryEvent, trackFunnelEvent } from "../lib/telemetry";
 import { useTranslations } from "next-intl";
 import { Spinner } from "./ui/Spinner";
 import { blurDataUri } from "../lib/imagePlaceholder";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 export function WalletModal() {
   const t = useTranslations("walletModal");
@@ -25,6 +26,10 @@ export function WalletModal() {
   const [activeSelection, setActiveSelection] = React.useState<string | null>(
     null,
   );
+  const { ref: dialogRef } = useFocusTrap<HTMLDivElement>({
+    active: isModalOpen,
+    onEscape: closeModal,
+  });
 
   // Reset selection and track funnel initiated when modal opens
   React.useEffect(() => {
@@ -63,6 +68,11 @@ export function WalletModal() {
             onClick={closeModal}
           />
           <motion.div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wallet-modal-title"
+            aria-describedby="wallet-modal-description"
             initial={
               shouldReduceMotion
                 ? { opacity: 1, scale: 1 }
@@ -88,10 +98,10 @@ export function WalletModal() {
             <div className="w-96 max-w-[calc(100vw-2rem)] rounded-2xl bg-[#161E22] border border-[#2A3338] p-8 shadow-2xl">
               <div className="flex flex-col items-center">
                 <div className="text-center mb-6">
-                  <h2 className="text-2xl font-medium text-white">
+                  <h2 id="wallet-modal-title" className="text-2xl font-medium text-white">
                     {t("title")}
                   </h2>
-                  <p className="mt-2 text-[#92A5A8] text-sm">
+                  <p id="wallet-modal-description" className="mt-2 text-[#92A5A8] text-sm">
                     {t("description")}
                   </p>
                 </div>

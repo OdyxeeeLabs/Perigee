@@ -36,6 +36,8 @@ import {
   isDoNotTrackEnabled,
 } from "../../lib/telemetry";
 import type { TelemetrySummary } from "../api/telemetry";
+import { useDataRefresh } from "../../hooks/useDataRefresh";
+import { useRouteChangePause } from "../../hooks/useRouteChangePause";
 
 export default function AnalyticsDashboardPage() {
   const [summary, setSummary] = useState<TelemetrySummary | null>(null);
@@ -61,6 +63,11 @@ export default function AnalyticsDashboardPage() {
       setLoading(false);
     }
   }, [timeframe]);
+
+  const routeChanging = useRouteChangePause();
+  const { intervalMs: refreshIntervalMs } = useDataRefresh(fetchTelemetryData, {
+    enabled: !routeChanging,
+  });
 
   useEffect(() => {
     fetchTelemetryData();
@@ -152,6 +159,9 @@ export default function AnalyticsDashboardPage() {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3">
+              <span className="hidden text-xs text-slate-500 lg:inline">
+                Auto-refresh: {refreshIntervalMs / 1000}s
+              </span>
               <button
                 type="button"
                 onClick={handleTriggerTestEvent}

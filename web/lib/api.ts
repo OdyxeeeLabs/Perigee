@@ -317,6 +317,10 @@ export const managerService = {
   async checkStatus(stellarAddress: string): Promise<ManagerStatusResponse> {
     return apiClient.get<ManagerStatusResponse>(`/managers/status/${stellarAddress}`);
   },
+
+  async remove(id: string): Promise<void> {
+    return apiClient.delete<void>(`/managers/${id}`);
+  },
 };
 
 export interface VaultRecord {
