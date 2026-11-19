@@ -89,6 +89,7 @@ pub mod idempotency;
 pub mod pagination;
 pub mod validation_pipeline;
 pub mod notifications;
+pub mod timestamps;
 pub mod db;
 
 #[cfg(test)]

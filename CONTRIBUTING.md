@@ -55,6 +55,8 @@ All timestamps emitted by the API and embedded in report payloads are **UTC** an
 
 If you need to migrate an existing `u64` (Unix epoch seconds) field, prefer upgrading the field type to `DateTime<Utc>` so the wire format is self-documenting.
 
+Use the `core/src/timestamps.rs` serde helpers for public fields; the full convention (precision, accepted offsets, ledger sequences) is in [`docs/API_STYLE_GUIDE.md`](./docs/API_STYLE_GUIDE.md#timestamps).
+
 ### Structured logging via `tracing`
 
 The `core` server uses [`tracing`](https://docs.rs/tracing) + `tracing-subscriber`. Application code should **never** write to `stdout`/`stderr` directly for diagnostic output:
