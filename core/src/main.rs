@@ -55,6 +55,7 @@ mod reputation;
 mod rounding;
 mod routing;
 mod rate_limiter;
+mod role_guard;
 pub mod rpc_provider;
 mod runner;
 mod secret_hash;
@@ -66,6 +67,8 @@ mod transaction_outcome;
 mod two_phase_commit;
 pub mod vault_store;
 mod manager_store;
+#[cfg(test)]
+mod tenant_isolation_tests;
 mod wasm_analysis_job;
 mod wasm_branch_analysis;
 mod ws;

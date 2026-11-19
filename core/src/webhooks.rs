@@ -8,7 +8,8 @@
 //!   timestamps ([`verify_signature`]), which also stops replays.
 //! * **Retries.** A failed delivery (transport error or non-2xx) is retried after
 //!   1 minute, 5 minutes, 15 minutes, 1 hour, 6 hours and 24 hours
-//!   ([`RETRY_SCHEDULE_SECS`]). After the last retry it is dead-lettered.
+//!   ([`RETRY_SCHEDULE_SECS`]). After the last retry, or at once for a
+//!   non-retryable response ([`crate::webhook_retry`]), it is dead-lettered.
 //! * **Idempotency.** `X-Perigee-Event-Id` is stable across retries so receivers
 //!   can deduplicate, and publishing the same event id twice to an endpoint
 //!   creates one delivery, not two.
@@ -418,7 +419,10 @@ impl<T: Transport> WebhookService<T> {
             delivery.next_attempt_at = None;
             return;
         }
-        match RETRY_SCHEDULE_SECS.get(delivery.cycle_failures) {
+        let wait = crate::webhook_retry::is_retryable(&outcome)
+            .then(|| RETRY_SCHEDULE_SECS.get(delivery.cycle_failures))
+            .flatten();
+        match wait {
             Some(wait) => {
                 delivery.status = DeliveryStatus::Retrying;
                 delivery.next_attempt_at = Some(now + wait);
