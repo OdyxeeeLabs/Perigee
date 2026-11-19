@@ -38,9 +38,11 @@ export function VaultRow({
   const locale = useLocale();
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!onClick || event.target !== event.currentTarget) return;
-    if (event.key === "Enter" || event.key === " ") {
-    if (onClick && (event.key === "Enter" || event.key === " ")) {
+    if (
+      onClick &&
+      event.target === event.currentTarget &&
+      (event.key === "Enter" || event.key === " ")
+    ) {
       event.preventDefault();
       onClick(vault);
     }
@@ -57,13 +59,13 @@ export function VaultRow({
       role={interactive ? "button" : undefined}
       tabIndex={interactive ? (tabIndex ?? 0) : tabIndex}
       aria-label={interactive ? `View details for ${vault.name}` : undefined}
-      className={`flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/60 px-4 py-3 ${
+      className={`flex flex-col items-stretch gap-3 rounded-lg border border-slate-800 bg-slate-900/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
         interactive
           ? "cursor-pointer transition-colors hover:border-slate-700 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
           : ""
       }`}
     >
-      <div className="flex flex-col">
+      <div className="flex min-w-0 flex-col">
         {href ? (
           <PrefetchLink
             href={href}
@@ -80,25 +82,34 @@ export function VaultRow({
           <CopyButton value={vault.owner} label="vault owner address" />
         </span>
       </div>
-      <div className="flex items-center gap-4 text-xs text-slate-400">
-        <span className="font-mono text-cyan-400">
-          <FormattedAmount value={vault.balance} locale={locale} asset={vault.asset} />
+      <div className="grid grid-cols-3 gap-2 text-xs text-slate-400 sm:flex sm:items-center sm:gap-4">
+        <span className="min-w-0">
+          <span className="mr-1 text-[10px] text-slate-500 sm:hidden">Balance</span>
+          <span className="font-mono text-cyan-400">
+            <FormattedAmount value={vault.balance} locale={locale} asset={vault.asset} />
+          </span>
         </span>
-        <span className="text-emerald-400">
-          <FormattedPercent value={vault.apy ?? 0} locale={locale} digits={2} />
+        <span>
+          <span className="mr-1 text-[10px] text-slate-500 sm:hidden">APY</span>
+          <span className="text-emerald-400">
+            <FormattedPercent value={vault.apy ?? 0} locale={locale} digits={2} />
+          </span>
         </span>
-        <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-            vault.status === "ACTIVE"
-              ? "bg-emerald-950 text-emerald-400"
-              : vault.status === "LOCKED"
-                ? "bg-red-950 text-red-400"
-                : vault.status === "PENDING"
-                  ? "bg-amber-950 text-amber-400"
-                  : "bg-slate-800 text-slate-400"
-          }`}
-        >
-          {vault.status}
+        <span>
+          <span className="mr-1 text-[10px] text-slate-500 sm:hidden">Status</span>
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+              vault.status === "ACTIVE"
+                ? "bg-emerald-950 text-emerald-400"
+                : vault.status === "LOCKED"
+                  ? "bg-red-950 text-red-400"
+                  : vault.status === "PENDING"
+                    ? "bg-amber-950 text-amber-400"
+                    : "bg-slate-800 text-slate-400"
+            }`}
+          >
+            {vault.status}
+          </span>
         </span>
       </div>
     </div>

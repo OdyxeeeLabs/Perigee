@@ -2,33 +2,77 @@
 
 import { useEffect, useState } from "react";
 import type { Vault, VaultDetail } from "@/types/vault";
-import { fetchVaultData } from "@/lib/vault-metadata";
+import { managerService, vaultService } from "@/lib/api";
+import { vaultFromRecord } from "@/lib/vault-metadata";
 import { VaultList } from "@/components/vault/VaultList";
 import { VaultListSkeleton } from "@/components/vault/VaultCardSkeleton";
 import { VaultDetailModal } from "@/components/vault/VaultDetailModal";
 import { useToast } from "@/context/ToastContext";
+import { useWalletStore } from "@/context/WalletContext";
 
-// Demo vault ids — there is no "list all vaults" endpoint wired up yet
-// (`vaultService.list` requires an authenticated manager id); `fetchVaultData`
-// already has graceful mock fallback per-id (see lib/vault-metadata.ts), so a
-// small fixed id set is enough to demonstrate the list -> detail modal flow.
-const DEMO_VAULT_IDS = ["1", "2", "3", "4", "5"];
+type VaultListState =
+  | { status: "loading" }
+  | { status: "empty" }
+  | { status: "error"; message: string; action: "connect" | "retry" }
+  | { status: "populated"; vaults: Vault[] };
 
 export default function VaultsPage() {
-  const [vaults, setVaults] = useState<Vault[] | null>(null);
+  const address = useWalletStore((wallet) => wallet.address);
+  const openWalletModal = useWalletStore((wallet) => wallet.openModal);
+  const [state, setState] = useState<VaultListState>({ status: "loading" });
+  const [retryCount, setRetryCount] = useState(0);
   const [selected, setSelected] = useState<Pick<Vault, "id" | "name"> | null>(null);
   const toast = useToast();
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all(DEMO_VAULT_IDS.map((id) => fetchVaultData(id))).then((results) => {
-      if (cancelled) return;
-      setVaults(results.filter((v): v is Vault => v !== null));
-    });
+
+    if (!address) {
+      setState({
+        status: "error",
+        message: "Connect your wallet to view your vaults.",
+        action: "connect",
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setState({ status: "loading" });
+    const loadVaults = async () => {
+      try {
+        const manager = await managerService.checkStatus(address);
+        if (manager.status !== "approved") {
+          if (!cancelled) setState({ status: "empty" });
+          return;
+        }
+        if (!manager.id.trim()) {
+          throw new Error("Approved manager response did not include an ID");
+        }
+
+        const records = await vaultService.list(manager.id);
+        if (cancelled) return;
+
+        const vaults = records.map(vaultFromRecord);
+        setState(vaults.length > 0
+          ? { status: "populated", vaults }
+          : { status: "empty" });
+      } catch {
+        if (!cancelled) {
+          setState({
+            status: "error",
+            message: "We couldn't load your vaults. Please try again.",
+            action: "retry",
+          });
+        }
+      }
+    };
+
+    void loadVaults();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [address, retryCount]);
 
   const handleAction = (action: "deposit" | "withdraw" | "manage") => (vault: VaultDetail) => {
     toast.info({
@@ -44,10 +88,37 @@ export default function VaultsPage() {
         <p className="mt-1 text-sm text-slate-400">Select a vault to view its full details.</p>
       </header>
 
-      {vaults === null ? (
-        <VaultListSkeleton count={DEMO_VAULT_IDS.length} />
-      ) : (
-        <VaultList vaults={vaults} onVaultClick={(vault) => setSelected(vault)} />
+      {state.status === "loading" && <VaultListSkeleton />}
+
+      {state.status === "empty" && (
+        <div className="flex min-h-40 items-center justify-center rounded-xl border border-slate-800 text-sm text-slate-400">
+          No vaults found for this account.
+        </div>
+      )}
+
+      {state.status === "error" && (
+        <div
+          role="alert"
+          className="flex flex-col items-start gap-3 rounded-xl border border-rose-900/60 bg-rose-950/40 p-4 text-sm text-rose-300 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <p>{state.message}</p>
+          <button
+            type="button"
+            onClick={() => state.action === "connect"
+              ? openWalletModal()
+              : setRetryCount((count) => count + 1)}
+            className="min-h-10 rounded-lg border border-rose-800 px-3 py-2 font-medium hover:bg-rose-900/40"
+          >
+            {state.action === "connect" ? "Connect wallet" : "Try again"}
+          </button>
+        </div>
+      )}
+
+      {state.status === "populated" && (
+        <VaultList
+          vaults={state.vaults}
+          onVaultClick={(vault) => setSelected(vault)}
+        />
       )}
 
       <VaultDetailModal
