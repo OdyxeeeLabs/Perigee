@@ -185,6 +185,8 @@ pub struct Endpoint {
     pub id: String,
     pub url: String,
     pub secret: String,
+    /// Retiring secret and its expiry (unix secs) during a key rotation.
+    pub retiring: Option<(String, u64)>,
     pub headers: Vec<(String, String)>,
     /// Event types to receive; empty means all.
     pub events: Vec<String>,
@@ -198,6 +200,7 @@ impl Endpoint {
             id: id.to_string(),
             url: url.to_string(),
             secret: secret.to_string(),
+            retiring: None,
             headers: Vec::new(),
             events: Vec::new(),
             enabled: true,
@@ -394,7 +397,7 @@ impl<T: Transport> WebhookService<T> {
             ("User-Agent".to_string(), "Perigee-Webhooks/1".to_string()),
             (EVENT_ID_HEADER.to_string(), delivery.event_id.clone()),
             (DELIVERY_ID_HEADER.to_string(), delivery.id.clone()),
-            (SIGNATURE_HEADER.to_string(), signature_header(endpoint.secret.as_bytes(), now, &body)),
+            (SIGNATURE_HEADER.to_string(), crate::webhook_keys::signature_header_for(endpoint, now, &body)),
         ];
         headers.extend(endpoint.headers.iter().cloned());
 

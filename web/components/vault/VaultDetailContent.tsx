@@ -1,5 +1,8 @@
-import { Fragment } from "react";
+import { Fragment, type ReactNode } from "react";
 import type { VaultDetail } from "@/types/vault";
+import { useLocale } from "@/components/LocaleSync";
+import { FormattedAmount, FormattedPercent } from "@/components/ui/FormattedAmount";
+import { formatAmount } from "@/lib/locale/format";
 import { HistoricalPerformanceChart } from "./HistoricalPerformanceChart";
 
 const auditBadgeClasses: Record<VaultDetail["risk"]["auditStatus"], string> = {
@@ -19,6 +22,9 @@ export interface VaultDetailContentProps {
   onDeposit?: (vault: VaultDetail) => void;
   onWithdraw?: (vault: VaultDetail) => void;
   onManage?: (vault: VaultDetail) => void;
+  /** Network-gated: chain transactions are disabled unless the RPC is reachable. */
+  transactionsEnabled?: boolean;
+  disabledReason?: string | null;
 }
 
 /**
@@ -29,6 +35,16 @@ export interface VaultDetailContentProps {
  * surfaces never drift out of sync.
  */
 export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: VaultDetailContentProps) {
+  const locale = useLocale();
+
+export function VaultDetailContent({
+  vault,
+  onDeposit,
+  onWithdraw,
+  onManage,
+  transactionsEnabled = true,
+  disabledReason = null,
+}: VaultDetailContentProps) {
   return (
     <div className="flex flex-col gap-6">
       {/* Token info */}
@@ -38,19 +54,19 @@ export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: V
         </h3>
         <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
           <dt className="text-slate-500">Underlying</dt>
-          <dd className="text-right font-mono text-slate-200">{vault.tokenInfo.underlyingAsset}</dd>
+          <dd className="text-end font-mono text-slate-200">{vault.tokenInfo.underlyingAsset}</dd>
           <dt className="text-slate-500">Underlying address</dt>
-          <dd className="text-right font-mono text-xs text-slate-400" title={vault.tokenInfo.underlyingAddress}>
+          <dd className="text-end font-mono text-xs text-slate-400" title={vault.tokenInfo.underlyingAddress}>
             {truncateAddress(vault.tokenInfo.underlyingAddress)}
           </dd>
           <dt className="text-slate-500">Share token</dt>
-          <dd className="text-right font-mono text-slate-200">{vault.tokenInfo.shareToken}</dd>
+          <dd className="text-end font-mono text-slate-200">{vault.tokenInfo.shareToken}</dd>
           <dt className="text-slate-500">Share token address</dt>
-          <dd className="text-right font-mono text-xs text-slate-400" title={vault.tokenInfo.shareTokenAddress}>
+          <dd className="text-end font-mono text-xs text-slate-400" title={vault.tokenInfo.shareTokenAddress}>
             {truncateAddress(vault.tokenInfo.shareTokenAddress)}
           </dd>
           <dt className="text-slate-500">Decimals</dt>
-          <dd className="text-right font-mono text-slate-200">{vault.tokenInfo.decimals}</dd>
+          <dd className="text-end font-mono text-slate-200">{vault.tokenInfo.decimals}</dd>
         </dl>
       </section>
 
@@ -60,10 +76,13 @@ export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: V
           Performance
         </h3>
         <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Metric label="APY" value={`${vault.performance.apy}%`} tone="emerald" />
-          <Metric label="TVL" value={`${vault.performance.tvl.toLocaleString()} ${vault.asset}`} />
-          <Metric label="Sharpe ratio" value={vault.performance.sharpeRatio.toFixed(2)} />
-          <Metric label="Max drawdown" value={`${vault.performance.maxDrawdown}%`} tone="rose" />
+          <Metric label="APY" value={<FormattedPercent value={vault.performance.apy} locale={locale} digits={2} />} tone="emerald" />
+          <Metric
+            label="TVL"
+            value={<FormattedAmount value={vault.performance.tvl} locale={locale} asset={vault.asset} />}
+          />
+          <Metric label="Sharpe ratio" value={formatAmount(vault.performance.sharpeRatio, locale)} />
+          <Metric label="Max drawdown" value={<FormattedPercent value={vault.performance.maxDrawdown} locale={locale} digits={2} />} tone="rose" />
         </div>
       </section>
 
@@ -89,6 +108,7 @@ export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: V
           </div>
           <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
             <div
+              data-mirror-rtl="true"
               className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-400"
               style={{ width: `${vault.strategy.riskScore}%` }}
             />
@@ -97,7 +117,7 @@ export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: V
             {Object.entries(vault.strategy.parameters).map(([key, value]) => (
               <Fragment key={key}>
                 <dt className="text-slate-500">{key}</dt>
-                <dd className="text-right font-mono text-slate-300">{value}</dd>
+                <dd className="text-end font-mono text-slate-300">{value}</dd>
               </Fragment>
             ))}
           </dl>
@@ -111,11 +131,16 @@ export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: V
         </h3>
         <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
           <span className="text-slate-400">
-            Liquidation threshold <span className="font-mono text-slate-200">{vault.risk.liquidationThreshold}%</span>
+            Liquidation threshold{" "}
+            <span className="font-mono text-slate-200">
+              <FormattedPercent value={vault.risk.liquidationThreshold} locale={locale} digits={2} />
+            </span>
           </span>
           <span className="text-slate-400">
             Oracle deviation tolerance{" "}
-            <span className="font-mono text-slate-200">{vault.risk.oracleDeviationTolerance}%</span>
+            <span className="font-mono text-slate-200">
+              <FormattedPercent value={vault.risk.oracleDeviationTolerance} locale={locale} digits={2} />
+            </span>
           </span>
           <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${auditBadgeClasses[vault.risk.auditStatus]}`}>
             {vault.risk.auditStatus}
@@ -124,37 +149,50 @@ export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: V
       </section>
 
       {/* Actions */}
-      <section aria-labelledby="vault-actions-heading" className="flex flex-wrap gap-2 border-t border-slate-800 pt-4">
+      <section aria-labelledby="vault-actions-heading" className="border-t border-slate-800 pt-4">
         <h3 id="vault-actions-heading" className="sr-only">
           Actions
         </h3>
-        <button
-          type="button"
-          onClick={() => onDeposit?.(vault)}
-          className="rounded bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600"
-        >
-          Deposit
-        </button>
-        <button
-          type="button"
-          onClick={() => onWithdraw?.(vault)}
-          className="rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700"
-        >
-          Withdraw
-        </button>
-        <button
-          type="button"
-          onClick={() => onManage?.(vault)}
-          className="rounded border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800"
-        >
-          Manage
-        </button>
+        {!transactionsEnabled && disabledReason && (
+          <p id="vault-actions-disabled-reason" className="sr-only">
+            {disabledReason}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onDeposit?.(vault)}
+            disabled={!transactionsEnabled}
+            aria-describedby={!transactionsEnabled && disabledReason ? "vault-actions-disabled-reason" : undefined}
+            className="rounded bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Deposit
+          </button>
+          <button
+            type="button"
+            onClick={() => onWithdraw?.(vault)}
+            disabled={!transactionsEnabled}
+            aria-describedby={!transactionsEnabled && disabledReason ? "vault-actions-disabled-reason" : undefined}
+            className="rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Withdraw
+          </button>
+          <button
+            type="button"
+            onClick={() => onManage?.(vault)}
+            disabled={!transactionsEnabled}
+            aria-describedby={!transactionsEnabled && disabledReason ? "vault-actions-disabled-reason" : undefined}
+            className="rounded border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Manage
+          </button>
+        </div>
       </section>
     </div>
   );
 }
 
-function Metric({ label, value, tone }: { label: string; value: string; tone?: "emerald" | "rose" }) {
+function Metric({ label, value, tone }: { label: string; value: ReactNode; tone?: "emerald" | "rose" }) {
   const toneClass = tone === "emerald" ? "text-emerald-400" : tone === "rose" ? "text-rose-400" : "text-slate-200";
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2">

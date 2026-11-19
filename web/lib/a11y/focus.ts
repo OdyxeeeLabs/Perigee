@@ -19,6 +19,20 @@ export interface FocusableLike {
 }
 
 /**
+ * Move focus to a recovery panel once it mounts. Structural type keeps this
+ * DOM-free (and therefore testable); `preventScroll` avoids yanking a
+ * screen-reader user around the page when a boundary activates mid-scroll.
+ */
+export interface RecoveryFocusTarget {
+  focus(options?: { preventScroll?: boolean }): void;
+}
+
+export function focusRecovery(target: RecoveryFocusTarget | null | undefined): void {
+  if (!target || typeof target.focus !== "function") return;
+  target.focus({ preventScroll: true });
+}
+
+/**
  * Selectors that can receive focus. `contenteditable` and `summary` are the
  * two that are routinely forgotten; `[tabindex]` is last so an author can
  * always override.
@@ -166,16 +180,36 @@ export function resolveInitialFocus<T extends FocusableLike>(
  * trigger was deleted in the meantime (a list row, a toast) and focus lands on
  * `<body>`, which silently drops the user at the top of the page.
  */
-export function shouldRestoreFocus(target: {
+export interface FocusRestoreCandidate {
   isConnected: boolean;
   disabled?: boolean;
   tabIndex: number;
   visible?: boolean;
-} | null | undefined): boolean {
+}
+
+export function shouldRestoreFocus(
+  target: FocusRestoreCandidate | null | undefined,
+): boolean {
   if (!target) return false;
   if (!target.isConnected) return false;
   if (target.disabled) return false;
   if (target.tabIndex < 0) return false;
   if (target.visible === false) return false;
   return true;
+}
+
+export function pickFocusRestoreTarget<T extends FocusRestoreCandidate>(
+  opener: T | null | undefined,
+  fallback: T | null | undefined,
+): T | null {
+  if (shouldRestoreFocus(opener)) return opener ?? null;
+  if (
+    fallback &&
+    fallback.isConnected &&
+    !fallback.disabled &&
+    fallback.visible !== false
+  ) {
+    return fallback;
+  }
+  return null;
 }

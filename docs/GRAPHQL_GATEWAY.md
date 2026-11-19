@@ -38,3 +38,18 @@ Errors follow the GraphQL shape with a stable `extensions.code`: `GRAPHQL_PARSE_
 `SchemaTags::publish(tag, sdl)` records which schema each tag (`production`, `staging`) points
 at. Publishing to Apollo Studio's registry is a CI step (`rover subgraph publish`) outside this
 crate.
+
+## Vault event subscriptions
+
+`SubscriptionHub` fans out committed vault events with hard limits: 100 concurrent
+subscriptions in total, 5 per user, and a 64-event buffer per subscription. Subscribe with
+the tenant taken from verified claims; a subscription only receives that tenant's events.
+
+1. `subscribe(context, tenant_id, after)` returns a subscription id. `after` is the last
+   event `seq` the client applied; events with a greater `seq` are replayed (the last 256
+   events are retained), so a reconnect never delivers an event twice.
+2. `publish(...)` is called only after the change is committed.
+3. `poll(id)` drains the buffer. A subscriber that falls more than 64 events behind is closed
+   (`Overflowed`) and must reconnect with its last `seq`. A cursor older than the retained
+   events returns `CursorExpired`; resync and subscribe again.
+4. `unsubscribe(id)` releases the slot.

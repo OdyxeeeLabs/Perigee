@@ -14,6 +14,15 @@ document into the published contract.
 * **Pagination** is cursor based; see `PAGINATION.md`. List endpoints take `limit` and
   `cursor`.
 * **Idempotency**: mutating endpoints accept `Idempotency-Key`; see `IDEMPOTENCY.md`.
+* **Simulation vs. finality** (API-35): every response that reports on a contract call
+  carries an explicit `status` from `crate::transaction_outcome::TransactionStatus`
+  (`simulated` | `submitted` | `pending` | `finalized`). `simulated` is a read-only
+  preview (`ResourceReport`, `SimulationOutcome`) and is never a ledger change;
+  only `finalized` (`FinalizedOutcome`) reflects a consensus-confirmed result. A
+  client can therefore tell whether state actually changed from `status` alone,
+  without inferring it from a message string. See `core/src/transaction_outcome.rs`
+  for the full type set and the only valid transitions
+  (`submitted -> pending -> finalized`).
 
 ## Tooling
 
@@ -51,3 +60,34 @@ and Go clients with `openapi-generator`.
 `.github/workflows/openapi-contract.yml` runs the tooling tests on every change under `core/`,
 and, when `docs/openapi/openapi.json` (a committed snapshot of the served spec) exists, runs
 `prepare`, `check` and `postman` on it. Refresh the snapshot whenever endpoints change.
+
+## Errors
+
+Every error from the REST API, whatever the route, is `application/problem+json` with the
+RFC 7807 members `type`, `title`, `status` and `detail`. The legacy `code`, `message` and
+`error` members are kept as extensions. `AppError::into_response` builds the body through
+`ProblemDetails`, and in production internal and authentication details are redacted.
+
+## Refreshing an access token
+
+Access tokens (JWT) last 15 minutes. `POST /auth/verify` also returns an opaque
+`refresh_token`, valid for 7 days. To continue the session, call `POST /auth/refresh`:
+
+```json
+{ "refresh_token": "<refresh_token from the previous response>" }
+```
+
+The `200` response has the same shape as `/auth/verify` (`access_token`, `refresh_token`,
+`expires_in`, `token_type`). Refresh tokens are single use: each call rotates the token, so
+store the new `refresh_token` and discard the old one. Only a hash is stored server side.
+
+| Situation | Result |
+| --- | --- |
+| Valid token | `200`, new access and refresh tokens |
+| Expired token | `401` (`TOKEN_EXPIRED`); the token family is removed, log in again |
+| Replay of an already rotated token | `401`; the whole family is revoked, log in again |
+| Unknown or revoked token | `401` |
+
+Call `POST /auth/revoke` with a refresh token to revoke its family (for example on logout).
+Only refresh when a request fails with `401` for an expired access token; do not retry
+non-idempotent requests automatically after refreshing.

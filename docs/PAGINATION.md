@@ -46,7 +46,10 @@ and `cursor_mismatch`, all `400`.
 | `GET /fees/history` | `ledger` | `-ledger` | none |
 
 These are declared as `VAULTS_LIST`, `MANAGERS_LIST` and `FEE_HISTORY` in
-`pagination.rs`. The handlers still answer with the older `page`/`page_size` shape;
-moving a handler over means parsing its query with `PageRequest::parse`, fetching
-`request.fetch_limit()` rows with `order_by()` / `keyset_predicate()`, and returning
-`build_page(...)`.
+`pagination.rs`, and all three handlers now parse their query with `PageRequest::parse`
+and answer with the `Page` shape above (`pagination::paginate_slice`). Authorization and
+tenant filtering run before pagination. Rows are read from the store in a bounded window
+(10 000 vaults per manager, 1 000 ledgers) and the keyset is applied over that window; a
+SQL keyset query (`order_by()` / `keyset_predicate()`) is the follow-up for larger tables.
+Cursors are signed with `PAGINATION_CURSOR_SECRET`; when unset a random per-process secret
+is used and cursors do not survive a restart.

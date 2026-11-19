@@ -67,6 +67,33 @@ export const supportLinks: Readonly<SupportLinks> = Object.freeze({
   statusUrl: resolveLink(env("NEXT_PUBLIC_STATUS_URL"), DEFAULT_STATUS_URL),
 });
 
+export interface PrivacyNoticeConfig {
+  enabled: boolean;
+  privacyPolicyUrl: string;
+  telemetryDocsUrl: string;
+  legalNote: string;
+}
+
+function envFlag(key: string, defaultValue: boolean): boolean {
+  const value = env(key)?.toLowerCase();
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  return defaultValue;
+}
+
+export const privacyNotice: Readonly<PrivacyNoticeConfig> = Object.freeze({
+  enabled: envFlag("NEXT_PUBLIC_PRIVACY_NOTICE_ENABLED", true),
+  privacyPolicyUrl: resolveLink(
+    env("NEXT_PUBLIC_PRIVACY_POLICY_URL"),
+    `${DEFAULT_DOCS_URL}/privacy`,
+  ),
+  telemetryDocsUrl: resolveLink(
+    env("NEXT_PUBLIC_TELEMETRY_DOCS_URL"),
+    `${DEFAULT_DOCS_URL}/telemetry`,
+  ),
+  legalNote: env("NEXT_PUBLIC_PRIVACY_LEGAL_NOTE") ?? "",
+});
+
 /** Escape a value for safe inclusion in a mailto: URI query component. */
 function encodeMailtoPart(value: string): string {
   return encodeURIComponent(value);

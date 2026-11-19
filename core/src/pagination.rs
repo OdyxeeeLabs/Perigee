@@ -28,6 +28,27 @@ use thiserror::Error;
 pub const DEFAULT_PAGE_SIZE: usize = 25;
 pub const MAX_PAGE_SIZE: usize = 100;
 
+/// Codec used by the list handlers. The secret comes from
+/// `PAGINATION_CURSOR_SECRET`; when unset a random per-process secret is used, so
+/// cursors are never forgeable but do not survive a restart.
+pub fn cursor_codec() -> &'static CursorCodec {
+    static CODEC: std::sync::OnceLock<CursorCodec> = std::sync::OnceLock::new();
+    CODEC.get_or_init(|| match std::env::var("PAGINATION_CURSOR_SECRET") {
+        Ok(secret) if !secret.is_empty() => CursorCodec::new(secret.as_bytes()),
+        _ => {
+            let mut secret = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut secret);
+            CursorCodec::new(&secret)
+        }
+    })
+}
+
+impl From<PaginationError> for crate::errors::AppError {
+    fn from(err: PaginationError) -> Self {
+        crate::errors::AppError::BadRequest(format!("{}: {err}", err.code()))
+    }
+}
+
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

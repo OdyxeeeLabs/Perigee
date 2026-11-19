@@ -1,4 +1,8 @@
+import { useId } from "react";
+import { formatNumber } from "@/lib/locale/format";
 import type { VaultHistoryPoint } from "@/types/vault";
+import { useLocale } from "@/components/LocaleSync";
+import { formatAmount } from "@/lib/locale/format";
 
 export interface HistoricalPerformanceChartProps {
   history: VaultHistoryPoint[];
@@ -8,6 +12,12 @@ export interface HistoricalPerformanceChartProps {
   height?: number;
   className?: string;
 }
+
+const formatDate = (timestamp: string): string => {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+  return date.toISOString().slice(0, 10);
+};
 
 /**
  * Historical performance sparkline — issue #684.
@@ -26,11 +36,15 @@ export function HistoricalPerformanceChart({
   height = 120,
   className = "",
 }: HistoricalPerformanceChartProps) {
+  const locale = useLocale();
+  const id = useId();
+  const descriptionId = `${id}-description`;
+
   if (history.length === 0) {
     return (
       <div
-        className={`flex items-center justify-center text-xs text-slate-500 ${className}`}
-        style={{ width, height }}
+        className={`flex w-full items-center justify-center text-xs text-slate-500 ${className}`}
+        style={{ height }}
       >
         No historical data available.
       </div>
@@ -60,9 +74,18 @@ export function HistoricalPerformanceChart({
   const first = values[0];
   const last = values[values.length - 1];
   const trendUp = last >= first;
+  const metricLabel = metric === "apy" ? "APY" : "TVL";
+  const startTime = formatDate(history[0].timestamp);
+  const endTime = formatDate(history[history.length - 1].timestamp);
+  const description =
+    `Historical ${metricLabel} from ${startTime} to ${endTime}: ` +
+    `${history.length} data points, trending ${trendUp ? "up" : "down"} ` +
+    `from ${first.toLocaleString()} to ${last.toLocaleString()}. ` +
+    `Lowest ${min.toLocaleString()}, highest ${max.toLocaleString()}.`;
 
   return (
     <svg
+      data-no-mirror-rtl="true"
       viewBox={`0 0 ${width} ${height}`}
       width="100%"
       height={height}
@@ -70,7 +93,7 @@ export function HistoricalPerformanceChart({
       role="img"
       aria-label={`Historical ${metric === "apy" ? "APY" : "TVL"} chart, ${history.length} data points, trending ${
         trendUp ? "up" : "down"
-      } from ${first.toLocaleString()} to ${last.toLocaleString()}`}
+      } from ${formatAmount(first, locale)} to ${formatAmount(last, locale)}`}
     >
       <path d={areaPath} fill={trendUp ? "rgba(52,211,153,0.12)" : "rgba(248,113,113,0.12)"} stroke="none" />
       <polyline
