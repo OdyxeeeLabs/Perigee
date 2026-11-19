@@ -51,6 +51,7 @@ pub mod simulation_service;
 pub mod wasm_branch_analysis;
 pub mod safe_math;
 pub mod hysteresis;
+pub mod strategy_simulation;
 pub mod strategy_persistence;
 pub mod circuit_breaker;
 pub mod graphql_gateway;

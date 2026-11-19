@@ -67,7 +67,9 @@ mod secret_hash;
 mod simulation;
 mod simulation_service;
 mod signed_receipt;
+mod hysteresis;
 mod stellar_service;
+mod strategy_simulation;
 mod timestamps;
 mod transaction_outcome;
 mod two_phase_commit;
@@ -3501,6 +3503,9 @@ async fn main() {
         )
     };
 
+    // API-29: read-only strategy simulation over approved strategies.
+    let strategy_simulation = Arc::new(strategy_simulation::StrategySimulationService::new());
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
@@ -3613,6 +3618,11 @@ async fn main() {
             "/agents/health",
             get(agent_health_summary::manager_agent_health_handler),
         )
+        // Side-effect-free strategy preview (API-29)
+        .route(
+            "/strategies/:id/simulate",
+            post(strategy_simulation::simulate_strategy_handler),
+        )
         // Runs inside auth so the authenticated manager is known.
         .route_layer(axum::middleware::from_fn(
             manager_quota::manager_quota_middleware,
@@ -3622,7 +3632,8 @@ async fn main() {
         .layer(Extension(manager_quotas))
         .layer(Extension(Arc::clone(&api_key_store)))
         .layer(Extension(vault_bulk_metadata))
-        .layer(Extension(agent_health_summary));
+        .layer(Extension(agent_health_summary))
+        .layer(Extension(strategy_simulation));
 
     // Routes authenticated with `X-API-Key` instead of a wallet session (API-38).
     let integration_routes = Router::new()
