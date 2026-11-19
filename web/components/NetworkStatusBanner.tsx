@@ -39,9 +39,11 @@ const messages: Record<Exclude<NetworkStatus, "online">, { title: string; body: 
 
 interface NetworkStatusBannerProps {
   apiUrl: string;
+  /** Show reconnect guidance when an offline transaction was blocked. */
+  reconnectHint?: boolean;
 }
 
-export function NetworkStatusBanner({ apiUrl }: NetworkStatusBannerProps) {
+export function NetworkStatusBanner({ apiUrl, reconnectHint = false }: NetworkStatusBannerProps) {
   const t = useTranslations();
   const [status, setStatus] = useState<NetworkStatus>("online");
   const [retryCount, setRetryCount] = useState(0);
@@ -191,6 +193,9 @@ export function NetworkStatusBanner({ apiUrl }: NetworkStatusBannerProps) {
         <div className="flex-1">
           <span className="font-semibold">{displayTitle}</span>{" "}
           <span className="opacity-80">{displayBody}</span>{" "}
+          {reconnectHint && isOffline && (
+            <span className="font-semibold">Reconnect to complete your transaction.</span>
+          )}{" "}
           {!isOffline && (
             <a
               href={supportLinks.supportUrl}

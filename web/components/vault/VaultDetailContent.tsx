@@ -19,6 +19,9 @@ export interface VaultDetailContentProps {
   onDeposit?: (vault: VaultDetail) => void;
   onWithdraw?: (vault: VaultDetail) => void;
   onManage?: (vault: VaultDetail) => void;
+  /** Network-gated: chain transactions are disabled unless the RPC is reachable. */
+  transactionsEnabled?: boolean;
+  disabledReason?: string | null;
 }
 
 /**
@@ -28,7 +31,14 @@ export interface VaultDetailContentProps {
  * the `/vault/[id]` and `/vaults/[id]` page routes (full page), so the two
  * surfaces never drift out of sync.
  */
-export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: VaultDetailContentProps) {
+export function VaultDetailContent({
+  vault,
+  onDeposit,
+  onWithdraw,
+  onManage,
+  transactionsEnabled = true,
+  disabledReason = null,
+}: VaultDetailContentProps) {
   return (
     <div className="flex flex-col gap-6">
       {/* Token info */}
@@ -124,31 +134,44 @@ export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: V
       </section>
 
       {/* Actions */}
-      <section aria-labelledby="vault-actions-heading" className="flex flex-wrap gap-2 border-t border-slate-800 pt-4">
+      <section aria-labelledby="vault-actions-heading" className="border-t border-slate-800 pt-4">
         <h3 id="vault-actions-heading" className="sr-only">
           Actions
         </h3>
-        <button
-          type="button"
-          onClick={() => onDeposit?.(vault)}
-          className="rounded bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600"
-        >
-          Deposit
-        </button>
-        <button
-          type="button"
-          onClick={() => onWithdraw?.(vault)}
-          className="rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700"
-        >
-          Withdraw
-        </button>
-        <button
-          type="button"
-          onClick={() => onManage?.(vault)}
-          className="rounded border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800"
-        >
-          Manage
-        </button>
+        {!transactionsEnabled && disabledReason && (
+          <p id="vault-actions-disabled-reason" className="sr-only">
+            {disabledReason}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onDeposit?.(vault)}
+            disabled={!transactionsEnabled}
+            aria-describedby={!transactionsEnabled && disabledReason ? "vault-actions-disabled-reason" : undefined}
+            className="rounded bg-cyan-500 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Deposit
+          </button>
+          <button
+            type="button"
+            onClick={() => onWithdraw?.(vault)}
+            disabled={!transactionsEnabled}
+            aria-describedby={!transactionsEnabled && disabledReason ? "vault-actions-disabled-reason" : undefined}
+            className="rounded bg-slate-800 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Withdraw
+          </button>
+          <button
+            type="button"
+            onClick={() => onManage?.(vault)}
+            disabled={!transactionsEnabled}
+            aria-describedby={!transactionsEnabled && disabledReason ? "vault-actions-disabled-reason" : undefined}
+            className="rounded border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Manage
+          </button>
+        </div>
       </section>
     </div>
   );
