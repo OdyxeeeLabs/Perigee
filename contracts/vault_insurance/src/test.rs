@@ -549,3 +549,54 @@ fn the_registry_can_only_be_initialized_once() {
         Err(Ok(Error::AlreadyInitialized))
     );
 }
+
+// ── #849 — initialization state ─────────────────────────────────────────────
+
+#[test]
+fn initialization_records_admin_recipient_and_empty_reserve() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let contract_id = env.register(VaultInsurance, ());
+    let client = VaultInsuranceClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_admin(), Err(Ok(Error::NotInitialized)));
+
+    client.initialize(&admin, &recipient);
+
+    assert_eq!(client.admin(), admin);
+    assert_eq!(client.premium_recipient(), recipient);
+    let reserve = client.reserve();
+    assert_eq!(reserve.premiums_in, 0);
+    assert_eq!(reserve.payouts_out, 0);
+    assert_eq!(reserve.unclaimed_premium, 0);
+    assert_eq!(reserve.outstanding_coverage, 0);
+}
+
+#[test]
+fn calls_before_initialization_are_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let caller = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let contract_id = env.register(VaultInsurance, ());
+    let client = VaultInsuranceClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_admin(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_premium_recipient(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_reserve(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_get_policy(&vault), Err(Ok(Error::NoPolicy)));
+    assert_eq!(
+        client.try_fund(&caller, &1_000),
+        Err(Ok(Error::NotInitialized))
+    );
+    assert_eq!(
+        client.try_initialize(&caller, &recipient),
+        Ok(Ok(())),
+        "a fresh registry must still accept its first initialization"
+    );
+}
