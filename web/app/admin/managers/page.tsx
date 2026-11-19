@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { getTranslations } from 'next-intl/server';
+import AdminManagersClient from '../../../components/admin/AdminManagersClient';
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations();
@@ -26,6 +27,7 @@ export default async function AdminManagersPage() {
           {t('admin.managers.directoryEmpty')}
         </p>
       </div>
+      <AdminManagersClient />
     </main>
   );
 }

@@ -24,9 +24,10 @@
  * @since 0.1.0
  */
 
-import React, { useMemo, useState, useId } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useId } from 'react';
 import { cn } from '../../lib/utils';
 import { formatNumber, formatRawNumber } from '../../lib/locale/format';
+import { LiveStatus } from '../LiveRegion';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -77,6 +78,7 @@ export interface DataTableProps<T> {
   emptyMessage?: React.ReactNode;
   /** Optional title rendered in the table header bar. */
   title?: React.ReactNode;
+  caption?: React.ReactNode;
   /** Optional subtitle rendered below the title. */
   subtitle?: React.ReactNode;
   /** Additional className for the outermost container. */
@@ -198,6 +200,8 @@ function PaginationBar({
         {total === 0
           ? 'No results'
           : `${formatNumber(from, locale, { maximumFractionDigits: 0 })}–${formatNumber(to, locale, { maximumFractionDigits: 0 })} of ${formatNumber(total, locale, { maximumFractionDigits: 0 })}`}
+      <span data-testid="data-table-result-count">
+        {total === 0 ? 'No results' : `${from}–${to} of ${total}`}
       </span>
 
       <div className="flex items-center gap-1">
@@ -206,7 +210,8 @@ function PaginationBar({
           onClick={() => onPageChange(1)}
           disabled={page === 1}
           aria-label="First page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           «
         </button>
@@ -215,7 +220,8 @@ function PaginationBar({
           onClick={() => onPageChange(page - 1)}
           disabled={page === 1}
           aria-label="Previous page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ‹
         </button>
@@ -229,7 +235,8 @@ function PaginationBar({
           onClick={() => onPageChange(page + 1)}
           disabled={page >= pageCount}
           aria-label="Next page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ›
         </button>
@@ -238,7 +245,8 @@ function PaginationBar({
           onClick={() => onPageChange(pageCount)}
           disabled={page >= pageCount}
           aria-label="Last page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           »
         </button>
@@ -260,12 +268,15 @@ export function DataTable<T>({
   filterPlaceholder = 'Filter…',
   emptyMessage = 'No results found.',
   title,
+  caption,
   subtitle,
   className,
   'data-testid': dataTestId,
   locale,
 }: DataTableProps<T>) {
   const filterId = useId();
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const pageChanged = useRef(false);
 
   // ── Sort state ─────────────────────────────────────────────────────────────
   const firstSortable = columns.find((c) => c.sortable);
@@ -314,6 +325,34 @@ export function DataTable<T>({
     return sorted.slice(start, start + pageSize);
   }, [sorted, paginationEnabled, page, pageSize]);
 
+  useEffect(() => {
+    if (!pageChanged.current) {
+      pageChanged.current = true;
+      return;
+    }
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const container = resultsRef.current;
+    if (!container) return;
+    if (!container.hasAttribute('tabindex')) container.setAttribute('tabindex', '-1');
+    container.focus();
+  }, [page]);
+
+  const sortedColumn = columns.find((c) => String(c.key) === sortKey);
+  const sortedLabel =
+    sortedColumn && typeof sortedColumn.header === 'string'
+      ? sortedColumn.header
+      : sortKey;
+  const statusMessage = [
+    `${sorted.length} result${sorted.length === 1 ? '' : 's'}${filter ? ` matching ${filter}` : ''}`,
+    sortKey
+      ? `sorted by ${sortedLabel} ${sortDir === 'asc' ? 'ascending' : 'descending'}`
+      : '',
+    paginationEnabled ? `page ${page} of ${pageCount || 1}` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+
   // ── Sort toggle ────────────────────────────────────────────────────────────
   const handleSort = (key: string) => {
     if (key === sortKey) {
@@ -360,21 +399,23 @@ export function DataTable<T>({
           className={cn(
             'w-full rounded-md border border-[#30363d] bg-[#161b22]',
             'px-3 py-1.5 text-xs text-[#c9d1d9] placeholder:text-[#8b949e]',
-            'focus:border-[#00d9ff] focus:outline-none focus:ring-1 focus:ring-[#00d9ff]',
+            'focus:border-[#00d9ff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]',
             'sm:w-56',
           )}
         />
       </div>
 
       {/* ── Table ──────────────────────────────────────────────────────────── */}
-      <div className="overflow-x-auto">
+      <div ref={resultsRef} className="overflow-x-auto">
         <table
           className="min-w-full text-start text-sm"
+          className="min-w-[36rem] w-full text-left text-sm"
           data-testid={dataTestId ? `${dataTestId}-table` : undefined}
         >
+          {(caption ?? title) && <caption className="sr-only">{caption ?? title}</caption>}
           <thead className="bg-[#161b22] text-xs text-[#8b949e]">
             <tr>
-              {columns.map((col) => {
+              {columns.map((col, colIndex) => {
                 const key = String(col.key);
                 const isSorted = sortKey === key;
                 return (
@@ -385,6 +426,7 @@ export function DataTable<T>({
                       'px-4 py-3 font-medium',
                       alignClass(col.align),
                       col.sortable && 'cursor-pointer select-none',
+                      colIndex === 0 && 'sticky left-0 z-10 bg-[#161b22]',
                     )}
                     aria-sort={
                       isSorted
@@ -398,8 +440,8 @@ export function DataTable<T>({
                       <button
                         type="button"
                         onClick={() => handleSort(key)}
-                        className="inline-flex items-center hover:text-[#c9d1d9]"
-                        aria-label={`Sort by ${typeof col.header === 'string' ? col.header : key}`}
+                        className="inline-flex items-center rounded hover:text-[#c9d1d9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
+                        aria-label={`Sort by ${typeof col.header === 'string' ? col.header : key}${isSorted ? `, ${sortDir === 'asc' ? 'ascending' : 'descending'}` : ''}`}
                       >
                         {col.header}
                         <SortIcon active={isSorted} direction={sortDir} />
@@ -431,16 +473,18 @@ export function DataTable<T>({
                 return (
                   <tr
                     key={key}
-                    className="hover:bg-[#0f1621] transition-colors"
+                    className="group transition-colors hover:bg-[#0f1621]"
                     data-testid={dataTestId ? `${dataTestId}-row` : undefined}
                   >
-                    {columns.map((col) => (
+                    {columns.map((col, colIndex) => (
                       <td
                         key={String(col.key)}
                         className={cn(
                           'px-4 py-3 text-[#c9d1d9]',
                           alignClass(col.align),
                           col.className,
+                          colIndex === 0 &&
+                            'sticky left-0 z-10 bg-[#0d1117] group-hover:bg-[#0f1621]',
                         )}
                       >
                         {cellValue(row, col, locale)}
@@ -465,6 +509,11 @@ export function DataTable<T>({
           locale={locale}
         />
       )}
+      <LiveStatus
+        message={statusMessage}
+        label={typeof title === 'string' ? title : 'Table status'}
+        data-testid={dataTestId ? `${dataTestId}-status` : 'data-table-status'}
+      />
     </div>
   );
 }

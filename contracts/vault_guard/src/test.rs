@@ -626,3 +626,70 @@ fn pause_and_unpause_events_record_the_start_ledger_and_elapsed_time() {
         ]
     );
 }
+
+// ── #849 — initialization state ─────────────────────────────────────────────
+
+#[test]
+fn initialization_records_distinct_roles_once() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let contract_id = env.register(VaultGuard, ());
+    let client = VaultGuardClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_roles(), Err(Ok(Error::NotInitialized)));
+
+    client.initialize(&admin, &guardian);
+
+    let roles = client.roles();
+    assert_eq!(roles.admin, admin);
+    assert_eq!(roles.guardian, guardian);
+    assert_eq!(
+        client.try_initialize(&admin, &guardian),
+        Err(Ok(Error::AlreadyInitialized))
+    );
+}
+
+#[test]
+fn initialization_rejects_combined_admin_and_guardian_roles() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(VaultGuard, ());
+    let client = VaultGuardClient::new(&env, &contract_id);
+
+    assert_eq!(
+        client.try_initialize(&admin, &admin),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(client.try_roles(), Err(Ok(Error::NotInitialized)));
+}
+
+#[test]
+fn calls_before_initialization_are_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let caller = Address::generate(&env);
+    let contract_id = env.register(VaultGuard, ());
+    let client = VaultGuardClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_state(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_paused_mask(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(
+        client.try_is_paused(&Operation::Deposit),
+        Err(Ok(Error::NotInitialized))
+    );
+    assert_eq!(client.try_roles(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(
+        client.try_pause(&caller),
+        Err(Ok(Error::NotInitialized))
+    );
+    assert_eq!(
+        client.try_pause_operations(&caller, &OP_DEPOSIT),
+        Err(Ok(Error::NotInitialized))
+    );
+}

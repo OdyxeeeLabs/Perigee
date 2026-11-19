@@ -7,9 +7,11 @@ import { ConnectButton } from "../../components/ConnectButton";
 import { SEO } from "../../components/SEO";
 import { Button } from "../../components/ui/Button";
 import { LiveStatus } from "../../components/LiveRegion";
+import OnboardingChecklist from "../../components/manager/OnboardingChecklist";
 import { useWalletStore } from "../../context/WalletContext";
 import { managerService } from "../../lib/api";
 import { shallow } from "../../lib/createStore";
+import type { OnboardingStatus } from "../../lib/onboardingChecklist";
 
 type Step = "connect" | "register" | "submitted" | "status";
 
@@ -23,6 +25,10 @@ export default function ManagerOnboarding() {
   const [kycRef, setKycRef] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // WEB-20 (#821): progress comes from the manager status API, never from the
+  // local form. Initial value is the documented unregistered lifecycle state.
+  const [onboardingStatus, setOnboardingStatus] =
+    useState<OnboardingStatus>("unregistered");
   const [managerRecord, setManagerRecord] = useState<Awaited<
     ReturnType<typeof managerService.register>
   > | null>(null);
@@ -78,6 +84,7 @@ export default function ManagerOnboarding() {
     try {
       const status = await managerService.checkStatus(addr);
       if (status.status === "approved") {
+        setOnboardingStatus("approved");
         setManagerRecord({
           id: status.id,
           stellar_address: addr,
@@ -91,14 +98,20 @@ export default function ManagerOnboarding() {
         });
         setStep("status");
       } else if (status.status === "pending") {
+        setOnboardingStatus("pending");
         setStep("submitted");
       } else if (status.status === "rejected") {
+        setOnboardingStatus("rejected");
         setError(t("onboarding.rejectedMessage"));
         setStep("status");
       } else {
+        setOnboardingStatus("unregistered");
         setStep("register");
       }
     } catch {
+      // An API failure is not a lifecycle state. Keep the checklist at the
+      // initial state and surface it as an error, never as approval.
+      setOnboardingStatus("unregistered");
       setStep("register");
     }
   }
@@ -120,6 +133,7 @@ export default function ManagerOnboarding() {
         kyc_document_ref: kycRef.trim(),
       });
       setManagerRecord(record);
+      setOnboardingStatus("pending");
       setStep("submitted");
       if (typeof window !== "undefined") {
         sessionStorage.removeItem("onboarding_draft");
@@ -157,7 +171,11 @@ export default function ManagerOnboarding() {
           </div>
         </header>
 
-        <section className="mx-auto max-w-2xl px-4 py-12 sm:px-6 lg:px-8">
+        <section
+          className="mx-auto max-w-2xl px-4 py-12 sm:px-6 lg:px-8"
+          data-testid="onboarding-step"
+          data-step={step}
+        >
           <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-8">
             <h2 className="mb-6 text-2xl font-semibold text-cyan-300">
               {step === "connect" && t("onboarding.stepConnect")}
@@ -188,10 +206,11 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-300">
+                  <label htmlFor="manager-name" className="mb-1 block text-sm font-medium text-slate-300">
                     {t("onboarding.fullName")}
                   </label>
                   <input
+                    id="manager-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder={t("onboarding.fullNamePlaceholder")}
@@ -200,10 +219,11 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-300">
+                  <label htmlFor="manager-email" className="mb-1 block text-sm font-medium text-slate-300">
                     {t("onboarding.email")}
                   </label>
                   <input
+                    id="manager-email"
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -213,10 +233,11 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-300">
+                  <label htmlFor="manager-kyc-ref" className="mb-1 block text-sm font-medium text-slate-300">
                     {t("onboarding.kycRef")}
                   </label>
                   <input
+                    id="manager-kyc-ref"
                     value={kycRef}
                     onChange={(e) => setKycRef(e.target.value)}
                     placeholder={t("onboarding.kycRefPlaceholder")}
@@ -225,7 +246,10 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 {error && (
-                  <div className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-400">
+                  <div
+                    className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-400"
+                    data-testid="onboarding-error"
+                  >
                     {error}
                   </div>
                 )}
@@ -240,8 +264,11 @@ export default function ManagerOnboarding() {
                 <div className="rounded-lg border border-yellow-800 bg-yellow-950/50 px-4 py-3 text-sm text-yellow-400">
                   {t("onboarding.submittedMessage")}
                 </div>
-                {managerRecord && (
-                  <div className="space-y-2 text-sm text-slate-400">
+                 {managerRecord && (
+                   <div
+                     className="space-y-2 text-sm text-slate-400"
+                     data-testid="onboarding-record"
+                   >
                     <p>
                       <span className="text-slate-300">{t("onboarding.id")}</span>{" "}
                       {managerRecord.id}
@@ -258,16 +285,24 @@ export default function ManagerOnboarding() {
             {step === "status" && (
               <div className="space-y-4">
                 {error ? (
-                  <div className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-400">
+                  <div className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-400" role="alert">
                     {error}
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-green-800 bg-green-950/50 px-4 py-3 text-sm text-green-400">
-                    {t("onboarding.approvedMessage")}
-                  </div>
+                  onboardingStatus === "approved" && (
+                    <div className="rounded-lg border border-green-800 bg-green-950/50 px-4 py-3 text-sm text-green-400">
+                      {t("onboarding.approvedMessage")}
+                    </div>
+                  )
                 )}
               </div>
             )}
+
+            <OnboardingChecklist
+              status={onboardingStatus}
+              walletConnected={Boolean(address)}
+              error={error}
+            />
 
             <div className="mt-8 border-t border-slate-800 pt-4">
               <Button variant="link" onClick={() => router.push("/")}>

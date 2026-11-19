@@ -14,6 +14,15 @@ document into the published contract.
 * **Pagination** is cursor based; see `PAGINATION.md`. List endpoints take `limit` and
   `cursor`.
 * **Idempotency**: mutating endpoints accept `Idempotency-Key`; see `IDEMPOTENCY.md`.
+* **Simulation vs. finality** (API-35): every response that reports on a contract call
+  carries an explicit `status` from `crate::transaction_outcome::TransactionStatus`
+  (`simulated` | `submitted` | `pending` | `finalized`). `simulated` is a read-only
+  preview (`ResourceReport`, `SimulationOutcome`) and is never a ledger change;
+  only `finalized` (`FinalizedOutcome`) reflects a consensus-confirmed result. A
+  client can therefore tell whether state actually changed from `status` alone,
+  without inferring it from a message string. See `core/src/transaction_outcome.rs`
+  for the full type set and the only valid transitions
+  (`submitted -> pending -> finalized`).
 
 ## Tooling
 

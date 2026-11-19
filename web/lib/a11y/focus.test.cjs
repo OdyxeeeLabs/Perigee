@@ -67,6 +67,19 @@ function shouldRestoreFocus(target) {
   return true;
 }
 
+function pickFocusRestoreTarget(opener, fallback) {
+  if (shouldRestoreFocus(opener)) return opener;
+  if (
+    fallback &&
+    fallback.isConnected &&
+    !fallback.disabled &&
+    fallback.visible !== false
+  ) {
+    return fallback;
+  }
+  return null;
+}
+
 // ── tests ──────────────────────────────────────────────────────────────────
 
 test("a plain control is tabbable", () => {
@@ -217,17 +230,46 @@ test("a trigger that is only programmatically focusable is skipped", () => {
   assert.equal(shouldRestoreFocus({ isConnected: true, tabIndex: -1 }), false);
 });
 
+test("a removed opener falls back to main content, never the body", () => {
+  const main = { id: "main-content", isConnected: true, tabIndex: -1 };
+  const removed = { isConnected: false, tabIndex: 0 };
+  assert.equal(pickFocusRestoreTarget(removed, main), main);
+  assert.equal(pickFocusRestoreTarget(null, main), main);
+});
+
+test("a usable opener wins over the fallback", () => {
+  const opener = { isConnected: true, tabIndex: 0 };
+  const main = { isConnected: true, tabIndex: -1 };
+  assert.equal(pickFocusRestoreTarget(opener, main), opener);
+});
+
+test("a disconnected fallback cannot receive focus", () => {
+  assert.equal(
+    pickFocusRestoreTarget(null, { isConnected: false, tabIndex: -1 }),
+    null,
+  );
+});
+
 // ── the app must actually use it ───────────────────────────────────────────
 
 const WEB_ROOT = path.join(__dirname, "..", "..");
 const readWeb = (rel) => fs.readFileSync(path.join(WEB_ROOT, rel), "utf8");
 
-test("NavDrawer now delegates to the shared hook", () => {
+test("all three overlays delegate to the shared hook", () => {
+  for (const file of ["NavDrawer.tsx", "WalletModal.tsx", "vault/VaultDetailModal.tsx"]) {
+    const source = readWeb(path.join("components", file));
+    assert.match(source, /useFocusTrap/, file);
+  }
   const source = readWeb(path.join("components", "NavDrawer.tsx"));
-  assert.match(source, /useFocusTrap/);
   // The old inline implementation must be gone, or the fix is cosmetic.
   assert.doesNotMatch(source, /function getFocusable/, "inline trap still present");
   assert.doesNotMatch(source, /onKeyDown=\{handleKeyDown\}/, "inline keydown still wired");
+});
+
+test("the hook restores to main content when the opener was removed", () => {
+  const hook = readWeb(path.join("hooks", "useFocusTrap.ts"));
+  assert.match(hook, /pickFocusRestoreTarget/);
+  assert.match(hook, /getElementById\("main-content"\)/);
 });
 
 test("the hook listens on document so Escape survives focus escaping", () => {

@@ -411,3 +411,95 @@ fn components_lists_every_component() {
     assert_eq!(list.get(0).unwrap().asset, asset_a);
     assert_eq!(list.get(1).unwrap().asset, asset_b);
 }
+
+// ── #849 — initialization state ─────────────────────────────────────────────
+
+#[test]
+fn initialization_sets_admin_and_global_config_once() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let config = BasketConfig {
+        base_bps: BPS_DENOMINATOR,
+        max_weight_bps: 8_000,
+        drift_tolerance_bps: 100,
+        max_assets: 8,
+    };
+
+    let contract_id = env.register(BasketVault, ());
+    let client = BasketVaultClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_admin(), Err(Ok(Error::NotInitialized)));
+
+    client.initialize(&admin, &config);
+
+    assert_eq!(client.admin(), admin);
+    assert_eq!(client.global_config(), config);
+    assert_eq!(
+        client.try_initialize(&admin, &config),
+        Err(Ok(Error::AlreadyInitialized))
+    );
+}
+
+#[test]
+fn calls_before_initialization_are_rejected_without_touching_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let manager = Address::generate(&env);
+    let config = BasketConfig {
+        base_bps: BPS_DENOMINATOR,
+        max_weight_bps: 8_000,
+        drift_tolerance_bps: 100,
+        max_assets: 8,
+    };
+
+    let contract_id = env.register(BasketVault, ());
+    let client = BasketVaultClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_admin(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_global_config(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(
+        client.try_create_basket(&manager),
+        Err(Ok(Error::NotInitialized))
+    );
+    assert_eq!(
+        client.try_set_global_config(&admin, &config),
+        Err(Ok(Error::NotInitialized))
+    );
+}
+
+#[test]
+fn only_the_initialized_admin_may_change_global_config() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let config = BasketConfig {
+        base_bps: BPS_DENOMINATOR,
+        max_weight_bps: 8_000,
+        drift_tolerance_bps: 100,
+        max_assets: 8,
+    };
+
+    let contract_id = env.register(BasketVault, ());
+    let client = BasketVaultClient::new(&env, &contract_id);
+    client.initialize(&admin, &config);
+
+    let changed = BasketConfig {
+        max_weight_bps: 7_000,
+        ..config.clone()
+    };
+    assert_eq!(
+        client.try_set_global_config(&stranger, &changed),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        client.global_config(),
+        config,
+        "rejected write must not change config"
+    );
+}

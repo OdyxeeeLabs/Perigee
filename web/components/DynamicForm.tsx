@@ -1,12 +1,11 @@
 'use client';
 
-import React from "react"
-
-import { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { sanitizeUserInput } from '../lib/sanitize';
 import type { ContractFunction, SimulationInputs } from '../lib/sorobantypes';
+import { useAnnouncer } from './AnnouncerProvider';
 
 interface DynamicFormProps {
   func: ContractFunction;
@@ -47,7 +46,7 @@ export function validateStellarAddress(value: string): string | null {
 /**
  * Validate a Stellar asset code (alphanumeric, 1–12 characters).
  *
- * Returns an error string on failure, or null when valid.
+ * Returns an error string, or null if valid.
  */
 export function validateAssetCode(value: string): string | null {
   const trimmed = value.trim();
@@ -83,14 +82,17 @@ export function validateField(type: string, value: string): string | null {
 
 export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
   const t = useTranslations();
+  const { announceStatus, announceAlert } = useAnnouncer();
   const [formData, setFormData] = useState<SimulationInputs>({});
-  // Map of field name → error message (empty string or undefined = no error)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (loading) announceStatus(t("dynamicForm.simulating"));
+  }, [loading, announceStatus, t]);
 
   const handleChange = (name: string, type: string, value: string | number | boolean) => {
     setFormData((prev) => ({ ...prev, [name]: value }));
 
-    // Validate on change so errors clear as the user types valid input
     const error = validateField(type, String(value));
     setFieldErrors((prev) => ({
       ...prev,
@@ -108,27 +110,43 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Run validation for every field before submitting.
-    // Sanitization is applied before the form payload leaves the browser.
     const sanitizedInputs: SimulationInputs = {};
     const errors: Record<string, string> = {};
     func.inputs.forEach((input) => {
       const raw = String(formData[input.name] ?? '');
       const sanitized = sanitizeUserInput(raw, input.name);
       sanitizedInputs[input.name] = sanitized;
+      if (sanitized === '' && !input.optional) {
+        errors[input.name] = 'This field is required.';
+        return;
+      }
       const error = validateField(input.type, sanitized);
       if (error) errors[input.name] = error;
     });
 
     if (Object.keys(errors).length > 0) {
       setFieldErrors((prev) => ({ ...prev, ...errors }));
+      const count = Object.keys(errors).length;
+      announceAlert(
+        `Form not submitted. ${count} field${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} attention.`,
+      );
       return;
     }
 
+    setFieldErrors({});
     onSubmit(sanitizedInputs);
   };
 
-  // Shared input style — border turns red when there is a field error
+  const errorId = (name: string) => `error-${name}`;
+  const descriptionId = (name: string) => `description-${name}`;
+  const describedBy = (name: string, description?: boolean) =>
+    [
+      description ? descriptionId(name) : null,
+      fieldErrors[name] ? errorId(name) : null,
+    ]
+      .filter(Boolean)
+      .join(' ') || undefined;
+
   const inputStyle = (name: string): React.CSSProperties => ({
     padding: '8px 12px',
     border: `1px solid ${fieldErrors[name] ? '#f85149' : '#30363d'}`,
@@ -140,7 +158,11 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
   });
 
   return (
-    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <form
+      noValidate
+      onSubmit={handleSubmit}
+      style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}
+    >
       {func.inputs.length === 0 ? (
         <p style={{ color: '#8b949e', fontSize: '14px' }}>{t("dynamicForm.noInputs")}</p>
       ) : (
@@ -170,6 +192,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
             </label>
             {input.description && (
               <p
+                id={descriptionId(input.name)}
                 style={{
                   fontSize: '12px',
                   color: '#8b949e',
@@ -180,7 +203,6 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
               </p>
             )}
 
-            {/* ── Field inputs ── */}
             {input.type === 'address' ? (
               <input
                 id={`field-${input.name}`}
@@ -191,7 +213,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 required={!input.optional}
                 disabled={loading}
                 aria-invalid={Boolean(fieldErrors[input.name])}
-                aria-describedby={fieldErrors[input.name] ? `error-${input.name}` : undefined}
+                aria-describedby={describedBy(input.name, Boolean(input.description))}
                 style={{ ...inputStyle(input.name), fontFamily: 'monospace' }}
               />
             ) : input.type === 'asset_code' ? (
@@ -204,7 +226,7 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 required={!input.optional}
                 disabled={loading}
                 aria-invalid={Boolean(fieldErrors[input.name])}
-                aria-describedby={fieldErrors[input.name] ? `error-${input.name}` : undefined}
+                aria-describedby={describedBy(input.name, Boolean(input.description))}
                 style={{ ...inputStyle(input.name), fontFamily: 'monospace' }}
               />
             ) : input.type === 'u32' || input.type === 'u128' || input.type === 'i128' ? (
@@ -216,6 +238,8 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
                 disabled={loading}
+                aria-invalid={Boolean(fieldErrors[input.name])}
+                aria-describedby={describedBy(input.name, Boolean(input.description))}
                 style={inputStyle(input.name)}
               />
             ) : input.type === 'string' || input.type === 'symbol' ? (
@@ -227,6 +251,8 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
                 disabled={loading}
+                aria-invalid={Boolean(fieldErrors[input.name])}
+                aria-describedby={describedBy(input.name, Boolean(input.description))}
                 style={inputStyle(input.name)}
               />
             ) : input.type === 'bool' ? (
@@ -236,6 +262,8 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 onChange={(e) => handleChange(input.name, input.type, e.target.value === 'true')}
                 required={!input.optional}
                 disabled={loading}
+                aria-invalid={Boolean(fieldErrors[input.name])}
+                aria-describedby={describedBy(input.name, Boolean(input.description))}
                 style={inputStyle(input.name)}
               >
                 <option value="">{t("dynamicForm.selectValue")}</option>
@@ -251,16 +279,15 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
                 onChange={(e) => handleChange(input.name, input.type, e.target.value)}
                 required={!input.optional}
                 disabled={loading}
+                aria-invalid={Boolean(fieldErrors[input.name])}
+                aria-describedby={describedBy(input.name, Boolean(input.description))}
                 style={inputStyle(input.name)}
               />
             )}
 
-            {/* ── Inline validation error ── */}
             {fieldErrors[input.name] && (
               <span
-                id={`error-${input.name}`}
-                role="alert"
-                aria-live="assertive"
+                id={errorId(input.name)}
                 style={{
                   fontSize: '12px',
                   color: '#f85149',
@@ -330,27 +357,6 @@ export function DynamicForm({ func, onSubmit, loading }: DynamicFormProps) {
             t("dynamicForm.liveInvoke")
           )}
         </button>
-      </div>
-      {/* WEB-16 (#470): announce the simulating/invoking transition, which is
-          otherwise conveyed only by the disabled buttons and a spinning icon. */}
-      <div
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        data-testid="dynamic-form-live-status"
-        style={{
-          position: 'absolute',
-          width: '1px',
-          height: '1px',
-          padding: 0,
-          margin: '-1px',
-          overflow: 'hidden',
-          clip: 'rect(0, 0, 0, 0)',
-          whiteSpace: 'nowrap',
-          border: 0,
-        }}
-      >
-        {loading ? t("dynamicForm.simulating") : ''}
       </div>
     </form>
   );

@@ -22,6 +22,19 @@ body {
   @apply bg-slate-950 text-slate-100;
 }
 
+@layer utilities {
+  .responsive-scroll-region {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .responsive-scroll-region:focus-visible {
+    outline: 2px solid #00d9ff;
+    outline-offset: 2px;
+  }
+}
+
 /* ===========================================================================
    Reduced motion — WEB-15 (#469)
 
