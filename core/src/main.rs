@@ -3,6 +3,7 @@
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod admin_overview;
 mod agent_fleet;
 mod agent_health;
 mod agent_identity;
@@ -35,6 +36,7 @@ pub mod fee_store {
 }
 
 mod namespaced_errors;
+mod outbox;
 pub mod fee_analytics;
 pub mod fee_collector;
 pub mod fee_store;
@@ -43,6 +45,7 @@ mod gas_golfing;
 mod middleware;
 pub mod insights;
 mod input_sanitization;
+mod job_queue;
 mod jobs;
 mod log_redaction;
 mod logging;
@@ -3402,6 +3405,60 @@ async fn main() {
         database_pool_monitor,
     );
 
+    // API-31: read-only admin overview of queue and dependency health.
+    let admin_overview = {
+        let overview_pool = db_pool.clone();
+        let overview_registry = Arc::clone(&registry);
+        let overview_jobs = job_queue.clone();
+        Arc::new(
+            admin_overview::AdminOverviewService::default()
+                .with_probe(Arc::new(admin_overview::DependencyProbe::new(
+                    "database",
+                    move || {
+                        let pool = overview_pool.clone();
+                        async move {
+                            let mut connection =
+                                pool.acquire().await.map_err(|e| e.to_string())?;
+                            sqlx::query("SELECT 1")
+                                .execute(&mut *connection)
+                                .await
+                                .map(|_| ())
+                                .map_err(|e| e.to_string())
+                        }
+                    },
+                )))
+                .with_probe(Arc::new(admin_overview::DependencyProbe::new(
+                    "job_queue",
+                    move || {
+                        let jobs = overview_jobs.clone();
+                        async move {
+                            if jobs
+                                .health_check(admin_overview::DEFAULT_PROBE_TIMEOUT)
+                                .await
+                            {
+                                Ok(())
+                            } else {
+                                Err("job queue store is unhealthy".to_string())
+                            }
+                        }
+                    },
+                )))
+                .with_probe(Arc::new(admin_overview::DependencyProbe::new(
+                    "stellar_rpc",
+                    move || {
+                        let registry = Arc::clone(&overview_registry);
+                        async move {
+                            if registry.healthy_providers().await.is_empty() {
+                                Err("no healthy RPC providers".to_string())
+                            } else {
+                                Ok(())
+                            }
+                        }
+                    },
+                ))),
+        )
+    };
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
@@ -3472,7 +3529,13 @@ async fn main() {
             "/admin/vaults/deleted",
             get(vault_store::list_deleted_vaults_handler),
         )
-        .route_layer(axum::middleware::from_fn(auth::auth_middleware));
+        // Read-only operational overview, administrators only (API-31)
+        .route(
+            "/admin/overview",
+            get(admin_overview::admin_overview_handler),
+        )
+        .route_layer(axum::middleware::from_fn(auth::auth_middleware))
+        .layer(Extension(admin_overview));
 
     let public_rate_limit_config = RateLimitConfig::from_env();
     tracing::info!(
