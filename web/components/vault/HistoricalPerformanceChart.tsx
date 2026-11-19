@@ -1,3 +1,4 @@
+import { useId } from "react";
 import type { VaultHistoryPoint } from "@/types/vault";
 
 export interface HistoricalPerformanceChartProps {
@@ -8,6 +9,12 @@ export interface HistoricalPerformanceChartProps {
   height?: number;
   className?: string;
 }
+
+const formatDate = (timestamp: string): string => {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+  return date.toISOString().slice(0, 10);
+};
 
 /**
  * Historical performance sparkline — issue #684.
@@ -26,6 +33,9 @@ export function HistoricalPerformanceChart({
   height = 120,
   className = "",
 }: HistoricalPerformanceChartProps) {
+  const id = useId();
+  const descriptionId = `${id}-description`;
+
   if (history.length === 0) {
     return (
       <div
@@ -60,33 +70,66 @@ export function HistoricalPerformanceChart({
   const first = values[0];
   const last = values[values.length - 1];
   const trendUp = last >= first;
+  const metricLabel = metric === "apy" ? "APY" : "TVL";
+  const startTime = formatDate(history[0].timestamp);
+  const endTime = formatDate(history[history.length - 1].timestamp);
+  const description =
+    `Historical ${metricLabel} from ${startTime} to ${endTime}: ` +
+    `${history.length} data points, trending ${trendUp ? "up" : "down"} ` +
+    `from ${first.toLocaleString()} to ${last.toLocaleString()}. ` +
+    `Lowest ${min.toLocaleString()}, highest ${max.toLocaleString()}.`;
 
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      width="100%"
-      height={height}
-      className={className}
-      role="img"
-      aria-label={`Historical ${metric === "apy" ? "APY" : "TVL"} chart, ${history.length} data points, trending ${
-        trendUp ? "up" : "down"
-      } from ${first.toLocaleString()} to ${last.toLocaleString()}`}
-    >
-      <path d={areaPath} fill={trendUp ? "rgba(52,211,153,0.12)" : "rgba(248,113,113,0.12)"} stroke="none" />
-      <polyline
-        points={polyline}
-        fill="none"
-        stroke={trendUp ? "#34d399" : "#f87171"}
-        strokeWidth={2}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-      <circle
-        cx={points[points.length - 1][0]}
-        cy={points[points.length - 1][1]}
-        r={3}
-        fill={trendUp ? "#34d399" : "#f87171"}
-      />
-    </svg>
+    <figure className={className} style={{ width }} data-testid="historical-performance-chart">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        width="100%"
+        height={height}
+        role="img"
+        aria-label={`Historical ${metricLabel} chart, ${history.length} data points, trending ${
+          trendUp ? "up" : "down"
+        } from ${first.toLocaleString()} to ${last.toLocaleString()}`}
+        aria-describedby={descriptionId}
+        data-testid="historical-performance-chart-svg"
+      >
+        <path d={areaPath} fill={trendUp ? "rgba(52,211,153,0.12)" : "rgba(248,113,113,0.12)"} stroke="none" />
+        <polyline
+          points={polyline}
+          fill="none"
+          stroke={trendUp ? "#34d399" : "#f87171"}
+          strokeWidth={2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        <circle
+          cx={points[points.length - 1][0]}
+          cy={points[points.length - 1][1]}
+          r={3}
+          fill={trendUp ? "#34d399" : "#f87171"}
+        />
+      </svg>
+      <figcaption id={descriptionId} className="sr-only" data-testid="historical-performance-chart-description">
+        {description}
+      </figcaption>
+      <table className="sr-only" data-testid="historical-performance-chart-data">
+        <caption>
+          Historical {metricLabel} values from {startTime} to {endTime}
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Date</th>
+            <th scope="col">{metricLabel}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {history.map((point, index) => (
+            <tr key={`${point.timestamp}-${index}`}>
+              <th scope="row">{formatDate(point.timestamp)}</th>
+              <td>{point[metric].toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </figure>
   );
 }

@@ -49,14 +49,14 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     this.setState({ errorInfo });
     reportError(error, resolveContext(this.props));
+    logger.error('Unhandled UI error:', error, errorInfo);
+    trackTelemetryError(error, { component: 'ErrorBoundary' });
   }
 
   componentDidUpdate(prevProps: ErrorBoundaryProps) {
     if (this.state.error && prevProps.resetKeys !== this.props.resetKeys) {
       this.reset();
     }
-    logger.error('Unhandled UI error:', error, errorInfo);
-    trackTelemetryError(error, { component: 'ErrorBoundary' });
   }
 
   reset = () => {

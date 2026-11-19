@@ -24,8 +24,9 @@
  * @since 0.1.0
  */
 
-import React, { useMemo, useState, useId } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useId } from 'react';
 import { cn } from '../../lib/utils';
+import { LiveStatus } from '../LiveRegion';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -76,6 +77,7 @@ export interface DataTableProps<T> {
   emptyMessage?: React.ReactNode;
   /** Optional title rendered in the table header bar. */
   title?: React.ReactNode;
+  caption?: React.ReactNode;
   /** Optional subtitle rendered below the title. */
   subtitle?: React.ReactNode;
   /** Additional className for the outermost container. */
@@ -182,7 +184,7 @@ function PaginationBar({
 
   return (
     <div className="flex items-center justify-between border-t border-[#30363d] px-4 py-2 text-xs text-[#8b949e]">
-      <span>
+      <span data-testid="data-table-result-count">
         {total === 0 ? 'No results' : `${from}–${to} of ${total}`}
       </span>
 
@@ -192,7 +194,7 @@ function PaginationBar({
           onClick={() => onPageChange(1)}
           disabled={page === 1}
           aria-label="First page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
         >
           «
         </button>
@@ -201,7 +203,7 @@ function PaginationBar({
           onClick={() => onPageChange(page - 1)}
           disabled={page === 1}
           aria-label="Previous page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
         >
           ‹
         </button>
@@ -215,7 +217,7 @@ function PaginationBar({
           onClick={() => onPageChange(page + 1)}
           disabled={page >= pageCount}
           aria-label="Next page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
         >
           ›
         </button>
@@ -224,7 +226,7 @@ function PaginationBar({
           onClick={() => onPageChange(pageCount)}
           disabled={page >= pageCount}
           aria-label="Last page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
         >
           »
         </button>
@@ -246,11 +248,14 @@ export function DataTable<T>({
   filterPlaceholder = 'Filter…',
   emptyMessage = 'No results found.',
   title,
+  caption,
   subtitle,
   className,
   'data-testid': dataTestId,
 }: DataTableProps<T>) {
   const filterId = useId();
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const pageChanged = useRef(false);
 
   // ── Sort state ─────────────────────────────────────────────────────────────
   const firstSortable = columns.find((c) => c.sortable);
@@ -299,6 +304,34 @@ export function DataTable<T>({
     return sorted.slice(start, start + pageSize);
   }, [sorted, paginationEnabled, page, pageSize]);
 
+  useEffect(() => {
+    if (!pageChanged.current) {
+      pageChanged.current = true;
+      return;
+    }
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const container = resultsRef.current;
+    if (!container) return;
+    if (!container.hasAttribute('tabindex')) container.setAttribute('tabindex', '-1');
+    container.focus();
+  }, [page]);
+
+  const sortedColumn = columns.find((c) => String(c.key) === sortKey);
+  const sortedLabel =
+    sortedColumn && typeof sortedColumn.header === 'string'
+      ? sortedColumn.header
+      : sortKey;
+  const statusMessage = [
+    `${sorted.length} result${sorted.length === 1 ? '' : 's'}${filter ? ` matching ${filter}` : ''}`,
+    sortKey
+      ? `sorted by ${sortedLabel} ${sortDir === 'asc' ? 'ascending' : 'descending'}`
+      : '',
+    paginationEnabled ? `page ${page} of ${pageCount || 1}` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
+
   // ── Sort toggle ────────────────────────────────────────────────────────────
   const handleSort = (key: string) => {
     if (key === sortKey) {
@@ -345,18 +378,19 @@ export function DataTable<T>({
           className={cn(
             'w-full rounded-md border border-[#30363d] bg-[#161b22]',
             'px-3 py-1.5 text-xs text-[#c9d1d9] placeholder:text-[#8b949e]',
-            'focus:border-[#00d9ff] focus:outline-none focus:ring-1 focus:ring-[#00d9ff]',
+            'focus:border-[#00d9ff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]',
             'sm:w-56',
           )}
         />
       </div>
 
       {/* ── Table ──────────────────────────────────────────────────────────── */}
-      <div className="overflow-x-auto">
+      <div ref={resultsRef} className="overflow-x-auto">
         <table
           className="min-w-full text-left text-sm"
           data-testid={dataTestId ? `${dataTestId}-table` : undefined}
         >
+          {(caption ?? title) && <caption className="sr-only">{caption ?? title}</caption>}
           <thead className="bg-[#161b22] text-xs text-[#8b949e]">
             <tr>
               {columns.map((col) => {
@@ -383,8 +417,8 @@ export function DataTable<T>({
                       <button
                         type="button"
                         onClick={() => handleSort(key)}
-                        className="inline-flex items-center hover:text-[#c9d1d9]"
-                        aria-label={`Sort by ${typeof col.header === 'string' ? col.header : key}`}
+                        className="inline-flex items-center rounded hover:text-[#c9d1d9] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
+                        aria-label={`Sort by ${typeof col.header === 'string' ? col.header : key}${isSorted ? `, ${sortDir === 'asc' ? 'ascending' : 'descending'}` : ''}`}
                       >
                         {col.header}
                         <SortIcon active={isSorted} direction={sortDir} />
@@ -449,6 +483,11 @@ export function DataTable<T>({
           onPageChange={setPage}
         />
       )}
+      <LiveStatus
+        message={statusMessage}
+        label={typeof title === 'string' ? title : 'Table status'}
+        data-testid={dataTestId ? `${dataTestId}-status` : 'data-table-status'}
+      />
     </div>
   );
 }

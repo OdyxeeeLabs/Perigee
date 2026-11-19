@@ -56,6 +56,7 @@ export function VaultDetailModal({ vault, onClose, onDeposit, onWithdraw, onMana
         role="dialog"
         aria-modal="true"
         aria-labelledby="vault-detail-modal-title"
+        aria-describedby="vault-detail-modal-description"
         className="relative z-10 w-full max-w-2xl rounded-xl border border-slate-800 bg-slate-950 shadow-2xl"
       >
         <header className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
@@ -63,7 +64,7 @@ export function VaultDetailModal({ vault, onClose, onDeposit, onWithdraw, onMana
             <h2 id="vault-detail-modal-title" className="text-lg font-semibold text-slate-100">
               {vault.name}
             </h2>
-            <p className="text-xs text-slate-500">Vault details</p>
+            <p id="vault-detail-modal-description" className="text-xs text-slate-500">Vault details</p>
           </div>
           <button
             type="button"

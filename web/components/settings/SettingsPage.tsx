@@ -8,6 +8,7 @@ import { TradingSettingsTab } from "./TradingSettingsTab";
 import { DisplaySettingsTab } from "./DisplaySettingsTab";
 import { SecuritySettingsTab } from "./SecuritySettingsTab";
 import { AdvancedSettingsTab } from "./AdvancedSettingsTab";
+import { useAnnouncer } from "@/components/AnnouncerProvider";
 
 const TABS = [
   { id: "network", label: "Network", Component: NetworkSettingsTab },
@@ -32,12 +33,14 @@ type TabId = (typeof TABS)[number]["id"];
 export function SettingsPage() {
   const hydrated = useHydrateSettings();
   const resetSettings = useSettingsStore((s) => s.resetSettings);
+  const { announceStatus } = useAnnouncer();
   const [activeTab, setActiveTab] = useState<TabId>("network");
   const [resetStatus, setResetStatus] = useState<"idle" | "done">("idle");
 
   const handleReset = () => {
     resetSettings();
     setResetStatus("done");
+    announceStatus("Settings reset to defaults.");
     setTimeout(() => setResetStatus("idle"), 2000);
   };
 

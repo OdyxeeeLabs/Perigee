@@ -14,30 +14,45 @@ export interface VaultRowProps {
    * fire this, since the link's own click is stopped from bubbling.
    */
   onClick?: (vault: Vault) => void;
+  rowRef?: (node: HTMLDivElement | null) => void;
+  tabIndex?: number;
+  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  onFocus?: () => void;
 }
 
-export function VaultRow({ vault, style, href, onClick }: VaultRowProps) {
+export function VaultRow({
+  vault,
+  style,
+  href,
+  onClick,
+  rowRef,
+  tabIndex,
+  onKeyDown,
+  onFocus,
+}: VaultRowProps) {
   const interactive = Boolean(onClick);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!onClick) return;
-    if (event.key === "Enter" || event.key === " ") {
+    if (onClick && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();
       onClick(vault);
     }
+    onKeyDown?.(event);
   };
 
   return (
     <div
+      ref={rowRef}
       style={style}
       onClick={interactive ? () => onClick?.(vault) : undefined}
-      onKeyDown={interactive ? handleKeyDown : undefined}
+      onKeyDown={interactive || onKeyDown ? handleKeyDown : undefined}
+      onFocus={onFocus}
       role={interactive ? "button" : undefined}
-      tabIndex={interactive ? 0 : undefined}
+      tabIndex={interactive ? (tabIndex ?? 0) : tabIndex}
       aria-label={interactive ? `View details for ${vault.name}` : undefined}
       className={`flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/60 px-4 py-3 ${
         interactive
-          ? "cursor-pointer transition-colors hover:border-slate-700 hover:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+          ? "cursor-pointer transition-colors hover:border-slate-700 hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
           : ""
       }`}
     >

@@ -31,6 +31,7 @@ function StrategyPhaseTableImpl() {
       data={strategyPhases}
       rowKey={(row) => row.id}
       title="Strategy Phases"
+      caption="Strategy phases: phase, market condition, recommended action and description. Same information as the strategy diagram."
       subtitle="Cycle-phase rotation rules."
       filterPlaceholder="Filter phases…"
       emptyMessage="No matching phases."
