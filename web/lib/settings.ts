@@ -20,6 +20,12 @@
  *    toggling. The Display tab renders `<ThemeToggle />` directly.
  */
 
+import {
+  DEFAULT_REFRESH_INTERVAL_MS,
+  normalizeRefreshInterval,
+  type RefreshIntervalMs,
+} from "./refreshInterval";
+
 export type PreferredNetwork = "mainnet" | "testnet";
 export type GasPriceStrategy = "slow" | "standard" | "fast" | "custom";
 export type Currency = "USD" | "EUR" | "GBP" | "XLM" | "USDC";
@@ -50,6 +56,8 @@ export interface DisplaySettings {
   numberFormat: NumberFormat;
   /** Mirrors the BCP-47 locale codes in lib/locale/locales.ts. */
   preferredLanguage: string;
+  /** Read-only dashboard polling cadence; 60s by default. */
+  refreshIntervalMs: RefreshIntervalMs;
 }
 
 export interface SecuritySettings {
@@ -89,6 +97,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     currency: "USD",
     numberFormat: "1,234.56",
     preferredLanguage: "en",
+    refreshIntervalMs: DEFAULT_REFRESH_INTERVAL_MS,
   },
   security: {
     twoFactorEnabled: false,
@@ -190,7 +199,11 @@ export function mergeWithDefaults(partial: unknown): AppSettings {
         Number(p.trading?.customGasPrice ?? DEFAULT_SETTINGS.trading.customGasPrice),
       ),
     },
-    display: { ...DEFAULT_SETTINGS.display, ...(p.display ?? {}) },
+    display: {
+      ...DEFAULT_SETTINGS.display,
+      ...(p.display ?? {}),
+      refreshIntervalMs: normalizeRefreshInterval(p.display?.refreshIntervalMs),
+    },
     security: { ...DEFAULT_SETTINGS.security, ...(p.security ?? {}) },
     advanced: {
       ...DEFAULT_SETTINGS.advanced,

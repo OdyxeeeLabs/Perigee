@@ -2,6 +2,7 @@
 
 import { useSettingsStore } from "@/lib/settingsStore";
 import { CURRENCIES, NUMBER_FORMATS, type Currency, type NumberFormat } from "@/lib/settings";
+import { REFRESH_INTERVAL_OPTIONS, type RefreshIntervalMs } from "@/lib/refreshInterval";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { LOCALE_NAMES, SUPPORTED_LOCALES } from "@/lib/locale/locales";
 import { usePreferenceUndoToast } from "@/hooks/usePreferenceUndoToast";
@@ -78,6 +79,28 @@ export function DisplaySettingsTab() {
             {errors["number-format"]}
           </p>
         ) : null}
+      </section>
+
+      <section>
+        <label htmlFor="refresh-interval" className="text-sm font-semibold text-slate-200">
+          Dashboard refresh rate
+        </label>
+        <p className="mt-1 text-xs text-slate-400">
+          How often read-only dashboards check for new data. The default is every minute.
+          Transaction confirmations and security notices are never delayed.
+        </p>
+        <select
+          id="refresh-interval"
+          value={display.refreshIntervalMs}
+          onChange={(e) => updateDisplay({ refreshIntervalMs: Number(e.target.value) as RefreshIntervalMs })}
+          className="mt-2 w-full max-w-xs rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+        >
+          {REFRESH_INTERVAL_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
       </section>
 
       <section>

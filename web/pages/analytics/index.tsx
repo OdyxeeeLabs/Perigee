@@ -39,6 +39,8 @@ import {
   isDoNotTrackEnabled,
 } from "../../lib/telemetry";
 import type { TelemetrySummary } from "../api/telemetry";
+import { useDataRefresh } from "../../hooks/useDataRefresh";
+import { useRouteChangePause } from "../../hooks/useRouteChangePause";
 
 async function loadTelemetry(timeframe: string): Promise<TelemetrySummary> {
   const res = await fetch(`/api/telemetry?timeframe=${timeframe}`);
@@ -109,6 +111,11 @@ export default function AnalyticsDashboardPage() {
     errors.state.status,
     events.state.status,
   ].includes("loading");
+
+  const routeChanging = useRouteChangePause();
+  const { intervalMs: refreshIntervalMs } = useDataRefresh(fetchTelemetryData, {
+    enabled: !routeChanging,
+  });
 
   useEffect(() => {
     setOptOutStatus(getTelemetryConsent());
@@ -200,6 +207,9 @@ export default function AnalyticsDashboardPage() {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3">
+              <span className="hidden text-xs text-slate-500 lg:inline">
+                Auto-refresh: {refreshIntervalMs / 1000}s
+              </span>
               <button
                 type="button"
                 onClick={handleTriggerTestEvent}

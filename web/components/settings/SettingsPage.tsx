@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useHydrateSettings, useSettingsStore } from "@/lib/settingsStore";
 import { FormSkeleton } from "@/components/FormSkeleton";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorSummary, type FieldError } from "@/components/ErrorSummary";
 import {
   errorsFromMap,
@@ -59,6 +60,7 @@ function SettingsPageContent() {
   const previousPendingUndo = useRef(pendingUndo);
   const [activeTab, setActiveTab] = useState<TabId>("network");
   const [resetStatus, setResetStatus] = useState<"idle" | "done">("idle");
+  const [confirmReset, setConfirmReset] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   useEffect(() => {
@@ -128,12 +130,23 @@ function SettingsPageContent() {
           <h1 className="text-2xl font-bold text-slate-100">{t("settings.title")}</h1>
           <p className="mt-1 text-sm text-slate-400">{t("settings.subtitle")}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void handleSave()}
-            disabled={saveStatus === "saving"}
-            className="rounded border border-cyan-700 px-3 py-1.5 text-sm font-medium text-cyan-300 hover:bg-cyan-950/40 disabled:opacity-60"
+        <button
+          type="button"
+          onClick={() => setConfirmReset(true)}
+          className="rounded border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
+        >
+          {resetStatus === "done" ? "Reset ✓" : "Reset to defaults"}
+        </button>
+      </header>
+
+      {!hydrated ? (
+        <FormSkeleton fields={5} label="Settings loading" />
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-slate-800">
+          <div
+            role="tablist"
+            aria-label="Settings sections"
+            className="flex flex-wrap gap-1 border-b border-slate-800 bg-slate-900 px-2 pt-2"
           >
             {saveStatus === "saving"
               ? t("settings.saving")
@@ -197,7 +210,19 @@ function SettingsPageContent() {
         >
           <ActiveTabComponent />
         </div>
-      </div>
+      )}
+      <ConfirmDialog
+        open={confirmReset}
+        action="Reset settings"
+        target="saved preferences"
+        consequence="Every preference in this browser returns to its default value."
+        confirmLabel="Reset settings"
+        onConfirm={() => {
+          setConfirmReset(false);
+          handleReset();
+        }}
+        onCancel={() => setConfirmReset(false)}
+      />
     </div>
   );
 }

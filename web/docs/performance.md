@@ -32,6 +32,29 @@ non-critical widgets are loaded with `next/dynamic` and mounted inside
 `perigee:hydration` (navigation start to hydration complete) as a User Timing
 measure and a `hydration_time` telemetry event.
 
+## Route JavaScript budgets (#842 / WEB-41)
+
+`route-budgets.json` records the maximum raw, uncompressed JavaScript size for
+the home (`/`), vault (`/vault/[id]`) and analytics (`/analytics`) route chunks.
+Budgets are measured from Next's own build output (`build-manifest.json` and
+`app-build-manifest.json`); no timing measurements are involved, so a breach
+is reproducible. The home budget accounts for the result viewer being loaded
+with `next/dynamic` from `pages/index.tsx` — importing it statically would
+breach it again.
+
+Run `yarn budget:routes` after `yarn build` (CI does the same in
+`.github/workflows/web-route-budget.yml`). A failure prints the route and each
+of its chunks with their byte sizes. To raise a budget, change
+`route-budgets.json` deliberately in the same PR that justifies the increase.
+
+## Read-only refresh cadence (#843)
+
+The Display settings offer 15 s, 60 s and 5 min for background reads of
+analytics, portfolio and network status; the default is one minute (60 s).
+Transaction confirmations, security notices and explicit Retry buttons are not
+delayed by it. The preference lives in `lib/settings.ts` and is persisted with
+the existing settings store.
+
 ## Compression (#695)
 
 See `docs/compression.md`.

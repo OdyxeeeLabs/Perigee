@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useSettingsStore } from "@/lib/settingsStore";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { exportSettingsAsJson } from "@/lib/settings";
 import { featureFlagService, featureFlags, type FeatureFlag } from "@/features/feature-flags";
 
@@ -20,9 +21,11 @@ import { featureFlagService, featureFlags, type FeatureFlag } from "@/features/f
 export function AdvancedSettingsTab() {
   const advanced = useSettingsStore((s) => s.settings.advanced);
   const updateAdvanced = useSettingsStore((s) => s.updateAdvanced);
+  const resetSettings = useSettingsStore((s) => s.resetSettings);
   const settings = useSettingsStore((s) => s.settings);
   const [flagVersion, setFlagVersion] = useState(0);
   const [exportStatus, setExportStatus] = useState<"idle" | "done">("idle");
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const flagValues = featureFlagService.getAll();
 
@@ -128,6 +131,35 @@ export function AdvancedSettingsTab() {
           {exportStatus === "done" ? "Downloaded ✓" : "Export settings as JSON"}
         </button>
       </section>
+
+      <section>
+        <span className="text-sm font-semibold text-slate-200">Reset preferences</span>
+        <p className="mt-1 text-xs text-slate-400">
+          Restore every saved preference in this browser to its default value.
+        </p>
+        <button
+          type="button"
+          onClick={() => setConfirmReset(true)}
+          className="mt-2 rounded border border-red-700 px-3 py-1.5 text-sm font-medium text-red-300 hover:bg-red-950"
+        >
+          Reset settings to defaults
+        </button>
+      </section>
+
+      <ConfirmDialog
+        open={confirmReset}
+        action="Reset settings"
+        target="saved preferences"
+        consequence="Every preference in this browser returns to its default value."
+        confirmLabel="Reset settings"
+        onConfirm={() => {
+          setConfirmReset(false);
+          resetSettings();
+          featureFlagService.reset();
+          setFlagVersion((v) => v + 1);
+        }}
+        onCancel={() => setConfirmReset(false)}
+      />
     </div>
   );
 }

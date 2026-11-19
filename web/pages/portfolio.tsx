@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 
 import { SEO } from "@/components/SEO";
+import { useDataRefresh } from "@/hooks/useDataRefresh";
+import { useRouteChangePause } from "@/hooks/useRouteChangePause";
 import { useLocale } from "@/components/LocaleSync";
 import { FormattedAmount, FormattedPercent } from "@/components/ui/FormattedAmount";
 import {
@@ -45,6 +47,30 @@ const MOCK_VAULTS: Vault[] = Array.from({ length: 12 }, (_, i) => ({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function isVault(value: unknown): value is Vault {
+  if (!value || typeof value !== "object") return false;
+  const vault = value as Partial<Vault>;
+  return (
+    typeof vault.id === "string" &&
+    typeof vault.name === "string" &&
+    typeof vault.owner === "string" &&
+    typeof vault.balance === "number" &&
+    typeof vault.asset === "string" &&
+    typeof vault.status === "string"
+  );
+}
+
+async function loadVaults(): Promise<Vault[]> {
+  try {
+    const response = await fetch("/api/vaults", { cache: "no-store" });
+    if (!response.ok) return MOCK_VAULTS;
+    const data: unknown = await response.json();
+    return Array.isArray(data) && data.every(isVault) ? data : MOCK_VAULTS;
+  } catch {
+    return MOCK_VAULTS;
+  }
+}
 
 type AssetBreakdown = { asset: string; balance: number; count: number };
 
@@ -281,6 +307,23 @@ function TopVaultRow({ vault }: { vault: Vault }) {
  * Resolves #683 — Build portfolio overview.
  */
 export default function PortfolioOverviewPage() {
+  const [vaults, setVaults] = useState<Vault[]>(MOCK_VAULTS);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
+  const routeChanging = useRouteChangePause();
+
+  const refreshVaults = useCallback(async () => {
+    const next = await loadVaults();
+    setVaults(next);
+    setLastRefreshedAt(Date.now());
+  }, []);
+
+  const { intervalMs: refreshIntervalMs } = useDataRefresh(() => {
+    void refreshVaults();
+  }, { enabled: !routeChanging });
+
+  useEffect(() => {
+    void refreshVaults();
+  }, [refreshVaults]);
   // In production wire this to a real data-fetching hook / SWR call.
   const [vaults] = useState<Vault[]>(MOCK_VAULTS);
   const locale = useLocale();
@@ -337,6 +380,11 @@ export default function PortfolioOverviewPage() {
                 Portfolio Overview
               </span>
             </div>
+            <span className="hidden text-xs text-slate-500 md:inline">
+              Auto-refresh: {refreshIntervalMs / 1000}s
+              {lastRefreshedAt !== null &&
+                ` · updated ${new Date(lastRefreshedAt).toLocaleTimeString()}`}
+            </span>
             <Link
               href="/"
               className="text-sm font-medium text-slate-400 hover:text-cyan-400 transition-colors"

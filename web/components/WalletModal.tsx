@@ -32,6 +32,10 @@ export function WalletModal() {
   const [activeSelection, setActiveSelection] = React.useState<string | null>(
     null,
   );
+  const { ref: dialogRef } = useFocusTrap<HTMLDivElement>({
+    active: isModalOpen,
+    onEscape: closeModal,
+  });
 
   // Reset selection and track funnel initiated when modal opens
   React.useEffect(() => {
@@ -71,6 +75,11 @@ export function WalletModal() {
             onClick={closeModal}
           />
           <motion.div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wallet-modal-title"
+            aria-describedby="wallet-modal-description"
             initial={
               shouldReduceMotion
                 ? { opacity: 1, scale: 1 }
@@ -102,10 +111,11 @@ export function WalletModal() {
             >
               <div className="flex flex-col items-center">
                 <div className="text-center mb-6">
+                  <h2 id="wallet-modal-title" className="text-2xl font-medium text-white">
                   <h2 id={titleId} className="text-2xl font-medium text-white">
                     {t("title")}
                   </h2>
-                  <p className="mt-2 text-[#92A5A8] text-sm">
+                  <p id="wallet-modal-description" className="mt-2 text-[#92A5A8] text-sm">
                     {t("description")}
                   </p>
                 </div>

@@ -9,6 +9,7 @@
     "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"./__tests__/**/*.test.cjs\" \"./lib/**/*.test.cjs\" \"./components/**/*.test.cjs\"",
+    "budget:routes": "node scripts/check-route-budgets.mjs .next",
     "i18n:check": "node scripts/i18n/check-messages.cjs",
     "i18n:copy:check": "node scripts/i18n/check-manager-copy.cjs",
     "docs:build": "node scripts/docs/generate.mjs",
