@@ -3,6 +3,7 @@ import Mermaid from "@/components/Mermaid";
 
 import { strategyPhases } from "./strategyPhases";
 import { StrategyPhaseTable } from "./StrategyPhaseTable";
+import { StrategyRiskExplanations } from "./StrategyRiskExplanations";
 
 export function StrategyPhaseDiagram() {
   const phaseSummary = strategyPhases
@@ -25,6 +26,15 @@ export function StrategyPhaseDiagram() {
         >
           <Mermaid />
         </ErrorBoundary>
+      <figure className="min-w-0">
+        <div
+          className="responsive-scroll-region"
+          role="region"
+          aria-label="Strategy phase diagram — scroll horizontally for the full diagram"
+          tabIndex={0}
+        >
+          <Mermaid />
+        </div>
 
         <figcaption>
           Visual representation of the market strategy lifecycle. Time range:
@@ -45,6 +55,7 @@ export function StrategyPhaseDiagram() {
         </p>
 
         <StrategyPhaseTable />
+        <StrategyRiskExplanations />
       </div>
     </section>
   );

@@ -107,6 +107,23 @@ raise the number. A threshold raised until it stops firing is a disabled check.
 | `chromium-mobile` | NavDrawer and the command palette only exist below `md` |
 | `dark` | Contrast is a per-background property; a token can pass on one and fail on the other |
 
+## Onboarding and small-screen baselines
+
+`e2e/visual/visual.spec.ts` records three manager-onboarding states — initial,
+validation-error and completed — and data views at a 360px phone and a 768px
+tablet width. The onboarding fixture injects a fake `window.freighter`, seeds
+`perigee_wallet_*` storage and stubs `/managers/status/*` and
+`/managers/register` with fixed records. The validation-error state fills the
+name with whitespace so the browser's native `required` check does not pre-empt
+the app's own error. Portfolio fixtures pin `Math.random` and `Date.now` to the
+same instant as `page.clock`, so the demo data is identical on every run. No
+baseline contains a live timestamp or a network-loaded response.
+
+Small-screen diagrams and tables use a shared, keyboard-focusable
+`.responsive-scroll-region` so a narrow viewport produces an intentional scroll
+rather than clipped labels; key columns stay sticky and chart values are also
+written out as text.
+
 ## What still needs a human
 
 A screenshot proves pixels are stable, not that the UI is usable. Focus *order*,

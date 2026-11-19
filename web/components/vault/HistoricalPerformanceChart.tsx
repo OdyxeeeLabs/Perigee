@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { formatNumber } from "@/lib/locale/format";
 import type { VaultHistoryPoint } from "@/types/vault";
 
 export interface HistoricalPerformanceChartProps {
@@ -39,8 +40,8 @@ export function HistoricalPerformanceChart({
   if (history.length === 0) {
     return (
       <div
-        className={`flex items-center justify-center text-xs text-slate-500 ${className}`}
-        style={{ width, height }}
+        className={`flex w-full items-center justify-center text-xs text-slate-500 ${className}`}
+        style={{ height }}
       >
         No historical data available.
       </div>
@@ -81,6 +82,7 @@ export function HistoricalPerformanceChart({
 
   return (
     <figure className={className} style={{ width }} data-testid="historical-performance-chart">
+    <div className={`w-full ${className}`}>
       <svg
         viewBox={`0 0 ${width} ${height}`}
         width="100%"
@@ -91,6 +93,9 @@ export function HistoricalPerformanceChart({
         } from ${first.toLocaleString()} to ${last.toLocaleString()}`}
         aria-describedby={descriptionId}
         data-testid="historical-performance-chart-svg"
+        aria-label={`Historical ${metric === "apy" ? "APY" : "TVL"} chart, ${history.length} data points, trending ${
+          trendUp ? "up" : "down"
+        } from ${formatNumber(first)} to ${formatNumber(last)}`}
       >
         <path d={areaPath} fill={trendUp ? "rgba(52,211,153,0.12)" : "rgba(248,113,113,0.12)"} stroke="none" />
         <polyline
@@ -131,5 +136,16 @@ export function HistoricalPerformanceChart({
         </tbody>
       </table>
     </figure>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-400">
+        <span>First: <strong className="font-semibold text-slate-200">{formatNumber(first)}</strong></span>
+        <span>Latest: <strong className="font-semibold text-slate-200">{formatNumber(last)}</strong></span>
+        <span>
+          Trend:{" "}
+          <strong className={trendUp ? "font-semibold text-emerald-400" : "font-semibold text-red-400"}>
+            {trendUp ? "Up" : "Down"}
+          </strong>
+        </span>
+      </div>
+    </div>
   );
 }

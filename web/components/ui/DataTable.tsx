@@ -195,6 +195,7 @@ function PaginationBar({
           disabled={page === 1}
           aria-label="First page"
           className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           «
         </button>
@@ -204,6 +205,7 @@ function PaginationBar({
           disabled={page === 1}
           aria-label="Previous page"
           className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ‹
         </button>
@@ -218,6 +220,7 @@ function PaginationBar({
           disabled={page >= pageCount}
           aria-label="Next page"
           className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ›
         </button>
@@ -227,6 +230,7 @@ function PaginationBar({
           disabled={page >= pageCount}
           aria-label="Last page"
           className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           »
         </button>
@@ -387,13 +391,13 @@ export function DataTable<T>({
       {/* ── Table ──────────────────────────────────────────────────────────── */}
       <div ref={resultsRef} className="overflow-x-auto">
         <table
-          className="min-w-full text-left text-sm"
+          className="min-w-[36rem] w-full text-left text-sm"
           data-testid={dataTestId ? `${dataTestId}-table` : undefined}
         >
           {(caption ?? title) && <caption className="sr-only">{caption ?? title}</caption>}
           <thead className="bg-[#161b22] text-xs text-[#8b949e]">
             <tr>
-              {columns.map((col) => {
+              {columns.map((col, colIndex) => {
                 const key = String(col.key);
                 const isSorted = sortKey === key;
                 return (
@@ -404,6 +408,7 @@ export function DataTable<T>({
                       'px-4 py-3 font-medium',
                       alignClass(col.align),
                       col.sortable && 'cursor-pointer select-none',
+                      colIndex === 0 && 'sticky left-0 z-10 bg-[#161b22]',
                     )}
                     aria-sort={
                       isSorted
@@ -450,16 +455,18 @@ export function DataTable<T>({
                 return (
                   <tr
                     key={key}
-                    className="hover:bg-[#0f1621] transition-colors"
+                    className="group transition-colors hover:bg-[#0f1621]"
                     data-testid={dataTestId ? `${dataTestId}-row` : undefined}
                   >
-                    {columns.map((col) => (
+                    {columns.map((col, colIndex) => (
                       <td
                         key={String(col.key)}
                         className={cn(
                           'px-4 py-3 text-[#c9d1d9]',
                           alignClass(col.align),
                           col.className,
+                          colIndex === 0 &&
+                            'sticky left-0 z-10 bg-[#0d1117] group-hover:bg-[#0f1621]',
                         )}
                       >
                         {cellValue(row, col)}

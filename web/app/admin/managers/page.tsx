@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import AdminManagersClient from '../../../components/admin/AdminManagersClient';
 
 export const metadata: Metadata = {
   title: 'Manager Administration | Perigee',
@@ -14,12 +15,7 @@ export default function AdminManagersPage() {
       <p className="mt-2 text-gray-600 dark:text-gray-400">
         Manage white-label wealth managers and their client fleet allocations.
       </p>
-      {/* TODO: wire up manager list from /api/v1/admin/managers */}
-      <div className="mt-6 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          No managers configured. Use the API to provision vault fleets.
-        </p>
-      </div>
+      <AdminManagersClient />
     </main>
   );
 }

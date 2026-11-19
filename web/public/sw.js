@@ -1,28 +1,33 @@
 /* Perigee service worker.
  *
- * Hand-written (no Workbox dependency) implementation of the cache strategies
- * described in issue #688:
- *   - static assets  : CacheFirst
- *   - images         : CacheFirst with expiration (max entries + max age)
- *   - API GET        : StaleWhileRevalidate, entries older than 5 minutes are
- *                      treated as expired and refetched
- *   - API mutations  : failed (offline) POST/PUT/PATCH/DELETE are queued in
- *                      IndexedDB and replayed through Background Sync
- *
- * A new worker waits until the page sends { type: "SKIP_WAITING" } so users
- * can accept the update prompt before the page is reloaded.
+ * Cache policy (issue #834):
+ *   - only an explicit allowlist of versioned static assets may be cached
+ *   - application documents are NEVER cached, so a stale shell cannot be served
+ *   - API GET reads use stale-while-revalidate with a bounded max age and are
+ *     stamped with the time they were cached
+ *   - API mutations/signing requests are network-only and are NEVER served from
+ *     a cache; offline signing fails closed with a reconnect message
+ *   - a cache version bump deletes every older cache on activate
  */
 
-const VERSION = "v1";
-const STATIC_CACHE = `perigee-static-${VERSION}`;
-const IMAGE_CACHE = `perigee-images-${VERSION}`;
-const API_CACHE = `perigee-api-${VERSION}`;
+const VERSION = "v2";
+const CACHE_PREFIX = "perigee-";
+const STATIC_CACHE = `${CACHE_PREFIX}static-${VERSION}`;
+const IMAGE_CACHE = `${CACHE_PREFIX}images-${VERSION}`;
+const API_CACHE = `${CACHE_PREFIX}api-${VERSION}`;
 const ALL_CACHES = [STATIC_CACHE, IMAGE_CACHE, API_CACHE];
 
 const API_MAX_AGE_MS = 5 * 60 * 1000;
 const IMAGE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const IMAGE_MAX_ENTRIES = 60;
 const CACHED_AT_HEADER = "x-sw-cached-at";
+
+const CACHEABLE_STATIC_PATHS = ["/_next/static/", "/icons/", "/favicon.ico", "/manifest.webmanifest"];
+const CACHEABLE_STATIC_EXT = /\.(?:js|css|woff2?|ttf|otf|wasm|svg|png|webp|ico)$/i;
+const SIGNING_PATH_RE = /\/api\/(?:sign|signing|transaction|tx|deposit|withdraw|approve|reject|register)(?:\/|$)/i;
+const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const OFFLINE_ACTION_MESSAGE =
+  "You are offline. Reconnect and try again — this action was not submitted.";
 
 const SYNC_TAG = "perigee-replay-mutations";
 const DB_NAME = "perigee-sw";
@@ -38,7 +43,7 @@ self.addEventListener("activate", (event) => {
       const names = await caches.keys();
       await Promise.all(
         names
-          .filter((name) => name.startsWith("perigee-") && !ALL_CACHES.includes(name))
+          .filter((name) => name.startsWith(CACHE_PREFIX) && !ALL_CACHES.includes(name))
           .map((name) => caches.delete(name)),
       );
       await self.clients.claim();
@@ -56,15 +61,24 @@ self.addEventListener("message", (event) => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function isStaticAsset(url) {
-  return (
-    url.pathname.startsWith("/_next/static/") ||
-    /\.(?:js|css|woff2?|ttf|otf|wasm)$/.test(url.pathname)
-  );
-}
-
 function isApi(url) {
   return url.origin === self.location.origin && url.pathname.startsWith("/api/");
+}
+
+function isSigningRequest(url) {
+  return isApi(url) && SIGNING_PATH_RE.test(url.pathname);
+}
+
+function isMutation(request) {
+  return MUTATION_METHODS.has(request.method.toUpperCase());
+}
+
+/** Only the explicit static allowlist is cacheable; documents never are. */
+function isCacheableStatic(url, request) {
+  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return false;
+  if (request.destination === "document") return false;
+  const allowedPath = CACHEABLE_STATIC_PATHS.some((prefix) => url.pathname.startsWith(prefix));
+  return allowedPath || CACHEABLE_STATIC_EXT.test(url.pathname);
 }
 
 /** Clone a response and stamp it with the time it was cached. */
@@ -81,6 +95,16 @@ async function stamp(response) {
 function ageOf(response) {
   const cachedAt = Number(response.headers.get(CACHED_AT_HEADER));
   return Number.isFinite(cachedAt) && cachedAt > 0 ? Date.now() - cachedAt : Infinity;
+}
+
+function offlineResponse(message, status) {
+  return new Response(
+    JSON.stringify({ error: "offline", submitted: false, message }),
+    {
+      status,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    },
+  );
 }
 
 async function cacheFirst(request, cacheName, maxAgeMs) {
@@ -110,11 +134,15 @@ async function trimImageCache(cache) {
   }
 }
 
-async function staleWhileRevalidate(event, request) {
+async function staleWhileRevalidate(event, request, url) {
+  if (isSigningRequest(url)) {
+    return fetch(request, { cache: "no-store" });
+  }
+
   const cache = await caches.open(API_CACHE);
   const cached = await cache.match(request);
 
-  const refresh = fetch(request)
+  const refresh = fetch(request, { cache: "no-store" })
     .then(async (response) => {
       if (response.ok) await cache.put(request, await stamp(response));
       return response;
@@ -128,11 +156,8 @@ async function staleWhileRevalidate(event, request) {
 
   const fresh = await refresh;
   if (fresh) return fresh;
-  if (cached) return cached; // offline: stale beats nothing
-  return new Response(JSON.stringify({ error: "offline" }), {
-    status: 503,
-    headers: { "Content-Type": "application/json" },
-  });
+  if (cached) return cached;
+  return offlineResponse("You are offline. Reconnect to load fresh data.", 503);
 }
 
 // ---------------------------------------------------------------------------
@@ -143,22 +168,28 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  if (request.method !== "GET") {
-    if (isApi(url)) event.respondWith(networkOrQueue(request));
+  if (isMutation(request)) {
+    if (isApi(url)) event.respondWith(networkOrQueue(request, url));
     return;
   }
 
+  if (request.method !== "GET") return;
+
+  // Application documents are network-only: a stale cached shell must never
+  // make a user believe a transaction completed while offline.
+  if (request.destination === "document") return;
+
   if (request.destination === "image") {
     event.respondWith(cacheFirst(request, IMAGE_CACHE, IMAGE_MAX_AGE_MS));
-  } else if (url.origin === self.location.origin && isStaticAsset(url)) {
+  } else if (isCacheableStatic(url, request)) {
     event.respondWith(cacheFirst(request, STATIC_CACHE));
   } else if (isApi(url)) {
-    event.respondWith(staleWhileRevalidate(event, request));
+    event.respondWith(staleWhileRevalidate(event, request, url));
   }
 });
 
 // ---------------------------------------------------------------------------
-// Background sync for failed mutations
+// Background sync for failed, retry-safe mutations (never signing requests)
 // ---------------------------------------------------------------------------
 
 function openDb() {
@@ -184,11 +215,16 @@ function withStore(mode, run) {
   );
 }
 
-async function networkOrQueue(request) {
+async function networkOrQueue(request, url) {
   const replayable = request.clone();
   try {
-    return await fetch(request);
+    return await fetch(request, { cache: "no-store" });
   } catch (error) {
+    if (isSigningRequest(url)) {
+      await notifyClients({ type: "OFFLINE_ACTION_BLOCKED", message: OFFLINE_ACTION_MESSAGE });
+      return offlineResponse(OFFLINE_ACTION_MESSAGE, 503);
+    }
+
     const record = {
       url: replayable.url,
       method: replayable.method,
@@ -201,10 +237,10 @@ async function networkOrQueue(request) {
       await self.registration.sync.register(SYNC_TAG);
     }
     await notifyClients({ type: "MUTATION_QUEUED" });
-    return new Response(JSON.stringify({ queued: true }), {
-      status: 202,
-      headers: { "Content-Type": "application/json" },
-    });
+    return offlineResponse(
+      "You are offline. Your change was queued and has NOT been submitted yet.",
+      202,
+    );
   }
 }
 
@@ -212,11 +248,17 @@ async function replayQueuedMutations() {
   const queued = await withStore("readonly", (store) => store.getAll());
   let replayed = 0;
   for (const record of queued || []) {
+    const url = new URL(record.url);
+    if (isSigningRequest(url)) {
+      await withStore("readwrite", (store) => store.delete(record.id));
+      continue;
+    }
     try {
       const response = await fetch(record.url, {
         method: record.method,
         headers: record.headers,
         body: record.body || undefined,
+        cache: "no-store",
       });
       if (response.ok || (response.status >= 400 && response.status < 500)) {
         await withStore("readwrite", (store) => store.delete(record.id));
@@ -225,7 +267,7 @@ async function replayQueuedMutations() {
         throw new Error(`replay failed with ${response.status}`);
       }
     } catch (error) {
-      throw error; // let Background Sync retry later
+      throw error;
     }
   }
   if (replayed > 0) await notifyClients({ type: "MUTATIONS_REPLAYED", count: replayed });

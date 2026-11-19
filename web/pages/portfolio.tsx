@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import Head from "next/head";
 import Link from "next/link";
+import { useRouter } from "next/router";
 import {
   BarChart2,
   TrendingUp,
@@ -13,6 +14,10 @@ import {
 } from "lucide-react";
 
 import { SEO } from "@/components/SEO";
+import { useDateRange } from "@/hooks/useDateRange";
+import { DATE_RANGE_PRESETS, type DateRangeId } from "@/lib/dateRange";
+import { formatNumber } from "@/lib/locale/format";
+import { normalizeLocale } from "@/lib/locale/locales";
 import { Vault, VaultStatus } from "@/types/vault";
 
 // ---------------------------------------------------------------------------
@@ -126,9 +131,11 @@ function StatCard({
 function AssetBar({
   breakdown,
   total,
+  locale,
 }: {
   breakdown: AssetBreakdown[];
   total: number;
+  locale: string;
 }) {
   const COLORS = [
     "bg-sky-500",
@@ -137,6 +144,10 @@ function AssetBar({
     "bg-emerald-500",
     "bg-rose-500",
   ];
+
+  if (breakdown.length === 0 || total <= 0) {
+    return <p className="py-6 text-center text-xs text-slate-500">No assets to display yet.</p>;
+  }
 
   return (
     <div>
@@ -164,7 +175,7 @@ function AssetBar({
               <span className="text-xs text-slate-500">({item.count} vault{item.count !== 1 ? "s" : ""})</span>
             </span>
             <span className="font-medium text-slate-200">
-              {item.balance.toLocaleString()}{" "}
+              {formatNumber(item.balance, locale)}{" "}
               <span className="text-xs text-slate-500">
                 ({((item.balance / total) * 100).toFixed(1)}%)
               </span>
@@ -203,7 +214,7 @@ function StatusBreakdown({ vaults }: { vaults: Vault[] }) {
   );
 }
 
-function TopVaultRow({ vault }: { vault: Vault }) {
+function TopVaultRow({ vault, locale }: { vault: Vault; locale: string }) {
   return (
     <Link
       href={`/vault/${vault.id}`}
@@ -230,7 +241,7 @@ function TopVaultRow({ vault }: { vault: Vault }) {
       <div className="flex items-center gap-4">
         <div className="text-right">
           <p className="text-sm font-semibold text-white">
-            {vault.balance.toLocaleString()}
+            {formatNumber(vault.balance, locale)}
           </p>
           <p className="text-xs text-emerald-400">{vault.apy}% APY</p>
         </div>
@@ -258,6 +269,15 @@ function TopVaultRow({ vault }: { vault: Vault }) {
 export default function PortfolioOverviewPage() {
   // In production wire this to a real data-fetching hook / SWR call.
   const [vaults] = useState<Vault[]>(MOCK_VAULTS);
+  const router = useRouter();
+  const locale = normalizeLocale(router?.locale);
+  const {
+    range,
+    setRange,
+    label: rangeLabel,
+    from,
+    to,
+  } = useDateRange();
 
   const totalBalance = useMemo(
     () => vaults.reduce((s, v) => s + v.balance, 0),
@@ -276,6 +296,17 @@ export default function PortfolioOverviewPage() {
   );
 
   const assetBreakdown = useMemo(() => getAssetBreakdown(vaults), [vaults]);
+  const hasVaults = vaults.length > 0;
+
+  const createdInRange = useMemo(() => {
+    if (!from) return vaults.length;
+    const start = from.getTime();
+    const end = to.getTime();
+    return vaults.filter((vault) => {
+      const created = Date.parse(vault.createdAt);
+      return Number.isFinite(created) && created >= start && created <= end;
+    }).length;
+  }, [vaults, from, to]);
 
   return (
     <>
@@ -291,12 +322,12 @@ export default function PortfolioOverviewPage() {
       <main className="min-h-screen bg-slate-950 text-slate-100">
         {/* Header */}
         <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
-          <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-            <div>
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-4 sm:px-6 lg:px-8">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <Link href="/" className="text-2xl font-bold text-cyan-400 hover:text-cyan-300">
                 Perigee
               </Link>
-              <span className="ml-3 text-xs uppercase tracking-wider text-slate-500">
+              <span className="text-xs uppercase tracking-wider text-slate-500">
                 Portfolio Overview
               </span>
             </div>
@@ -319,13 +350,37 @@ export default function PortfolioOverviewPage() {
             <p className="mt-1 text-sm text-slate-400">
               All vaults &mdash; balances, allocations, and performance at a glance.
             </p>
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+              <label
+                htmlFor="comparison-range"
+                className="text-xs font-medium text-slate-400"
+              >
+                Comparison period
+              </label>
+              <select
+                id="comparison-range"
+                data-testid="comparison-range"
+                value={range}
+                onChange={(event) => setRange(event.target.value as DateRangeId)}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+              >
+                {DATE_RANGE_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-slate-500" data-testid="range-label">
+                {rangeLabel}
+              </span>
+            </div>
           </div>
 
           {/* KPI cards */}
           <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Total Balance"
-              value={totalBalance.toLocaleString()}
+              value={formatNumber(totalBalance, locale)}
               sub="Across all assets"
               icon={<Wallet size={16} />}
               trend="neutral"
@@ -346,10 +401,17 @@ export default function PortfolioOverviewPage() {
             />
             <StatCard
               label="Best APY"
-              value={`${Math.max(...vaults.map((v) => v.apy ?? 0)).toFixed(2)}%`}
+              value={`${(hasVaults ? Math.max(...vaults.map((v) => v.apy ?? 0)) : 0).toFixed(2)}%`}
               sub={topVaults[0]?.name ?? "—"}
               icon={<TrendingUp size={16} />}
               trend="up"
+            />
+            <StatCard
+              label="New Vaults (Period)"
+              value={formatNumber(createdInRange, locale)}
+              sub={rangeLabel}
+              icon={<Clock size={16} />}
+              trend="neutral"
             />
           </div>
 
@@ -366,7 +428,7 @@ export default function PortfolioOverviewPage() {
               >
                 Asset Allocation
               </h2>
-              <AssetBar breakdown={assetBreakdown} total={totalBalance} />
+              <AssetBar breakdown={assetBreakdown} total={totalBalance} locale={locale} />
             </section>
 
             {/* Vault status */}
@@ -397,9 +459,20 @@ export default function PortfolioOverviewPage() {
             </h2>
             <div className="space-y-2">
               {topVaults.map((vault) => (
-                <TopVaultRow key={vault.id} vault={vault} />
+                <TopVaultRow key={vault.id} vault={vault} locale={locale} />
               ))}
             </div>
+            {hasVaults ? (
+              <div className="space-y-2">
+                {topVaults.map((vault) => (
+                  <TopVaultRow key={vault.id} vault={vault} />
+                ))}
+              </div>
+            ) : (
+              <p role="status" className="py-6 text-center text-xs text-slate-500">
+                No vaults to analyse yet.
+              </p>
+            )}
           </section>
         </div>
       </main>

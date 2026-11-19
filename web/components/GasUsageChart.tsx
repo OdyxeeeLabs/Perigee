@@ -120,7 +120,7 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
 
   return (
     <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-6 font-mono">
-      <div className="border-b-2 border-[#30363d] pb-2 mb-4 flex justify-between items-end">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-2 border-b-2 border-[#30363d] pb-2">
         <div className="flex items-center gap-2">
           <BarChart3 size={18} className="text-[#8b949e]" />
           <h2 className="text-2xl font-black text-[#c9d1d9] uppercase tracking-wider">
@@ -136,6 +136,7 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
 
       {/* Legend */}
       <div className="flex gap-6 mb-6 text-xs" aria-hidden="true">
+      <div className="mb-4 flex flex-wrap gap-x-4 gap-y-1 text-xs">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#00d9ff' }} />
           <span className="text-[#c9d1d9]">Simulated</span>
@@ -159,25 +160,30 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
           return (
             <div key={metric.key}>
               {/* Label Row */}
-              <div className="flex justify-between items-center mb-1">
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
                 <div className="flex items-center gap-2 text-[#c9d1d9]">
                   <metric.icon size={14} className="text-[#8b949e]" />
                   <span className="font-bold text-sm">{metric.label}</span>
                 </div>
-                <div className="flex gap-4 text-xs">
-                  <span className="text-[#00d9ff] font-semibold">
-                    {formatCompact(metric.simulated)}
-                    <span className="text-[#8b949e] font-normal ml-1">{metric.unit}</span>
-                  </span>
-                  <span className="text-[#8b949e]">
-                    avg {formatCompact(metric.average)}
-                    <span className="ml-1">{metric.unit}</span>
-                  </span>
-                </div>
+                  <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-0.5 text-xs">
+                    <span className="text-[#00d9ff] font-semibold">
+                      {formatCompact(metric.simulated)}
+                      <span className="text-[#8b949e] font-normal ml-1">{metric.unit}</span>
+                    </span>
+                    <span className="text-[#8b949e]">
+                      avg {formatCompact(metric.average)}
+                      <span className="ml-1">{metric.unit}</span>
+                    </span>
+                  </div>
               </div>
 
               {/* Simulated bar */}
               <div aria-hidden="true" className="h-3 w-full bg-[#0d1117] rounded-sm overflow-hidden border border-[#30363d] mb-0.5">
+              <div
+                role="img"
+                aria-label={`${metric.label} simulated: ${formatCompact(metric.simulated)} ${metric.unit}`}
+                className="mb-0.5 h-3 w-full overflow-hidden rounded-sm border border-[#30363d] bg-[#0d1117]"
+              >
                 <div
                   className="h-full rounded-sm transition-all duration-500 ease-out"
                   style={{
@@ -190,6 +196,11 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
 
               {/* Testnet average bar */}
               <div aria-hidden="true" className="h-2 w-full bg-[#0d1117] rounded-sm overflow-hidden border border-[#30363d]">
+              <div
+                role="img"
+                aria-label={`${metric.label} testnet average: ${formatCompact(metric.average)} ${metric.unit}`}
+                className="h-2 w-full overflow-hidden rounded-sm border border-[#30363d] bg-[#0d1117]"
+              >
                 <div
                   className="h-full rounded-sm transition-all duration-500 ease-out"
                   style={{
@@ -237,7 +248,7 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
       {/* Cost Summary */}
       {cost_stroops !== undefined && (
         <div className="mt-6 pt-4 border-t-[4px] border-[#30363d]">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-[#c9d1d9]">
               <DollarSign size={16} className="text-[#00d9ff]" />
               <span className="font-bold text-sm">Total Simulated Cost</span>

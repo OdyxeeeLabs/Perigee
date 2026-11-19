@@ -5,6 +5,8 @@ import { X } from "lucide-react";
 import type { Vault, VaultDetail } from "@/types/vault";
 import { useVaultDetail } from "@/hooks/useVaultDetail";
 import { useFocusTrap } from "@/hooks/useFocusTrap";
+import { useTransactionNetwork } from "@/hooks/useTransactionNetwork";
+import { TransactionNetworkNotice } from "@/components/TransactionNetworkNotice";
 import { VaultDetailContent } from "./VaultDetailContent";
 import { VaultDetailSkeleton } from "./VaultDetailSkeleton";
 
@@ -29,6 +31,7 @@ export interface VaultDetailModalProps {
 export function VaultDetailModal({ vault, onClose, onDeposit, onWithdraw, onManage }: VaultDetailModalProps) {
   const isOpen = vault !== null;
   const detail = useVaultDetail(vault?.id ?? null);
+  const network = useTransactionNetwork();
   const { ref, focusInitial } = useFocusTrap<HTMLDivElement>({
     active: isOpen,
     onEscape: onClose,
@@ -77,6 +80,7 @@ export function VaultDetailModal({ vault, onClose, onDeposit, onWithdraw, onMana
         </header>
 
         <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
+          <TransactionNetworkNotice network={network} />
           {detail.status === "loading" && <VaultDetailSkeleton />}
 
           {detail.status === "error" && (
@@ -91,6 +95,8 @@ export function VaultDetailModal({ vault, onClose, onDeposit, onWithdraw, onMana
               onDeposit={onDeposit}
               onWithdraw={onWithdraw}
               onManage={onManage}
+              transactionsEnabled={network.canTransact}
+              disabledReason={network.disabledReason}
             />
           )}
         </div>
