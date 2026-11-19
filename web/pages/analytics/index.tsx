@@ -27,6 +27,8 @@ import {
   Zap,
 } from "lucide-react";
 import { SEO } from "../../components/SEO";
+import { useDateRange } from "../../hooks/useDateRange";
+import { DATE_RANGE_PRESETS, dateRangeToApiParams } from "../../lib/dateRange";
 import {
   trackTelemetryEvent,
   trackFunnelEvent,
@@ -40,7 +42,11 @@ import type { TelemetrySummary } from "../api/telemetry";
 export default function AnalyticsDashboardPage() {
   const [summary, setSummary] = useState<TelemetrySummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [timeframe, setTimeframe] = useState<"24h" | "7d" | "30d" | "all">("24h");
+  const {
+    range: timeframe,
+    setRange: setTimeframe,
+    label: rangeLabel,
+  } = useDateRange();
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [testEventSent, setTestEventSent] = useState(false);
   const [optOutStatus, setOptOutStatus] = useState<boolean | null>(null);
@@ -50,7 +56,8 @@ export default function AnalyticsDashboardPage() {
   const fetchTelemetryData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/telemetry?timeframe=${timeframe}`);
+      const params = new URLSearchParams(dateRangeToApiParams(timeframe));
+      const res = await fetch(`/api/telemetry?${params.toString()}`);
       if (res.ok) {
         const data = (await res.json()) as TelemetrySummary;
         setSummary(data);
@@ -139,8 +146,8 @@ export default function AnalyticsDashboardPage() {
       <main className="min-h-screen bg-slate-950 text-slate-100 pb-16">
         {/* Top Header */}
         <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
-          <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-            <div className="flex items-center gap-3">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-4 sm:px-6 lg:px-8">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <Link href="/" className="text-xl font-bold tracking-tight text-cyan-400 hover:text-cyan-300">
                 Perigee
               </Link>
@@ -247,22 +254,32 @@ export default function AnalyticsDashboardPage() {
               })}
             </div>
 
-            {/* Timeframe Pills */}
-            <div className="flex items-center gap-1.5 self-start sm:self-auto">
-              {(["24h", "7d", "30d", "all"] as const).map((tf) => (
-                <button
-                  key={tf}
-                  type="button"
-                  onClick={() => setTimeframe(tf)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                    timeframe === tf
-                      ? "bg-slate-800 text-white border border-slate-700"
-                      : "text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  {tf === "all" ? "All Time" : tf}
-                </button>
-              ))}
+            <div className="flex min-w-0 flex-col items-start gap-1.5 self-start sm:self-auto">
+              <div
+                role="group"
+                aria-label="Comparison date range"
+                className="flex flex-wrap items-center gap-1.5"
+              >
+                {DATE_RANGE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => setTimeframe(preset.id)}
+                    aria-pressed={timeframe === preset.id}
+                    data-testid={`range-${preset.id}`}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
+                      timeframe === preset.id
+                        ? "bg-slate-800 text-white border border-slate-700"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500" data-testid="range-label">
+                {rangeLabel}
+              </p>
             </div>
           </div>
 
