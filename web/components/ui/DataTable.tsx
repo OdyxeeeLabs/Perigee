@@ -181,7 +181,7 @@ function PaginationBar({
   const to = Math.min(page * pageSize, total);
 
   return (
-    <div className="flex items-center justify-between border-t border-[#30363d] px-4 py-2 text-xs text-[#8b949e]">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#30363d] px-4 py-2 text-xs text-[#8b949e]">
       <span>
         {total === 0 ? 'No results' : `${from}–${to} of ${total}`}
       </span>
@@ -192,7 +192,7 @@ function PaginationBar({
           onClick={() => onPageChange(1)}
           disabled={page === 1}
           aria-label="First page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           «
         </button>
@@ -201,7 +201,7 @@ function PaginationBar({
           onClick={() => onPageChange(page - 1)}
           disabled={page === 1}
           aria-label="Previous page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ‹
         </button>
@@ -215,7 +215,7 @@ function PaginationBar({
           onClick={() => onPageChange(page + 1)}
           disabled={page >= pageCount}
           aria-label="Next page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ›
         </button>
@@ -224,7 +224,7 @@ function PaginationBar({
           onClick={() => onPageChange(pageCount)}
           disabled={page >= pageCount}
           aria-label="Last page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           »
         </button>
@@ -251,6 +251,7 @@ export function DataTable<T>({
   'data-testid': dataTestId,
 }: DataTableProps<T>) {
   const filterId = useId();
+  const tableLabel = typeof title === 'string' ? title : 'Data';
 
   // ── Sort state ─────────────────────────────────────────────────────────────
   const firstSortable = columns.find((c) => c.sortable);
@@ -352,14 +353,23 @@ export function DataTable<T>({
       </div>
 
       {/* ── Table ──────────────────────────────────────────────────────────── */}
-      <div className="overflow-x-auto">
+      <p className="border-b border-[#30363d] px-4 py-1.5 text-[11px] text-[#8b949e] sm:hidden">
+        Swipe or scroll horizontally to see all columns.
+      </p>
+      <div
+        className="responsive-scroll-region"
+        role="region"
+        aria-label={`${tableLabel} table — scroll horizontally for all columns`}
+        tabIndex={0}
+        data-testid={dataTestId ? `${dataTestId}-scroll` : undefined}
+      >
         <table
-          className="min-w-full text-left text-sm"
+          className="min-w-[36rem] w-full text-left text-sm"
           data-testid={dataTestId ? `${dataTestId}-table` : undefined}
         >
           <thead className="bg-[#161b22] text-xs text-[#8b949e]">
             <tr>
-              {columns.map((col) => {
+              {columns.map((col, colIndex) => {
                 const key = String(col.key);
                 const isSorted = sortKey === key;
                 return (
@@ -370,6 +380,7 @@ export function DataTable<T>({
                       'px-4 py-3 font-medium',
                       alignClass(col.align),
                       col.sortable && 'cursor-pointer select-none',
+                      colIndex === 0 && 'sticky left-0 z-10 bg-[#161b22]',
                     )}
                     aria-sort={
                       isSorted
@@ -416,16 +427,18 @@ export function DataTable<T>({
                 return (
                   <tr
                     key={key}
-                    className="hover:bg-[#0f1621] transition-colors"
+                    className="group transition-colors hover:bg-[#0f1621]"
                     data-testid={dataTestId ? `${dataTestId}-row` : undefined}
                   >
-                    {columns.map((col) => (
+                    {columns.map((col, colIndex) => (
                       <td
                         key={String(col.key)}
                         className={cn(
                           'px-4 py-3 text-[#c9d1d9]',
                           alignClass(col.align),
                           col.className,
+                          colIndex === 0 &&
+                            'sticky left-0 z-10 bg-[#0d1117] group-hover:bg-[#0f1621]',
                         )}
                       >
                         {cellValue(row, col)}

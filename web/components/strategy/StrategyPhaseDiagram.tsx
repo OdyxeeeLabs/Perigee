@@ -12,8 +12,15 @@ export function StrategyPhaseDiagram() {
         Strategy Phases
       </h2>
 
-      <figure>
-        <Mermaid />
+      <figure className="min-w-0">
+        <div
+          className="responsive-scroll-region"
+          role="region"
+          aria-label="Strategy phase diagram — scroll horizontally for the full diagram"
+          tabIndex={0}
+        >
+          <Mermaid />
+        </div>
 
         <figcaption>
           Visual representation of the

@@ -171,7 +171,11 @@ export default function ManagerOnboarding() {
           </div>
         </header>
 
-        <section className="mx-auto max-w-2xl px-4 py-12 sm:px-6 lg:px-8">
+        <section
+          className="mx-auto max-w-2xl px-4 py-12 sm:px-6 lg:px-8"
+          data-testid="onboarding-step"
+          data-step={step}
+        >
           <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-8">
             <h2 className="mb-6 text-2xl font-semibold text-cyan-300">
               {step === "connect" && t("onboarding.stepConnect")}
@@ -201,10 +205,11 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-300">
+                  <label htmlFor="manager-name" className="mb-1 block text-sm font-medium text-slate-300">
                     {t("onboarding.fullName")}
                   </label>
                   <input
+                    id="manager-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder={t("onboarding.fullNamePlaceholder")}
@@ -213,10 +218,11 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-300">
+                  <label htmlFor="manager-email" className="mb-1 block text-sm font-medium text-slate-300">
                     {t("onboarding.email")}
                   </label>
                   <input
+                    id="manager-email"
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -225,10 +231,11 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-slate-300">
+                  <label htmlFor="manager-kyc-ref" className="mb-1 block text-sm font-medium text-slate-300">
                     {t("onboarding.kycRef")}
                   </label>
                   <input
+                    id="manager-kyc-ref"
                     value={kycRef}
                     onChange={(e) => setKycRef(e.target.value)}
                     placeholder={t("onboarding.kycRefPlaceholder")}
@@ -236,7 +243,10 @@ export default function ManagerOnboarding() {
                   />
                 </div>
                 {error && (
-                  <div className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-400">
+                  <div
+                    className="rounded-lg border border-red-800 bg-red-950/50 px-4 py-3 text-sm text-red-400"
+                    data-testid="onboarding-error"
+                  >
                     {error}
                   </div>
                 )}
@@ -251,8 +261,11 @@ export default function ManagerOnboarding() {
                 <div className="rounded-lg border border-yellow-800 bg-yellow-950/50 px-4 py-3 text-sm text-yellow-400">
                   {t("onboarding.submittedMessage")}
                 </div>
-                {managerRecord && (
-                  <div className="space-y-2 text-sm text-slate-400">
+                 {managerRecord && (
+                   <div
+                     className="space-y-2 text-sm text-slate-400"
+                     data-testid="onboarding-record"
+                   >
                     <p>
                       <span className="text-slate-300">{t("onboarding.id")}</span>{" "}
                       {managerRecord.id}

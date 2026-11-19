@@ -165,3 +165,170 @@ test.describe("Wallet error states", () => {
     }
   });
 });
+
+const FIXTURE_ADDRESS = "GTESTFIXTURE0000000000000000000000000000000000000000000000";
+
+interface RegistrationRequest {
+  stellar_address: string;
+  name: string;
+  email: string;
+  kyc_document_ref: string;
+}
+
+async function mockProvisioning(page: Page): Promise<RegistrationRequest[]> {
+  const requests: RegistrationRequest[] = [];
+
+  await page.addInitScript((address) => {
+    const fakeWallet = {
+      isConnected: () => true,
+      getAddress: async () => address,
+      getNetwork: async () => "Testnet SDF",
+      signTransaction: async () => ({}),
+    };
+    Object.defineProperty(window, "freighter", {
+      value: fakeWallet,
+      configurable: true,
+    });
+    Object.defineProperty(window, "freighterApi", {
+      value: fakeWallet,
+      configurable: true,
+    });
+    localStorage.setItem("perigee_wallet_address", address);
+    localStorage.setItem("perigee_wallet_id", "freighter");
+    sessionStorage.setItem("perigee_wallet_id", "freighter");
+    sessionStorage.removeItem("onboarding_draft");
+  }, FIXTURE_ADDRESS);
+
+  await page.route("**/api/**", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
+  );
+  await page.route("**/managers/status/**", (route) => {
+    if (route.request().method() === "OPTIONS") {
+      return route.fulfill({
+        status: 204,
+        headers: {
+          "access-control-allow-origin": "*",
+          "access-control-allow-headers": "accept,content-type,x-api-version",
+          "access-control-allow-methods": "GET, OPTIONS",
+        },
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "access-control-allow-origin": "*" },
+      body: JSON.stringify({ id: "", status: "none", message: "" }),
+    });
+  });
+  await page.route("**/managers/register", (route) => {
+    if (route.request().method() === "OPTIONS") {
+      return route.fulfill({
+        status: 204,
+        headers: {
+          "access-control-allow-origin": "*",
+          "access-control-allow-headers": "accept,content-type,x-api-version",
+          "access-control-allow-methods": "POST, OPTIONS",
+        },
+      });
+    }
+    const body = route.request().postDataJSON() as RegistrationRequest;
+    requests.push(body);
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "access-control-allow-origin": "*" },
+      body: JSON.stringify({
+        id: "mgr-provisioned-1",
+        stellar_address: FIXTURE_ADDRESS,
+        ...body,
+        status: "pending",
+        kyc_document_ref: body.kyc_document_ref,
+        notes: "",
+        created_at: "2026-01-15T10:30:00Z",
+        updated_at: "2026-01-15T10:30:00Z",
+      }),
+    });
+  });
+
+  return requests;
+}
+
+async function fillProvisioningForm(page: Page) {
+  await page.getByLabel(/full name/i).fill("Fixture Manager");
+  await page.getByLabel("Email", { exact: true }).fill("fixture@example.com");
+  await page.getByLabel(/kyc document reference/i).fill("KYC-FIXTURE-1");
+}
+
+async function openProvisioning(page: Page): Promise<RegistrationRequest[]> {
+  const requests = await mockProvisioning(page);
+  await page.goto("/managers/onboarding");
+  await expect(page.getByTestId("onboarding-step")).toHaveAttribute(
+    "data-step",
+    "register",
+  );
+  return requests;
+}
+
+test.describe("manager onboarding / vault provisioning", () => {
+  test("validation rejects a blank name before any request is sent", async ({ page }) => {
+    const requests = await openProvisioning(page);
+    await page.getByLabel(/full name/i).fill("   ");
+    await page.getByRole("button", { name: /submit registration/i }).click();
+
+    await expect(page.getByTestId("onboarding-error")).toContainText(
+      /name is required/i,
+    );
+    expect(requests).toHaveLength(0);
+  });
+
+  test("the review state shows every value that will be submitted", async ({ page }) => {
+    await openProvisioning(page);
+    await fillProvisioningForm(page);
+
+    await expect(page.getByLabel(/full name/i)).toHaveValue("Fixture Manager");
+    await expect(page.getByLabel("Email", { exact: true })).toHaveValue(
+      "fixture@example.com",
+    );
+    await expect(page.getByLabel(/kyc document reference/i)).toHaveValue(
+      "KYC-FIXTURE-1",
+    );
+    await expect(
+      page.getByRole("button", { name: /submit registration/i }),
+    ).toBeEnabled();
+  });
+
+  test("cancelling returns to the dashboard without provisioning", async ({ page }) => {
+    const requests = await openProvisioning(page);
+    await fillProvisioningForm(page);
+    await page.getByRole("button", { name: /back to analyzer/i }).click();
+
+    await expect(page).toHaveURL(/\/$/);
+    expect(requests).toHaveLength(0);
+  });
+
+  test("successful provisioning sends the request and shows the final state", async ({ page }) => {
+    const requests = await openProvisioning(page);
+    await fillProvisioningForm(page);
+    await page.getByRole("button", { name: /submit registration/i }).click();
+
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0]).toEqual({
+      stellar_address: FIXTURE_ADDRESS,
+      name: "Fixture Manager",
+      email: "fixture@example.com",
+      kyc_document_ref: "KYC-FIXTURE-1",
+    });
+
+    await expect(page.getByTestId("onboarding-step")).toHaveAttribute(
+      "data-step",
+      "submitted",
+    );
+    await expect(
+      page.getByRole("heading", { name: /registration submitted/i }),
+    ).toBeVisible();
+    await expect(page.getByTestId("onboarding-record")).toContainText(
+      "mgr-provisioned-1",
+    );
+    await expect(page.getByTestId("onboarding-record")).toContainText("pending");
+  });
+});
