@@ -49,6 +49,8 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
   cost_stroops,
   testnetAverages,
 }) => {
+  const id = React.useId();
+  const summaryId = `${id}-summary`;
   const avg = testnetAverages ?? DEFAULT_TESTNET_AVERAGES;
 
   const metrics: GasMetric[] = [
@@ -104,6 +106,18 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
     1,
   );
 
+  const summary =
+    `Gas usage compared with testnet averages for ${metrics.length} metrics: ` +
+    metrics
+      .map(
+        (m) =>
+          `${m.label} ${formatCompact(m.simulated)} ${m.unit}, testnet average ${formatCompact(m.average)} ${m.unit}`,
+      )
+      .join('; ') +
+    (cost_stroops !== undefined
+      ? `. Total simulated cost ${formatStroops(cost_stroops)}.`
+      : '.');
+
   return (
     <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-6 font-mono">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-2 border-b-2 border-[#30363d] pb-2">
@@ -116,7 +130,12 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
         <span className="text-xs text-[#8b949e]">Per Transaction</span>
       </div>
 
+      <p id={summaryId} className="sr-only" data-testid="gas-usage-chart-description">
+        {summary}
+      </p>
+
       {/* Legend */}
+      <div className="flex gap-6 mb-6 text-xs" aria-hidden="true">
       <div className="mb-4 flex flex-wrap gap-x-4 gap-y-1 text-xs">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#00d9ff' }} />
@@ -128,7 +147,12 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
         </div>
       </div>
 
-      <div className="space-y-5">
+      <div
+        className="space-y-5"
+        role="img"
+        aria-label="Gas usage compared with testnet averages"
+        aria-describedby={summaryId}
+      >
         {metrics.map((metric) => {
           const simulatedPct = (metric.simulated / maxValue) * 100;
           const averagePct = (metric.average / maxValue) * 100;
@@ -154,6 +178,7 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
               </div>
 
               {/* Simulated bar */}
+              <div aria-hidden="true" className="h-3 w-full bg-[#0d1117] rounded-sm overflow-hidden border border-[#30363d] mb-0.5">
               <div
                 role="img"
                 aria-label={`${metric.label} simulated: ${formatCompact(metric.simulated)} ${metric.unit}`}
@@ -170,6 +195,7 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
               </div>
 
               {/* Testnet average bar */}
+              <div aria-hidden="true" className="h-2 w-full bg-[#0d1117] rounded-sm overflow-hidden border border-[#30363d]">
               <div
                 role="img"
                 aria-label={`${metric.label} testnet average: ${formatCompact(metric.average)} ${metric.unit}`}
@@ -190,6 +216,34 @@ const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
           );
         })}
       </div>
+
+      <table className="sr-only" data-testid="gas-usage-chart-data">
+        <caption>Gas usage and testnet averages per transaction</caption>
+        <thead>
+          <tr>
+            <th scope="col">Metric</th>
+            <th scope="col">Simulated</th>
+            <th scope="col">Testnet average</th>
+            <th scope="col">Unit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {metrics.map((metric) => (
+            <tr key={metric.key}>
+              <th scope="row">{metric.label}</th>
+              <td>{formatCompact(metric.simulated)}</td>
+              <td>{formatCompact(metric.average)}</td>
+              <td>{metric.unit}</td>
+            </tr>
+          ))}
+          {cost_stroops !== undefined && (
+            <tr>
+              <th scope="row">Total simulated cost</th>
+              <td colSpan={3}>{formatStroops(cost_stroops)} ({formatCompact(cost_stroops)} stroops)</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
 
       {/* Cost Summary */}
       {cost_stroops !== undefined && (

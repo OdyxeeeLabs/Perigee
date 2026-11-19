@@ -56,6 +56,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     this.setState({ errorInfo });
     reportError(error, resolveContext(this.props));
     logger.error('Unhandled UI error:', error, errorInfo);
+    trackTelemetryError(error, { component: 'ErrorBoundary' });
 
     if (getTelemetryConsent() === true) {
       trackTelemetryError(error, {

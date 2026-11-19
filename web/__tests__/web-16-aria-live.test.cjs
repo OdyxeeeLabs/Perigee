@@ -53,16 +53,19 @@ test('analysis page announces loading and result outcomes (index.tsx)', () => {
   assert.match(src, /a11y\.resultReady/, 'completion is announced');
 });
 
-test('dynamic form announces the simulating state and assertive field errors', () => {
+test('dynamic form announces the simulating state and validation failures once', () => {
   const src = read('components/DynamicForm.tsx');
 
-  assert.match(src, /data-testid="dynamic-form-live-status"/);
-  assert.match(src, /role="status"/, 'form status region is a status');
-  assert.match(src, /aria-live="polite"/, 'form status is announced politely');
-  assert.match(src, /loading \? t\("dynamicForm\.simulating"\)/, 'simulating state is announced');
-
-  // Inline field validation keeps role=alert; make the interruption explicit.
-  assert.match(src, /role="alert"\s*\n\s*aria-live="assertive"/, 'field errors interrupt');
+  assert.match(src, /useAnnouncer/, 'announcements go through the shared provider');
+  assert.match(
+    src,
+    /announceStatus\(t\("dynamicForm\.simulating"\)/,
+    'simulating state is announced',
+  );
+  assert.match(src, /announceAlert\(/, 'validation failures interrupt');
+  assert.match(src, /aria-describedby=\{describedBy\(/, 'errors are associated with fields');
+  assert.doesNotMatch(src, /role="alert"/, 'no nested assertive regions');
+  assert.doesNotMatch(src, /aria-live=/, 'no nested live regions');
 });
 
 test('upload zone announces scanning, success and rejection states', () => {

@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { formatNumber } from "@/lib/locale/format";
 import type { VaultHistoryPoint } from "@/types/vault";
 
@@ -9,6 +10,12 @@ export interface HistoricalPerformanceChartProps {
   height?: number;
   className?: string;
 }
+
+const formatDate = (timestamp: string): string => {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+  return date.toISOString().slice(0, 10);
+};
 
 /**
  * Historical performance sparkline — issue #684.
@@ -27,6 +34,9 @@ export function HistoricalPerformanceChart({
   height = 120,
   className = "",
 }: HistoricalPerformanceChartProps) {
+  const id = useId();
+  const descriptionId = `${id}-description`;
+
   if (history.length === 0) {
     return (
       <div
@@ -61,14 +71,28 @@ export function HistoricalPerformanceChart({
   const first = values[0];
   const last = values[values.length - 1];
   const trendUp = last >= first;
+  const metricLabel = metric === "apy" ? "APY" : "TVL";
+  const startTime = formatDate(history[0].timestamp);
+  const endTime = formatDate(history[history.length - 1].timestamp);
+  const description =
+    `Historical ${metricLabel} from ${startTime} to ${endTime}: ` +
+    `${history.length} data points, trending ${trendUp ? "up" : "down"} ` +
+    `from ${first.toLocaleString()} to ${last.toLocaleString()}. ` +
+    `Lowest ${min.toLocaleString()}, highest ${max.toLocaleString()}.`;
 
   return (
+    <figure className={className} style={{ width }} data-testid="historical-performance-chart">
     <div className={`w-full ${className}`}>
       <svg
         viewBox={`0 0 ${width} ${height}`}
         width="100%"
         height={height}
         role="img"
+        aria-label={`Historical ${metricLabel} chart, ${history.length} data points, trending ${
+          trendUp ? "up" : "down"
+        } from ${first.toLocaleString()} to ${last.toLocaleString()}`}
+        aria-describedby={descriptionId}
+        data-testid="historical-performance-chart-svg"
         aria-label={`Historical ${metric === "apy" ? "APY" : "TVL"} chart, ${history.length} data points, trending ${
           trendUp ? "up" : "down"
         } from ${formatNumber(first)} to ${formatNumber(last)}`}
@@ -89,6 +113,29 @@ export function HistoricalPerformanceChart({
           fill={trendUp ? "#34d399" : "#f87171"}
         />
       </svg>
+      <figcaption id={descriptionId} className="sr-only" data-testid="historical-performance-chart-description">
+        {description}
+      </figcaption>
+      <table className="sr-only" data-testid="historical-performance-chart-data">
+        <caption>
+          Historical {metricLabel} values from {startTime} to {endTime}
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Date</th>
+            <th scope="col">{metricLabel}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {history.map((point, index) => (
+            <tr key={`${point.timestamp}-${index}`}>
+              <th scope="row">{formatDate(point.timestamp)}</th>
+              <td>{point[metric].toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </figure>
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-400">
         <span>First: <strong className="font-semibold text-slate-200">{formatNumber(first)}</strong></span>
         <span>Latest: <strong className="font-semibold text-slate-200">{formatNumber(last)}</strong></span>

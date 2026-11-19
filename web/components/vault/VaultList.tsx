@@ -1,8 +1,10 @@
-import { useRef, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { Vault } from "@/types/vault";
 
+import { useRovingTabIndex } from "@/hooks/useRovingTabIndex";
 import { useVirtualVaultList } from "@/hooks/useVirtualVaultList";
+import { nextRovingIndex, type RovingKey } from "@/lib/a11y/roving-tabindex";
 
 import { VaultRow } from "../VaultRow";
 
@@ -58,10 +60,36 @@ export function VaultList({
   onVaultClick,
 }: VaultListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const { containerRef, getItemProps, focusItem } = useRovingTabIndex(
+    vaults.length,
+    { orientation: "vertical", wrap: false },
+  );
 
   const { rowVirtualizer, containerHeight } = useVirtualVaultList(
     vaults.length,
     parentRef,
+  );
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const [pendingFocusIndex, setPendingFocusIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    setActiveIndex((current) => Math.min(current, Math.max(vaults.length - 1, 0)));
+  }, [vaults.length]);
+
+  useEffect(() => {
+    if (pendingFocusIndex === null) return;
+    if (!virtualItems.some((item) => item.index === pendingFocusIndex)) return;
+    focusItem(pendingFocusIndex);
+    setPendingFocusIndex(null);
+  }, [focusItem, pendingFocusIndex, virtualItems]);
+
+  const setScrollRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      parentRef.current = node;
+      containerRef.current = node;
+    },
+    [containerRef],
   );
 
   /**
@@ -74,6 +102,15 @@ export function VaultList({
       if (node) {
         rowVirtualizer.measureElement(node);
       }
+    },
+    [rowVirtualizer],
+  );
+
+  const moveFocus = useCallback(
+    (index: number) => {
+      setActiveIndex(index);
+      setPendingFocusIndex(index);
+      rowVirtualizer.scrollToIndex(index);
     },
     [rowVirtualizer],
   );
@@ -92,7 +129,7 @@ export function VaultList({
 
       {/* Scrollable virtualised container */}
       <div
-        ref={parentRef}
+        ref={setScrollRef}
         style={{
           height: containerHeight,
           overflow: "auto",
@@ -107,14 +144,37 @@ export function VaultList({
             position: "relative",
           }}
         >
-          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+          {virtualItems.map((virtualRow) => {
             const vault = vaults[virtualRow.index];
+            const index = virtualRow.index;
+            const roving = getItemProps(index);
+
+            const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+              if (
+                event.key === "ArrowDown" ||
+                event.key === "ArrowUp" ||
+                event.key === "Home" ||
+                event.key === "End"
+              ) {
+                event.preventDefault();
+                const next = nextRovingIndex(
+                  event.key as RovingKey,
+                  index,
+                  vaults.length,
+                  "vertical",
+                  { wrap: false },
+                );
+                moveFocus(next);
+                return;
+              }
+              roving.onKeyDown(event);
+            };
 
             return (
               <div
                 key={vault.id}
                 ref={measureRef}
-                data-index={virtualRow.index}
+                data-index={index}
                 style={{
                   position: "absolute",
                   left: 0,
@@ -124,8 +184,17 @@ export function VaultList({
                 }}
                 role="listitem"
               >
-                {/* onVaultClick (#684) opens the vault detail modal/drawer. */}
-                <VaultRow vault={vault} onClick={onVaultClick} />
+                <VaultRow
+                  vault={vault}
+                  onClick={onVaultClick}
+                  rowRef={roving.ref}
+                  tabIndex={activeIndex === index ? 0 : -1}
+                  onKeyDown={handleKeyDown}
+                  onFocus={() => {
+                    roving.onFocus();
+                    setActiveIndex(index);
+                  }}
+                />
               </div>
             );
           })}
