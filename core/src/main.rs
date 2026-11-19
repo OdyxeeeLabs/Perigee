@@ -69,6 +69,7 @@ mod timestamps;
 mod transaction_outcome;
 mod two_phase_commit;
 pub mod vault_store;
+mod manager_quota;
 mod manager_store;
 mod wasm_analysis_job;
 mod wasm_branch_analysis;
@@ -3459,6 +3460,9 @@ async fn main() {
         )
     };
 
+    // API-37: per-manager quotas; defaults from PERIGEE_QUOTA_DEFAULT_*.
+    let manager_quotas = Arc::new(manager_quota::ManagerQuotaRegistry::from_env());
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
@@ -3534,8 +3538,23 @@ async fn main() {
             "/admin/overview",
             get(admin_overview::admin_overview_handler),
         )
+        // Administrator-controlled per-manager quotas (API-37)
+        .route(
+            "/admin/quotas/:manager",
+            get(manager_quota::get_manager_quotas_handler)
+                .put(manager_quota::set_manager_quota_handler),
+        )
+        .route(
+            "/admin/quotas/:manager/:class",
+            axum::routing::delete(manager_quota::clear_manager_quota_handler),
+        )
+        // Runs inside auth so the authenticated manager is known.
+        .route_layer(axum::middleware::from_fn(
+            manager_quota::manager_quota_middleware,
+        ))
         .route_layer(axum::middleware::from_fn(auth::auth_middleware))
-        .layer(Extension(admin_overview));
+        .layer(Extension(admin_overview))
+        .layer(Extension(manager_quotas));
 
     let public_rate_limit_config = RateLimitConfig::from_env();
     tracing::info!(

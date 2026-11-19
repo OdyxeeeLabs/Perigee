@@ -78,6 +78,7 @@ pub mod rounding;
 pub mod agent_identity;
 pub mod agent_health;
 pub mod failover;
+pub mod manager_quota;
 pub mod rate_limiter;
 pub mod validation;
 pub mod fee_validation;
