@@ -1,6 +1,8 @@
 "use client";
 
 import { useVaultDetail } from "@/hooks/useVaultDetail";
+import { useTransactionNetwork } from "@/hooks/useTransactionNetwork";
+import { TransactionNetworkNotice } from "@/components/TransactionNetworkNotice";
 import { VaultDetailContent } from "./VaultDetailContent";
 import { VaultDetailSkeleton } from "./VaultDetailSkeleton";
 import { useToast } from "@/context/ToastContext";
@@ -17,6 +19,7 @@ import type { VaultDetail } from "@/types/vault";
 export function VaultDetailPageClient({ id }: { id: string }) {
   const detail = useVaultDetail(id);
   const toast = useToast();
+  const network = useTransactionNetwork();
 
   const handleAction = (action: "deposit" | "withdraw" | "manage") => (vault: VaultDetail) => {
     toast.info({
@@ -27,6 +30,7 @@ export function VaultDetailPageClient({ id }: { id: string }) {
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8 text-slate-100">
+      <TransactionNetworkNotice network={network} />
       {detail.status === "loading" && (
         <>
           <div className="mb-6 h-7 w-48 animate-pulse rounded bg-slate-800" />
@@ -51,6 +55,8 @@ export function VaultDetailPageClient({ id }: { id: string }) {
             onDeposit={handleAction("deposit")}
             onWithdraw={handleAction("withdraw")}
             onManage={handleAction("manage")}
+            transactionsEnabled={network.canTransact}
+            disabledReason={network.disabledReason}
           />
         </>
       )}

@@ -19,6 +19,20 @@ export interface FocusableLike {
 }
 
 /**
+ * Move focus to a recovery panel once it mounts. Structural type keeps this
+ * DOM-free (and therefore testable); `preventScroll` avoids yanking a
+ * screen-reader user around the page when a boundary activates mid-scroll.
+ */
+export interface RecoveryFocusTarget {
+  focus(options?: { preventScroll?: boolean }): void;
+}
+
+export function focusRecovery(target: RecoveryFocusTarget | null | undefined): void {
+  if (!target || typeof target.focus !== "function") return;
+  target.focus({ preventScroll: true });
+}
+
+/**
  * Selectors that can receive focus. `contenteditable` and `summary` are the
  * two that are routinely forgotten; `[tabindex]` is last so an author can
  * always override.
