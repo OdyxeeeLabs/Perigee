@@ -558,9 +558,7 @@ fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
             None,
             Some("Admin privileges required to perform this action"),
         );
-        Err(AppError::Unauthorized(
-            "Admin privileges required to perform this action".into(),
-        ))
+        crate::role_guard::require(user, crate::role_guard::Permission::ProtocolAdmin)
     }
 }
 
