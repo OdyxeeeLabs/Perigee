@@ -62,6 +62,7 @@ pub mod webhook_keys;
 pub mod outbox_health;
 pub mod rate_limit_failure_policy;
 pub mod graphql_registry;
+pub mod vault_bulk_metadata;
 pub mod vault_validation;
 pub mod namespaced_errors;
 pub mod policy_expiry;
