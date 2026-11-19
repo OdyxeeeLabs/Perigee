@@ -7,6 +7,7 @@ mod admin_overview;
 mod agent_fleet;
 mod api_keys;
 mod agent_health;
+mod agent_health_summary;
 mod agent_identity;
 mod audit_log;
 mod auth;
@@ -3490,6 +3491,16 @@ async fn main() {
         },
     );
 
+    // API-28: manager-facing agent health, attested by the fleet's health and
+    // identity services.
+    let agent_health_summary = {
+        let fleet = Arc::clone(&agent_fleet);
+        Arc::new(
+            agent_health_summary::AgentHealthRegistry::default()
+                .with_attestation(move |agent_id| Some(fleet.is_healthy(agent_id))),
+        )
+    };
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
@@ -3593,6 +3604,15 @@ async fn main() {
             "/vaults/bulk-metadata",
             post(vault_bulk_metadata::bulk_update_vault_metadata_handler),
         )
+        // Tenant-scoped agent health summaries (API-28)
+        .route(
+            "/vaults/:id/agent-health",
+            get(agent_health_summary::vault_agent_health_handler),
+        )
+        .route(
+            "/agents/health",
+            get(agent_health_summary::manager_agent_health_handler),
+        )
         // Runs inside auth so the authenticated manager is known.
         .route_layer(axum::middleware::from_fn(
             manager_quota::manager_quota_middleware,
@@ -3601,7 +3621,8 @@ async fn main() {
         .layer(Extension(admin_overview))
         .layer(Extension(manager_quotas))
         .layer(Extension(Arc::clone(&api_key_store)))
-        .layer(Extension(vault_bulk_metadata));
+        .layer(Extension(vault_bulk_metadata))
+        .layer(Extension(agent_health_summary));
 
     // Routes authenticated with `X-API-Key` instead of a wallet session (API-38).
     let integration_routes = Router::new()

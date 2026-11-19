@@ -84,6 +84,7 @@ pub mod note_privacy;
 pub mod rounding;
 pub mod agent_identity;
 pub mod agent_health;
+pub mod agent_health_summary;
 pub mod failover;
 pub mod manager_quota;
 pub mod rate_limiter;
