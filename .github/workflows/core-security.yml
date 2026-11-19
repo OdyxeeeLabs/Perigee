@@ -1,0 +1,60 @@
+name: Core security
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "core/**"
+      - "contracts/**"
+      - "scripts/core_security_lint.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/core-security.yml"
+  pull_request:
+    paths:
+      - "core/**"
+      - "contracts/**"
+      - "scripts/core_security_lint.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/core-security.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  custom-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/core_security_lint.py
+
+  clippy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: core-security
+      - run: cargo clippy --locked -p Perigee-core --all-targets -- -D warnings
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit --file Cargo.lock

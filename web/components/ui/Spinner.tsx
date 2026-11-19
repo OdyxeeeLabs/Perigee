@@ -44,9 +44,9 @@ const sizeClasses: Record<SpinnerSize, string> = {
 
 const colorClasses: Record<SpinnerColor, string> = {
   primary: "border-[#33C5E0]/20 border-t-[#33C5E0]",
-  white:   "border-white/20   border-t-white",
-  muted:   "border-slate-600  border-t-slate-300",
-  danger:  "border-rose-800   border-t-rose-400",
+  white: "border-white/20   border-t-white",
+  muted: "border-slate-600  border-t-slate-300",
+  danger: "border-rose-800   border-t-rose-400",
   success: "border-emerald-800 border-t-emerald-400",
 };
 
@@ -75,11 +75,25 @@ const labelSizeClasses: Record<SpinnerSize, string> = {
  *
  * // Accessible (announces to screen readers)
  * <Spinner size="md" label="Loading vault data…" />
+ * *   // Custom color with label below the ring
+ *   <Spinner size="lg" color="white" label="Connecting…" />
  *
- * // Custom color with label below the ring
- * <Spinner size="lg" color="white" label="Connecting…" />
+ * @accessibility
+ * - Without `label` the ring is `aria-hidden="true"`, which is correct inside a
+ *   button that already has a name ("Saving…").
+ * - With `label` the ring becomes `role="status"`, which announces politely;
+ *   for failures that must interrupt, use `LiveAlert` instead.
+ * - Under `prefers-reduced-motion: reduce` the global stylesheet keeps the
+ *   ring turning at 3s rather than stopping it: a stopped ring is
+ *   indistinguishable from a broken UI. The rule is therefore not "disable
+ *   the spinner" but "never let the spinner be the only signal" — always pass
+ *   `label`, or pair it with adjacent text. See
+ *   `docs/accessibility/reduced-motion.md` and `lib/a11y/motion.ts`
+ *   (`loaderCue`), which encodes the same contract.
+ *
+ * @since 0.1.0
  */
-export function Spinner({
+export const Spinner = React.memo(function Spinner({
   size = "md",
   color = "primary",
   label,
@@ -116,4 +130,4 @@ export function Spinner({
       </span>
     </span>
   );
-}
+});

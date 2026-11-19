@@ -71,6 +71,7 @@
 
 ### 4. API Reference
 
+- **[ERROR_VARIANTS.md](ERROR_VARIANTS.md)** - Stable error codes and HTTP conversion guide
 - **[contracts/emergency_guard/README.md](contracts/emergency_guard/README.md)** - Complete API docs
   - All trait methods documented
   - PauseType explanation

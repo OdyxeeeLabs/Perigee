@@ -3,6 +3,8 @@ use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Str
 
 use emergency_guard::{DefaultEmergencyGuard, GuardError, PauseType};
 
+pub mod snapshot;
+
 impl From<GuardError> for ContractError {
     fn from(_: GuardError) -> Self {
         ContractError::Paused
@@ -802,6 +804,45 @@ impl StakingRewards {
         };
 
         Ok(bounded)
+    }
+
+    /// Create a snapshot of staking state for reward calculation
+    /// This prevents manipulation by recording balances at a specific point in time
+    pub fn create_staking_snapshot(
+        e: Env,
+        user: Address,
+    ) -> Result<snapshot::StakingSnapshot, ContractError> {
+        let snapshot_id = snapshot::get_next_snapshot_id(&e);
+        let staked = Self::get_staked_balance(e.clone(), user.clone());
+        let rewards = Self::get_accrued_rewards(e.clone(), user.clone());
+        
+        let snapshot = snapshot::create_staking_snapshot(&e, user, snapshot_id, staked, rewards);
+        Ok(snapshot)
+    }
+
+    /// Get staking balance from a snapshot
+    pub fn get_snapshot_staking_balance(
+        e: Env,
+        user: Address,
+        snapshot_id: u64,
+    ) -> Option<snapshot::StakingSnapshot> {
+        snapshot::read_snapshot_staking_balance(&e, user, snapshot_id)
+    }
+
+    /// Create snapshots for a reward epoch
+    /// This should be called at the start of each reward period
+    pub fn create_epoch_snapshot(
+        e: Env,
+        epoch_id: u64,
+        addresses: Vec<Address>,
+    ) -> Result<u64, ContractError> {
+        let config = Self::get_config(e.clone())?;
+        config.owner.require_auth();
+        
+        let addr_slice: Vec<Address> = addresses;
+        let addr_refs: Vec<Address> = addr_slice.iter().collect();
+        
+        snapshot::create_reward_epoch_snapshot(&e, epoch_id, &addr_refs)
     }
 
     /// Convenience wrapper for governance to update the weighting profile at the

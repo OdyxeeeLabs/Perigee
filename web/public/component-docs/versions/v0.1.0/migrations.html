@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Migration guide · Perigee Web Component Library</title>
+<meta name="description" content="Breaking changes to the component library and how to migrate." />
+<meta name="generator" content="scripts/docs/generate.mjs" />
+<link rel="stylesheet" href="../../assets/docs.css" />
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+<p class="site-title"><a href="../../index.html">Perigee Web Component Library</a></p>
+<p class="meta">Component library docs · generated from source</p>
+<div class="grow"></div>
+<div class="control">
+<label for="version-select">Version</label>
+<select id="version-select" data-navigate><option value="../../index.html" selected>v0.1.0 (current)</option></select>
+</div>
+<div class="control">
+<label for="docs-search">Search docs</label>
+<input id="docs-search" type="search" autocomplete="off" placeholder="Button, accessibility…" aria-describedby="search-status" />
+</div>
+</header>
+<div class="layout">
+<nav class="site-nav" aria-label="Component library">
+<h2>Overview</h2>
+<ul>
+<li><a href="../../index.html">All components</a></li>
+<li><a href="../../migrations.html" aria-current="page">Migration guide</a></li>
+<li><a href="../../versions.html">Versions</a></li>
+</ul>
+<h2>Actions</h2><ul><li><a href="../../button.html">Button</a></li></ul><h2>Data display</h2><ul><li><a href="../../badge.html">Badge</a></li><li><a href="../../data-table.html">DataTable</a></li></ul><h2>Feedback</h2><ul><li><a href="../../spinner.html">Spinner</a></li></ul><h2>Layout</h2><ul><li><a href="../../card.html">Card</a></li></ul><h2>Accessibility</h2><ul><li><a href="../../live-region.html">Live regions</a></li></ul><h2>Legacy</h2><ul><li><a href="../../common-button.html">CommonButton</a></li></ul>
+</nav>
+<main id="content" tabindex="-1">
+<div id="search-results" hidden data-base="">
+<strong>Search results</strong>
+<p id="search-status" role="status" aria-live="polite"></p>
+<ul id="search-results-list"></ul>
+</div>
+<nav class="toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#releases">Releases</a></li><li><a href="#v0-1-0">v0.1.0</a></li><li><a href="#button-replaced-common-button">Button replaced CommonButton</a></li><li><a href="#v0-0-1">v0.0.1</a></li><li><a href="#ad-hoc-status-pills-replaced-by-badge">Ad-hoc status pills replaced by Badge</a></li><li><a href="#handling-a-deprecation">Handling a deprecation</a></li></ul></nav>
+<h1 id="migration-guide">Migration guide</h1>
+<p>Breaking changes to the component library are recorded here — in <code>scripts/docs/breaking-changes.json</code> — with the before/after props, generated straight from source, and a copy-pasteable migration for each affected call site. Every entry links back to the release it shipped in.</p>
+<h2 id="releases">Releases</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col">Version</th><th scope="col">Date</th><th scope="col">Summary</th></tr></thead><tbody><tr><td><a href="#release-0-1-0">v0.1.0</a></td><td>2026-10-15</td><td>First published cut of the shared component library: the <code>ui/</code> primitives became the documented public surface.</td></tr><tr><td><a href="#release-0-0-1">v0.0.1</a></td><td>2026-07-02</td><td>Pre-library baseline: status indicators were styled per screen and shared no API.</td></tr></tbody></table></div>
+<h2 id="v0-1-0">v0.1.0</h2>
+<a id="release-0-1-0"></a>
+<p>First published cut of the shared component library: the <code>ui/</code> primitives became the documented public surface.</p>
+<h3 id="button-replaced-common-button">Button replaced CommonButton</h3>
+<p><strong>Severity:</strong> breaking · <strong>Affected component:</strong> <a href="../../button.html">button</a></p>
+<p><code>components/common/Button</code> is superseded by <code>components/ui/Button</code>. <code>variant=&quot;primary&quot;</code> became <code>variant=&quot;default&quot;</code>, the <code>loading</code> prop folded into the native <code>disabled</code> attribute, and a <code>size</code> prop was added.</p>
+<h4 id="before-common-button">Before — CommonButton</h4>
+<p><em>Removed or changed in the new API — <code>CommonButton</code> from <code>components/common/Button/Button.tsx</code></em></p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Prop</th><th scope="col">Type</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">Description</th></tr></thead><tbody><tr><td><code>variant</code></td><td><code>&quot;primary&quot; | &quot;secondary&quot; | &quot;outline&quot;</code></td><td><code>&quot;primary&quot;</code></td><td>No</td><td>—</td></tr><tr><td><code>loading</code></td><td><code>boolean</code></td><td><code>false</code></td><td>No</td><td>—</td></tr><tr><td><code>…rest</code></td><td><code>React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt;</code></td><td>—</td><td>—</td><td>Spread onto the underlying &lt;button&gt;. Any native attribute not listed above is forwarded verbatim.</td></tr></tbody></table></div>
+<h4 id="after-button">After — Button</h4>
+<p><em>Current API — <code>Button</code> from <code>components/ui/Button.tsx</code></em></p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Prop</th><th scope="col">Type</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">Description</th></tr></thead><tbody><tr><td><code>variant</code></td><td><code>&quot;default&quot; | &quot;destructive&quot; | &quot;outline&quot; | &quot;secondary&quot; | &quot;ghost&quot; | &quot;link&quot;</code></td><td><code>&quot;default&quot;</code></td><td>No</td><td>Visual treatment. <code>&quot;default&quot;</code> is the cyan brand action; <code>&quot;destructive&quot;</code> is reserved for irreversible actions; <code>&quot;link&quot;</code> renders text-only styling.</td></tr><tr><td><code>size</code></td><td><code>&quot;default&quot; | &quot;sm&quot; | &quot;lg&quot; | &quot;icon&quot;</code></td><td><code>&quot;default&quot;</code></td><td>No</td><td>Control height and padding. <code>&quot;icon&quot;</code> is a square control for a single glyph.</td></tr><tr><td><code>asChild</code></td><td><code>boolean</code></td><td><code>false</code></td><td>No</td><td>Accepted for Radix-style API parity but <strong>not implemented</strong> yet: the component always renders a <code>&lt;button&gt;</code>. Kept optional so callers migrating from shadcn-based snippets do not fail type checking.</td></tr><tr><td><code>…rest</code></td><td><code>React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt;</code></td><td>—</td><td>—</td><td>Spread onto the underlying &lt;button&gt;. Any native attribute not listed above is forwarded verbatim.</td></tr></tbody></table></div>
+<h4 id="call-site-migration">Call-site migration</h4>
+<p>Before:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;CommonButton&gt;Save&lt;/CommonButton&gt;</code></pre>
+<p>After:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;Button&gt;Save&lt;/Button&gt;</code></pre>
+<p>Before:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;CommonButton variant=&quot;primary&quot;&gt;Save&lt;/CommonButton&gt;</code></pre>
+<p>After:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;Button variant=&quot;default&quot;&gt;Save&lt;/Button&gt;</code></pre>
+<p>Before:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;CommonButton variant=&quot;secondary&quot;&gt;Cancel&lt;/CommonButton&gt;</code></pre>
+<p>After:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;Button variant=&quot;secondary&quot;&gt;Cancel&lt;/Button&gt;</code></pre>
+<p>Before:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;CommonButton variant=&quot;outline&quot;&gt;Back&lt;/CommonButton&gt;</code></pre>
+<p>After:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;Button variant=&quot;outline&quot;&gt;Back&lt;/Button&gt;</code></pre>
+<p>Before:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;CommonButton loading&gt;Saving…&lt;/CommonButton&gt;</code></pre>
+<p>After:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;Button disabled aria-busy&gt;Saving…&lt;/Button&gt;</code></pre>
+<h4 id="notes">Notes</h4>
+<ul><li><code>CommonButton</code> set <code>disabled</code> whenever <code>loading</code> was true, so the disabled mapping preserves behaviour exactly.</li><li><code>size</code>, <code>ghost</code>, <code>link</code>, and <code>destructive</code> variants exist only on <code>Button</code>.</li><li>Update the import path as well as the JSX: <code>components/common/Button/Button</code> → <code>components/ui/Button</code>.</li></ul>
+<h4 id="codemod">Codemod</h4>
+<pre tabindex="0"><code class="language-bash">sed -i &quot;s#components/common/Button/Button#components/ui/Button#g; s#\bCommonButton\b#Button#g&quot; $(git ls-files &#39;*.tsx&#39; &#39;*.ts&#39;)</code></pre>
+<h2 id="v0-0-1">v0.0.1</h2>
+<a id="release-0-0-1"></a>
+<p>Pre-library baseline: status indicators were styled per screen and shared no API.</p>
+<h3 id="ad-hoc-status-pills-replaced-by-badge">Ad-hoc status pills replaced by Badge</h3>
+<p><strong>Severity:</strong> breaking · <strong>Affected component:</strong> <a href="../../badge.html">badge</a></p>
+<p>Per-screen pill markup was consolidated into <code>Badge</code>, which owns the colour variants and the audited contrast pairings. The previous <code>badge--green</code> / <code>badge--red</code> classes were removed.</p>
+<h4 id="after-badge">After — Badge</h4>
+<p><em>Current API — <code>Badge</code> from <code>components/ui/Badge.tsx</code></em></p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Prop</th><th scope="col">Type</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">Description</th></tr></thead><tbody><tr><td><code>variant</code></td><td><code>BadgeVariant</code></td><td><code>&quot;default&quot;</code></td><td>No</td><td>Semantic colour pairing. Every variant is contrast-audited (see below).</td></tr><tr><td><code>children (required)</code></td><td><code>React.ReactNode</code></td><td>—</td><td>Yes</td><td>Short label text — keep it to one or two words so the pill stays compact.</td></tr><tr><td><code>className</code></td><td><code>string</code></td><td>—</td><td>No</td><td>Extra Tailwind classes merged after the variant classes.</td></tr></tbody></table></div>
+<h4 id="call-site-migration-2">Call-site migration</h4>
+<p>Before:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;span className=&quot;badge--green&quot;&gt;Passed&lt;/span&gt;</code></pre>
+<p>After:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;Badge variant=&quot;success&quot;&gt;Passed&lt;/Badge&gt;</code></pre>
+<p>Before:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;span className=&quot;badge--red&quot;&gt;Over budget&lt;/span&gt;</code></pre>
+<p>After:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;Badge variant=&quot;danger&quot;&gt;Over budget&lt;/Badge&gt;</code></pre>
+<p>Before:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;span className=&quot;badge--amber&quot;&gt;Pending&lt;/span&gt;</code></pre>
+<p>After:</p>
+<pre tabindex="0"><code class="language-tsx">&lt;Badge variant=&quot;warning&quot;&gt;Pending&lt;/Badge&gt;</code></pre>
+<h4 id="notes-2">Notes</h4>
+<ul><li><code>Badge</code> has no <code>size</code> prop — density is inherited from the surrounding text.</li><li>Colour is never the only signal: keep a text label inside the pill (WEB-38 / #492).</li></ul>
+<h2 id="handling-a-deprecation">Handling a deprecation</h2>
+<p><code>@deprecated</code> in JSDoc automatically raises a banner on the component page and links the replacement. Use it together with an entry in <code>scripts/docs/breaking-changes.json</code> so consumers get a mechanical migration, not just a warning.</p>
+<hr />
+<p><a href="../../index.html">← All components</a> · <a href="../../versions.html">Versions</a></p>
+<p class="page-footer">Generated from v0.1.0 by <code>npm run docs:build</code>. Edit the component source or <code>scripts/docs/registry.mjs</code>, never this file.</p>
+</main>
+</div>
+<script src="../../assets/docs.js" defer></script>
+</body>
+</html>

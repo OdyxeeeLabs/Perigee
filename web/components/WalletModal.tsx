@@ -7,9 +7,11 @@ import { Wallet, Check, AlertCircle } from "lucide-react";
 import React from "react";
 import UserIcon from "./userIcon";
 import { logger } from "../lib/logger";
-import { trackTelemetryEvent } from "../lib/telemetry";
+import { trackTelemetryEvent, trackFunnelEvent } from "../lib/telemetry";
 import { useTranslations } from "next-intl";
 import { Spinner } from "./ui/Spinner";
+import { blurDataUri } from "../lib/imagePlaceholder";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 export function WalletModal() {
   const t = useTranslations("walletModal");
@@ -20,14 +22,27 @@ export function WalletModal() {
   const isConnecting = useWalletStore((s) => s.isConnecting);
   const error = useWalletStore((s) => s.error);
   const shouldReduceMotion = useReducedMotion();
+  const titleId = React.useId();
+  const { ref: modalRef } = useFocusTrap<HTMLDivElement>({
+    active: isModalOpen,
+    onEscape: closeModal,
+    initialFocus: "container",
+  });
 
   const [activeSelection, setActiveSelection] = React.useState<string | null>(
     null,
   );
+  const { ref: dialogRef } = useFocusTrap<HTMLDivElement>({
+    active: isModalOpen,
+    onEscape: closeModal,
+  });
 
-  // Reset selection when modal opens
+  // Reset selection and track funnel initiated when modal opens
   React.useEffect(() => {
-    if (isModalOpen) setActiveSelection(null);
+    if (isModalOpen) {
+      setActiveSelection(null);
+      trackFunnelEvent("wallet_connect_initiated");
+    }
   }, [isModalOpen]);
 
   const handleConnectClick = async () => {
@@ -41,6 +56,10 @@ export function WalletModal() {
       } catch (err) {
         // Error is handled in context
         logger.error("Connection error:", err);
+        trackFunnelEvent("wallet_error", {
+          wallet_id: activeSelection,
+          error_type: "connection_failed",
+        });
       }
     }
   };
@@ -52,9 +71,15 @@ export function WalletModal() {
           {/* Backdrop */}
           <div
             className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+            aria-hidden="true"
             onClick={closeModal}
           />
           <motion.div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wallet-modal-title"
+            aria-describedby="wallet-modal-description"
             initial={
               shouldReduceMotion
                 ? { opacity: 1, scale: 1 }
@@ -77,19 +102,42 @@ export function WalletModal() {
             className="fixed inset-0 z-50 flex items-center justify-center p-4"
           >
             {/* Modal card — centred, responsive width */}
-            <div className="w-96 max-w-[calc(100vw-2rem)] rounded-2xl bg-[#161E22] border border-[#2A3338] p-8 shadow-2xl">
+            <div
+              ref={modalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
+              className="w-96 max-w-[calc(100vw-2rem)] rounded-2xl bg-[#161E22] border border-[#2A3338] p-8 shadow-2xl"
+            >
               <div className="flex flex-col items-center">
                 <div className="text-center mb-6">
-                  <h2 className="text-2xl font-medium text-white">
+                  <h2 id="wallet-modal-title" className="text-2xl font-medium text-white">
+                  <h2 id={titleId} className="text-2xl font-medium text-white">
                     {t("title")}
                   </h2>
-                  <p className="mt-2 text-[#92A5A8] text-sm">
+                  <p id="wallet-modal-description" className="mt-2 text-[#92A5A8] text-sm">
                     {t("description")}
                   </p>
                 </div>
 
+                {/* WEB-16 (#470): announce the connecting state, which is
+                    otherwise only visible as a spinner on the selected row. */}
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  data-testid="wallet-modal-live-status"
+                  className="sr-only"
+                >
+                  {isConnecting ? t("connecting") : ""}
+                </div>
+
                 {error && (
-                  <div className="w-full mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-2">
+                  <div
+                    role="alert"
+                    aria-live="assertive"
+                    className="w-full mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-2"
+                  >
                     <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
                     <span className="text-red-400 text-sm">{error}</span>
                   </div>
@@ -132,6 +180,9 @@ export function WalletModal() {
                             alt={wallet.name}
                             width={20}
                             height={20}
+                            sizes="20px"
+                            placeholder="blur"
+                            blurDataURL={blurDataUri(20, 20)}
                             className="object-contain"
                           />
                         </div>
@@ -145,6 +196,7 @@ export function WalletModal() {
                 </div>
 
                 <button
+                  type="button"
                   onClick={handleConnectClick}
                   disabled={!activeSelection || isConnecting}
                   className={`w-full py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
@@ -153,35 +205,19 @@ export function WalletModal() {
                       : "bg-[#2A3338] cursor-not-allowed text-gray-500"
                   } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-[#33C5E0]`}
                 >
-                  <UserIcon />
-                  <span>
-                    {isConnecting ? t("connecting") : t("connectButton")}
-                  </span>
+                  {isConnecting ? (
+                    <>
+                      <Spinner size="sm" color="white" />
+                      <span>{t("connecting")}</span>
+                    </>
+                  ) : (
+                    <>
+                      <UserIcon />
+                      <span>{t("connectButton")}</span>
+                    </>
+                  )}
                 </button>
               </div>
-
-              <button
-                onClick={handleConnectClick}
-                disabled={!activeSelection || isConnecting}
-                className={`w-full py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 ${
-                  activeSelection && !isConnecting
-                    ? "bg-[#33C5E0] hover:bg-[#33C5E0]/90 text-black"
-                    : "bg-[#2A3338] cursor-not-allowed text-gray-500"
-                }`}
-              >
-                {isConnecting ? (
-                  <>
-                    <Spinner size="sm" color="white" />
-                    <span>{t("connecting")}</span>
-                  </>
-                ) : (
-                  <>
-                    <UserIcon />
-                    <span>{t("connectButton")}</span>
-                  </>
-                )}
-              </button>
-            </div>
             </div>
           </motion.div>
         </>

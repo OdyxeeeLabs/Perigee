@@ -18,7 +18,7 @@ interface NutritionLabelProps {
     transaction_size_bytes: number;
 }
 
-export const NutritionLabel: React.FC<NutritionLabelProps> = ({
+const NutritionLabelImpl: React.FC<NutritionLabelProps> = ({
     cpu_instructions,
     ram_bytes,
     ledger_read_bytes,
@@ -144,3 +144,6 @@ export const NutritionLabel: React.FC<NutritionLabelProps> = ({
         </div>
     );
 };
+
+/** Memoised (#692): pure presentational component, re-renders only when props change. */
+export const NutritionLabel = React.memo(NutritionLabelImpl);

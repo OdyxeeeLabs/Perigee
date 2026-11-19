@@ -1,0 +1,94 @@
+# Scanning policy for the Perigee security pipeline.
+#
+# Consumed by .github/workflows/security-scan.yml and documented in
+# docs/VULNERABILITY_SCANNING.md. Severity names are the OSSASF/GitHub
+# vocabulary; `fail_on` is the list that actually gates the build.
+version: 1
+
+# Findings at or above these severities fail the build.
+fail_on:
+  - critical
+  - high
+
+# Remediation service-level agreements. `due_days` is measured from the day the
+# finding is first reported, not from triage, so a stale finding cannot be
+# quietly rescheduled.
+sla:
+  critical:
+    due_days: 1
+    escalation: page-oncall
+    blocks_release: true
+  high:
+    due_days: 7
+    escalation: create-ticket
+    blocks_release: true
+  medium:
+    due_days: 30
+    escalation: backlog
+    blocks_release: false
+  low:
+    due_days: 90
+    escalation: backlog
+    blocks_release: false
+
+# Scanners, by category. Each entry is enabled unless listed in `disabled`.
+scanners:
+  sast:
+    - name: codeql
+      languages: [javascript-typescript, rust]
+      fail_on: [critical, high]
+    - name: semgrep
+      config: p/default
+      config_extra:
+        - p/security-audit
+        - p/secrets
+      fail_on: [critical, high]
+
+  dast:
+    - name: zap-baseline
+      # The app needs a running instance; the workflow boots `next start`
+      # against a throwaway build and points ZAP at it.
+      fail_on: [critical, high]
+      note: informational until the E2E harness exposes a stable login path
+
+  dependencies:
+    - name: trivy-fs
+      scan: filesystem
+      fail_on: [critical, high]
+    - name: osv-scanner
+      scan: lockfile
+      fail_on: [critical, high]
+
+  containers:
+    - name: trivy-image
+      scan: image
+      fail_on: [critical, high]
+      note: enabled once a container image is published
+
+  secrets:
+    - name: gitleaks
+      fail_on: [critical, high]
+    - name: trufflehog
+      mode: verified
+      fail_on: [critical, high]
+
+# Software bill of contents, regenerated on every main build.
+sbom:
+  format: spdx-json
+  generator: trivy
+  retain_days: 90
+  include_dev_dependencies: false
+
+# Paths excluded from scanning, with the reason each exclusion exists. An
+# exclusion without a reason is rejected by the workflow.
+exclude_paths:
+  - path: "**/node_modules/**"
+    reason: vendored dependencies, covered by the dependency scanners
+  - path: "**/.next/**"
+    reason: build output, not source
+  - path: "**/target/**"
+    reason: cargo build output, covered by the dependency scanners
+  - path: "**/*.min.js"
+    reason: build output
+
+disabled: []

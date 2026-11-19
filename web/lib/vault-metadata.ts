@@ -54,13 +54,20 @@ export function normalizeVaultData(
     }
   }
 
-  const id = String(raw.id || fallbackId || "unknown");
-  const name = String(raw.name || parsedConfig.name || `Vault ${id}`);
-  const balance = Number(raw.balance ?? parsedConfig.balance ?? 0);
-  const asset = String(raw.asset || parsedConfig.asset || "XLM");
-  const apy = Number(raw.apy ?? parsedConfig.apy ?? 0);
-  const owner = String(raw.owner || ("manager_id" in raw ? raw.manager_id : "") || parsedConfig.owner || "Perigee");
-  const status = String(raw.status || "ACTIVE");
+  // `raw` is a union of three shapes (Vault | VaultRecord | VaultMetadataInput)
+  // that intentionally don't all share the same fields — VaultRecord keeps
+  // them inside `config_json` instead. Read through an untyped view here
+  // rather than narrowing per-field, since every value is re-validated by
+  // `String()`/`Number()` immediately below anyway.
+  const r = raw as Record<string, unknown>;
+
+  const id = String(r.id || fallbackId || "unknown");
+  const name = String(r.name || parsedConfig.name || `Vault ${id}`);
+  const balance = Number(r.balance ?? parsedConfig.balance ?? 0);
+  const asset = String(r.asset || parsedConfig.asset || "XLM");
+  const apy = Number(r.apy ?? parsedConfig.apy ?? 0);
+  const owner = String(r.owner || r.manager_id || parsedConfig.owner || "Perigee");
+  const status = String(r.status || "ACTIVE");
 
   return { id, name, balance, asset, apy, owner, status };
 }

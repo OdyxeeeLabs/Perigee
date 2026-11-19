@@ -6,9 +6,11 @@ use axum::{
     Json,
 };
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use std::env;
 use thiserror::Error;
 
+use crate::input_sanitization::{self, SanitizationError, SanitizationLimits};
 use crate::simulation::SimulationError;
 
 /// Returns `true` when `APP_ENV=production`.
@@ -81,6 +83,9 @@ pub enum AppError {
     /// and the caller is authenticated — the authority behind it has lapsed.
     #[error("Policy expired: {0}")]
     PolicyExpired(String),
+
+    #[error("{1}")]
+    Named(ErrorCode, String),
 }
 
 impl AppError {
@@ -98,6 +103,7 @@ impl AppError {
             | Self::TooManyRequests(msg)
             | Self::Conflict(msg)
             | Self::PolicyExpired(msg) => msg.as_str(),
+            Self::Named(_, msg) => msg.as_str(),
         }
     }
 
@@ -111,15 +117,31 @@ impl AppError {
             Self::TooManyRequests(_) => ErrorCode::TooManyRequests,
             Self::Conflict(_) => ErrorCode::Conflict,
             Self::PolicyExpired(_) => ErrorCode::PolicyExpired,
+            Self::Named(code, _) => *code,
         }
     }
 
-    fn status_code(&self) -> StatusCode {
+    pub fn status_code(&self) -> StatusCode {
         self.error_code().status_code()
     }
 
+    pub fn with_code(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::Named(code, message.into())
+    }
+
+    pub fn from_code(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::with_code(code, message)
+    }
+
+    pub fn legacy_error_code(&self) -> ErrorCode {
+        match self {
+            Self::Named(code, _) => code.legacy_code(),
+            _ => self.error_code(),
+        }
+    }
+
     fn error_type(&self) -> &'static str {
-        self.error_code().as_str()
+        self.legacy_error_code().as_str()
     }
 
     /// The client-visible message for this error.
@@ -160,6 +182,25 @@ impl AppError {
             // The caller needs the expiry timestamp to understand why, and it
             // is not sensitive — it is their own policy.
             Self::PolicyExpired(msg) => format!("Policy expired: {}", msg),
+            Self::Named(code, msg) => {
+                if code.is_sensitive() && is_production() {
+                    match *code {
+                        ErrorCode::InvalidApiKey | ErrorCode::InvalidSignature => {
+                            "Unauthorized.".to_string()
+                        }
+                        ErrorCode::CircuitBreakerOpen | ErrorCode::NoHealthyRpcProviders => {
+                            "RPC provider temporarily unavailable.".to_string()
+                        }
+                        ErrorCode::RpcTimeout | ErrorCode::NodeTimeout => {
+                            "RPC provider timed out.".to_string()
+                        }
+                        _ => "An internal server error occurred. Please try again later."
+                            .to_string(),
+                    }
+                } else {
+                    msg.clone()
+                }
+            }
         }
     }
 }
@@ -176,18 +217,30 @@ impl IntoResponse for AppError {
         tracing::error!(
             error_type = code.as_str(),
             status = status.as_u16(),
-            detail = self.diagnostic(),
+            detail = %crate::log_redaction::redact_sensitive_text(&self.diagnostic()),
             "Request failed"
         );
 
-        let body = Json(ErrorResponse {
-            code: code.as_str().to_string(),
-            error: code.as_str().to_string(),
-            message: self.client_message(),
-            details: None,
-        });
+        // RFC 7807 body. The legacy `code`/`message`/`error` members stay as
+        // extensions so existing clients keep working.
+        let legacy = ErrorResponse::from_error_code_with_legacy(
+            code,
+            self.legacy_error_code(),
+            self.client_message(),
+        );
+        let mut problem = crate::rest_api::ProblemDetails::from_status(status.as_u16(), &legacy.message);
+        if let Ok(serde_json::Value::Object(members)) = serde_json::to_value(&legacy) {
+            for (name, value) in members {
+                problem = problem.with_extension(&name, value);
+            }
+        }
 
-        (status, body).into_response()
+        (
+            status,
+            [(axum::http::header::CONTENT_TYPE, crate::rest_api::PROBLEM_CONTENT_TYPE)],
+            problem.to_json().to_string(),
+        )
+            .into_response()
     }
 }
 
@@ -197,54 +250,66 @@ impl IntoResponse for AppError {
 impl From<SimulationError> for AppError {
     fn from(err: SimulationError) -> Self {
         match err {
-            // Client errors (HTTP 400)
             SimulationError::NodeError(msg) => {
-                // NodeError covers invalid contract IDs, bad parameters
-                AppError::BadRequest(format!("RPC node error: {}", msg))
+                AppError::with_code(ErrorCode::NodeError, format!("RPC node error: {}", msg))
             }
-            SimulationError::InvalidContract(msg) => {
-                AppError::BadRequest(format!("Invalid contract: {}", msg))
-            }
-            // BE-020: malformed WASM is the caller's input, so 400 rather than
-            // 500, and the message says what was wrong with it.
+            SimulationError::InvalidContract(msg) => AppError::with_code(
+                ErrorCode::InvalidContractId,
+                format!("Invalid contract: {}", msg),
+            ),
             SimulationError::InvalidWasm(msg) => {
-                AppError::BadRequest(format!("Invalid WASM: {}", msg))
+                AppError::with_code(ErrorCode::InvalidWasm, format!("Invalid WASM: {}", msg))
             }
-            SimulationError::ParseError(e) => {
-                AppError::BadRequest(format!("Argument parse error: {}", e))
-            }
+            SimulationError::ParseError(e) => AppError::with_code(
+                ErrorCode::ParseError,
+                format!("Argument parse error: {}", e),
+            ),
             SimulationError::XdrError(msg) => {
-                AppError::BadRequest(format!("XDR encoding error: {}", msg))
+                AppError::with_code(ErrorCode::InvalidXdr, format!("XDR encoding error: {}", msg))
             }
             SimulationError::Base64Error(e) => {
-                AppError::BadRequest(format!("Base64 decode error: {}", e))
+                AppError::with_code(ErrorCode::InvalidBase64, format!("Base64 decode error: {}", e))
             }
-
-            // Server errors (HTTP 500)
-            SimulationError::NodeTimeout => AppError::Internal("RPC request timed out".to_string()),
+            SimulationError::NodeTimeout => {
+                AppError::with_code(ErrorCode::RpcTimeout, "RPC request timed out")
+            }
+            SimulationError::Cancelled => AppError::Internal("Request cancelled".to_string()),
             SimulationError::RpcRequestFailed(msg) => {
-                AppError::Internal(format!("RPC request failed: {}", msg))
+                AppError::with_code(ErrorCode::RpcRequestFailed, format!("RPC request failed: {}", msg))
             }
-            SimulationError::NetworkError(e) => AppError::Internal(format!("Network error: {}", e)),
-            SimulationError::Io(e) => AppError::Internal(format!("IO error: {}", e)),
-            SimulationError::SerializationError(e) => {
-                AppError::Internal(format!("Serialization error: {}", e))
-            }
-
-            // Local-runner errors. `LocalUnavailable` should normally be
-            // handled upstream by falling back to RPC, so if it reaches the
-            // HTTP boundary treat it as an internal misconfiguration.
-            SimulationError::LocalUnavailable => AppError::Internal(
-                "Local WASM execution unavailable and no RPC fallback succeeded".to_string(),
+            SimulationError::AllAttemptsFailed {
+                attempts,
+                last_error,
+            } => AppError::with_code(
+                ErrorCode::RpcRequestFailed,
+                format!("All {attempts} RPC attempts failed: {last_error}"),
             ),
-            SimulationError::ExecutionFailed(msg) => {
-                AppError::BadRequest(format!("Contract execution failed: {}", msg))
+            SimulationError::NetworkError(e) => {
+                AppError::with_code(ErrorCode::NetworkError, format!("Network error: {}", e))
             }
-            SimulationError::InsufficientConsensusProviders(msg) => {
-                AppError::Internal(format!("Insufficient consensus providers: {}", msg))
+            SimulationError::Io(e) => {
+                AppError::with_code(ErrorCode::IoError, format!("IO error: {}", e))
             }
+            SimulationError::SerializationError(e) => {
+                AppError::with_code(ErrorCode::SerializationError, format!("Serialization error: {}", e))
+            }
+            SimulationError::CircuitBreakerOpen(msg) => {
+                AppError::with_code(ErrorCode::CircuitBreakerOpen, msg)
+            }
+            SimulationError::LocalUnavailable => AppError::with_code(
+                ErrorCode::LocalUnavailable,
+                "Local WASM execution unavailable and no RPC fallback succeeded",
+            ),
+            SimulationError::ExecutionFailed(msg) => AppError::with_code(
+                ErrorCode::ContractExecutionFailed,
+                format!("Contract execution failed: {}", msg),
+            ),
+            SimulationError::InsufficientConsensusProviders(msg) => AppError::with_code(
+                ErrorCode::InsufficientConsensus,
+                format!("Insufficient consensus providers: {}", msg),
+            ),
             SimulationError::ConsensusMismatch(msg) => {
-                AppError::Internal(format!("Consensus mismatch: {}", msg))
+                AppError::with_code(ErrorCode::ConsensusMismatch, format!("Consensus mismatch: {}", msg))
             }
         }
     }
@@ -252,7 +317,41 @@ impl From<SimulationError> for AppError {
 
 impl From<crate::parser::ParserError> for AppError {
     fn from(err: crate::parser::ParserError) -> Self {
-        AppError::BadRequest(err.to_string())
+        AppError::with_code(ErrorCode::ParseError, err.to_string())
+    }
+}
+
+impl From<crate::stellar_service::StellarServiceError> for AppError {
+    fn from(err: crate::stellar_service::StellarServiceError) -> Self {
+        use crate::stellar_service::StellarServiceError;
+
+        let message = err.to_string();
+        match err {
+            StellarServiceError::CircuitOpen { .. } => {
+                AppError::with_code(ErrorCode::CircuitBreakerOpen, message)
+            }
+            StellarServiceError::NoHealthyProviders => {
+                AppError::with_code(ErrorCode::NoHealthyRpcProviders, message)
+            }
+            StellarServiceError::Timeout { .. } => {
+                AppError::with_code(ErrorCode::RpcTimeout, message)
+            }
+            StellarServiceError::Network { .. } => {
+                AppError::with_code(ErrorCode::NetworkError, message)
+            }
+            StellarServiceError::ParseError { .. } => {
+                AppError::with_code(ErrorCode::SerializationError, message)
+            }
+            StellarServiceError::HttpError { .. }
+            | StellarServiceError::AllAttemptsFailed { .. } => {
+                AppError::with_code(ErrorCode::RpcRequestFailed, message)
+            }
+            StellarServiceError::MissingNetworkPassphrase { .. }
+            | StellarServiceError::NetworkPassphraseMismatch { .. }
+            | StellarServiceError::ClientBuild { .. } => {
+                AppError::with_code(ErrorCode::ConfigurationError, message)
+            }
+        }
     }
 }
 
@@ -289,43 +388,122 @@ pub trait Validate {
 /// where `MyRequest: serde::de::DeserializeOwned + Validate + Send + 'static`.
 pub struct ValidatedJson<T>(pub T);
 
-#[async_trait]
-impl<T, S> FromRequest<S> for ValidatedJson<T>
+pub struct ApiJson<T>(pub T);
+
+/// Parse the request body into a `Value` first and check its structure
+/// (array/object length, nesting depth — API-33) before the caller converts
+/// it into the target type `T`.
+///
+/// Running this ahead of the `T`-specific deserialization means an oversized
+/// or deeply nested payload is rejected before it is forced into business
+/// DTOs (e.g. `Vec<_>` batch fields) and long before a handler — or any
+/// DB-mutating call it makes — ever runs.
+async fn extract_checked_value<S>(req: Request, state: &S) -> Result<Value, AppError>
 where
-    T: DeserializeOwned + Validate,
+    S: Send + Sync,
+{
+    match Json::<Value>::from_request(req, state).await {
+        Ok(Json(value)) => {
+            input_sanitization::check_structural_limits(&value, &SanitizationLimits::from_env())
+                .map_err(structural_limit_error)?;
+            Ok(value)
+        }
+        Err(rejection) => Err(json_rejection_error(&rejection)),
+    }
+}
+
+fn value_conversion_error(error: serde_json::Error) -> AppError {
+    AppError::with_code(ErrorCode::InvalidJson, format!("Invalid JSON data: {error}"))
+}
+
+/// Maps a structural-limit violation (API-33) to the stable
+/// `ErrorCode::ValidationFailed` client error — the same code the rest of the
+/// validation pipeline (`validation_pipeline.rs`) uses for a rejected
+/// request body, so clients see one consistent code for "your request body
+/// didn't pass validation" regardless of which stage caught it.
+fn structural_limit_error(error: SanitizationError) -> AppError {
+    let message = match error {
+        SanitizationError::CollectionTooLong => format!(
+            "request contains an array or object with more than {} items",
+            SanitizationLimits::from_env().max_collection_length
+        ),
+        SanitizationError::DepthExceeded => format!(
+            "request JSON is nested more than {} levels deep",
+            SanitizationLimits::from_env().max_depth
+        ),
+        other => other.to_string(),
+    };
+    AppError::with_code(ErrorCode::ValidationFailed, message)
+}
+
+#[async_trait]
+impl<T, S> FromRequest<S> for ApiJson<T>
+where
+    T: DeserializeOwned + Send + 'static,
     S: Send + Sync,
 {
     type Rejection = AppError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Json::<T>::from_request(req, state).await {
-            Ok(Json(value)) => {
-                // JSON parsed successfully — now run field-level validation.
-                value.validate().map_err(AppError::BadRequest)?;
-                Ok(ValidatedJson(value))
-            }
-            Err(rejection) => {
-                // Map every Axum JSON rejection variant to a 400 with a
-                // human-readable message inside the standard envelope.
-                let message = match &rejection {
-                    JsonRejection::JsonDataError(e) => {
-                        format!("Invalid JSON data: {}", e.body_text())
-                    }
-                    JsonRejection::JsonSyntaxError(e) => {
-                        format!("JSON syntax error: {}", e.body_text())
-                    }
-                    JsonRejection::MissingJsonContentType(_) => {
-                        "Content-Type must be application/json".to_string()
-                    }
-                    JsonRejection::BytesRejection(_) => {
-                        "Failed to read request body".to_string()
-                    }
-                    _ => "Invalid request body".to_string(),
-                };
-                Err(AppError::BadRequest(message))
-            }
-        }
+        let value = extract_checked_value(req, state).await?;
+        let typed: T = serde_json::from_value(value).map_err(value_conversion_error)?;
+        Ok(Self(typed))
     }
+}
+
+#[async_trait]
+impl<T, S> FromRequest<S> for ValidatedJson<T>
+where
+    T: DeserializeOwned + Validate + Send + 'static,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let value = extract_checked_value(req, state).await?;
+        let typed: T = serde_json::from_value(value).map_err(value_conversion_error)?;
+        // JSON parsed successfully — now run field-level validation.
+        typed
+            .validate()
+            .map_err(|message| AppError::with_code(ErrorCode::ValidationFailed, message))?;
+        Ok(ValidatedJson(typed))
+    }
+}
+
+fn json_rejection_error(rejection: &JsonRejection) -> AppError {
+    let (code, message) = match rejection {
+        JsonRejection::JsonDataError(e) => (
+            ErrorCode::InvalidJson,
+            format!("Invalid JSON data: {}", e.body_text()),
+        ),
+        JsonRejection::JsonSyntaxError(e) => (
+            ErrorCode::InvalidJson,
+            format!("JSON syntax error: {}", e.body_text()),
+        ),
+        JsonRejection::MissingJsonContentType(_) => (
+            ErrorCode::BadRequest,
+            "Content-Type must be application/json".to_string(),
+        ),
+        // Axum reports an oversized body (beyond `DefaultBodyLimit` / the
+        // `Content-Length` the server enforces) as a `BytesRejection` whose
+        // own status is already `413`. Surface that precisely as
+        // `PayloadTooLarge` (API-33) instead of the generic "failed to read"
+        // code, so clients can distinguish "body too big" from a transport
+        // hiccup and retry accordingly.
+        JsonRejection::BytesRejection(e) if e.body_text().to_lowercase().contains("length limit exceeded") => (
+            ErrorCode::PayloadTooLarge,
+            format!(
+                "Request body exceeds the {} byte limit",
+                input_sanitization::max_body_bytes()
+            ),
+        ),
+        JsonRejection::BytesRejection(_) => (
+            ErrorCode::RequestBodyReadFailed,
+            "Failed to read request body".to_string(),
+        ),
+        _ => (ErrorCode::BadRequest, "Invalid request body".to_string()),
+    };
+    AppError::with_code(code, message)
 }
 
 #[cfg(test)]
@@ -521,6 +699,26 @@ mod validated_json_tests {
             "message should name the failing field: {}",
             v["message"]
         );
+    }
+
+    /// API-33: an oversized array anywhere in the body is rejected by the
+    /// extractor itself — before `T`'s own fields are even looked at, and
+    /// long before a handler could run a DB-mutating call.
+    #[tokio::test]
+    async fn oversized_array_is_rejected_before_the_handler_runs() {
+        let _env = env_guard();
+        unsafe { env::set_var("MAX_COLLECTION_LENGTH", "3") };
+
+        // `tags` isn't a field `SimpleRequest` knows about, but the
+        // structural check runs on the raw JSON `Value`, before conversion
+        // into `SimpleRequest`, so it still catches the oversized array.
+        let oversized = serde_json::json!({"name": "ok", "tags": ["a", "b", "c", "d"]});
+        let (status, body) = send(&oversized.to_string(), "application/json").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {}", body);
+        let v: serde_json::Value = serde_json::from_str(&body).expect("response must be JSON");
+        assert_eq!(v["code"], "VALIDATION_FAILED");
+
+        unsafe { env::remove_var("MAX_COLLECTION_LENGTH") };
     }
 
     // ── Validate trait unit tests (no HTTP layer needed) ──────────────────────

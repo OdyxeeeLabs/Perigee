@@ -6,9 +6,62 @@ members = [
     "contracts/error_codes",
     "contracts/math",
     "contracts/guards",
+    "contracts/governance",
     "contracts/staking_rewards",
     "contracts/oracle_aggregator",
     "contracts/policy_vault",
+    # Share-price manipulation resistance, rounding, dust (#636).
+    "contracts/vault_accounting",
+    # Multi-asset baskets with composite pricing (#637).
+    "contracts/basket_vault",
+    # Vault insurance coverage, claims, premiums (#638).
+    "contracts/vault_insurance",
+    # On-chain vault metadata and trait discovery (#639).
+    "contracts/vault_metadata",
+    # Deterministic vault factory + UUPS proxy (#632, #635).
+    "contracts/vault_factory",
+    # Pluggable yield strategies, rotation, performance fees (#633).
+    "contracts/vault_strategy",
+    # Lending strategy with health-factor guarded market operations.
+    "contracts/lending_strategy",
+    # Concentrated-liquidity DEX LP with rebalancing and IL protection (#652).
+    "contracts/dex_lp_strategy",
+    # Liquid staking, reward claiming, and commission (#653).
+    "contracts/staking_strategy",
+    # Looping with liquidation protection and max LTV enforcement (#654).
+    "contracts/leverage_strategy",
+    # Covered calls, protective puts, and delta hedging (#655).
+    "contracts/options_strategy",
+    # User-opted, versioned vault state migration with legacy compatibility.
+    "contracts/vault_migration",
+    # Queued contract calls with configurable minimum execution delay.
+    "contracts/timelock_controller",
+    # Circuit breaker, partial pause, timelocked unpause (#634).
+    "contracts/vault_guard",
+    # ERC-4626 tokenised vault (#631).
+    "contracts/erc4626_vault",
+    # Strategy-of-strategies and fee layering (#660).
+    "contracts/strategy_composability",
+    # Performance fees, management fees and fee discount tokens (#661, #662, #663).
+    "contracts/fee_engine",
+    # Strategy risk framework and performance tracking (#657, #658).
+    "contracts/strategy_analytics",
+    # Strategy rotation and cross-chain yield (#659, #656).
+    "contracts/strategy_orchestration",
+    # Governance fee switch, revenue share, buyback/burn (#666).
+    "contracts/fee_switch",
+    # Utilization / volatility / competitor-aware fees (#667).
+    "contracts/dynamic_fees",
+    # On-chain referrals with anti-sybil controls (#664).
+    "contracts/referral",
+    # Olympus-style bonding and protocol-owned liquidity (#665).
+    "contracts/protocol_owned_liquidity",
+    # Per-function permissions, wildcard selectors, batch ACL updates (#647).
+    "contracts/access_control",
+    # Cross-chain governance: message passing, remote execution, state sync (#650).
+    "contracts/cross_chain_governance",
+    # Deterministic CPU/memory budget report for representative operations (#886).
+    "contracts/resource_budget",
 ]
 
 # CONTRACT-41 (#535): dedicated build profile used by `scripts/coverage.sh`

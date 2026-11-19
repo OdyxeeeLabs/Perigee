@@ -9,10 +9,12 @@
  * Resolves WEB-17 (#103): Navigation/metadata not localized for white-label.
  */
 import { getRequestConfig } from "next-intl/server";
+import { DEFAULT_LOCALE, normalizeLocale } from "./locale/locales";
 
 async function loadMessages(locale: string): Promise<Record<string, string>> {
+  const resolvedLocale = normalizeLocale(locale);
   const defaultMessages: Record<string, string> = (
-    await import(`../messages/${locale}.json`)
+    await import(`../messages/${resolvedLocale}.json`)
   ).default;
 
   const managerLabel = process.env.NEXT_PUBLIC_MANAGER_LABEL?.trim();
@@ -31,7 +33,11 @@ async function loadMessages(locale: string): Promise<Record<string, string>> {
   }
 }
 
-export default getRequestConfig(async ({ locale }) => ({
-  messages: await loadMessages(locale),
-  timeZone: "UTC",
-}));
+export default getRequestConfig(async ({ locale }) => {
+  const resolvedLocale = normalizeLocale(locale ?? DEFAULT_LOCALE);
+  return {
+    locale: resolvedLocale,
+    messages: await loadMessages(resolvedLocale),
+    timeZone: "UTC",
+  };
+});

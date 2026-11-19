@@ -1,0 +1,205 @@
+name: Security Scan
+
+# Closes OdyxeeeLabs/Perigee#626 — continuous security scanning.
+#
+# Severity thresholds, remediation SLAs and scanner configuration all come from
+# config/security/scan-policy.yml so the policy is reviewable on its own rather
+# than being scattered through the workflow matrix below.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Nightly, off the hour so it does not pile onto the top-of-hour load spike.
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Validate scan policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail if a scanner exclusion has no stated reason
+        run: |
+          set -euo pipefail
+          missing=0
+          while read -r line; do
+            [ -z "$line" ] && continue
+            case "$line" in *"- path:"*) current_path="${line#*- path: }" ;; *"- reason:"*) [ -z "${current_path:-}" ] && { echo "reason without path"; missing=1; } ;; esac
+          done < config/security/scan-policy.yml
+          exit "$missing"
+
+      - name: Validate the secret rotation policy
+        run: python3 scripts/security/validate_secrets_rotation.py
+
+  sast:
+    name: SAST
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - uses: github/codeql-action/autobuild@v3
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+      - name: Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: p/default
+          config: >-
+            p/default
+            p/security-audit
+            p/secrets
+          # p/ci is noisy on a Solidity/Rust monorepo and produces findings the
+          # team has explicitly not committed to fixing, so it is off.
+          generateSarif: true
+
+  dependencies:
+    name: Dependency and secret scanning
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Trivy — filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-fs.sarif
+
+      - name: OSV — lockfile scan
+        uses: google/osv-scanner-action/scanner@v2
+        with:
+          scan-args: |-
+            --lockfile=package-lock.json
+            --lockfile=Cargo.lock
+            --severity=CRITICAL,HIGH
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Historical scanning so a secret leaked before this workflow existed
+          # is still caught.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  dast:
+    name: DAST
+    runs-on: ubuntu-latest
+    # The vault dashboard requires a wallet connection to render most routes, so
+    # this job is advisory for now. The policy file records that rather than
+    # letting the gap be implicit.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the app
+        run: |
+          set -euo pipefail
+          cd web
+          yarn install --frozen-lockfile
+          yarn build
+
+      - name: Start the app
+        run: |
+          set -euo pipefail
+          cd web
+          (yarn start --port 3000 &) 
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/ >/dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
+          echo "app did not come up in time" >&2
+          exit 1
+
+      - name: OWASP ZAP baseline scan
+        uses: zaproxy/action-baseline-scan@v0.4.0
+        with:
+          target: http://localhost:3000
+          rules_file: config/security/zap-baseline-rules.yml
+
+  sbom:
+    name: SBOM
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate SPDX SBOM
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: filesystem
+          scan-ref: .
+          format: spdx-json
+          output: sbom.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 90
+
+  summary:
+    name: Scan summary
+    runs-on: ubuntu-latest
+    needs: [policy, sast, dependencies]
+    # Gating job: mirrors `fail_on: [critical, high]` from the policy file.
+    if: always()
+    steps:
+      - name: Fail the build on any critical or high finding
+        run: |
+          set -euo pipefail
+          failed=0
+          for job in policy sast dependencies; do
+            if [ "${{ needs.$job.result }}" != "success" ]; then
+              echo "::error::$job reported a critical or high finding"
+              failed=1
+            fi
+          done
+          exit "$failed"

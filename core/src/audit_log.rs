@@ -72,6 +72,9 @@ pub enum SecurityEventType {
     TokenRevoked,
     TokenExpired,
     UnauthorizedAccess,
+    /// A caller was authenticated but lacked the authorization (role/privilege)
+    /// required for the requested operation.
+    AuthorizationDenied,
     VaultAccessDenied,
     AgentDisabled,
     JwtKeyRotated,
@@ -86,6 +89,7 @@ impl SecurityEventType {
             SecurityEventType::TokenRevoked => "TOKEN_REVOKED",
             SecurityEventType::TokenExpired => "TOKEN_EXPIRED",
             SecurityEventType::UnauthorizedAccess => "UNAUTHORIZED_ACCESS",
+            SecurityEventType::AuthorizationDenied => "AUTHORIZATION_DENIED",
             SecurityEventType::VaultAccessDenied => "VAULT_ACCESS_DENIED",
             SecurityEventType::AgentDisabled => "AGENT_DISABLED",
             SecurityEventType::JwtKeyRotated => "JWT_KEY_ROTATED",
@@ -107,7 +111,7 @@ pub struct SecurityAuditEvent {
     pub agent_id: Option<String>,
     #[serde(rename = "vaultId", skip_serializing_if = "Option::is_none")]
     pub vault_id: Option<String>,
-    pub timestamp: String,
+    pub timestamp: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ip: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -364,18 +368,21 @@ pub fn log_audit_event(manager_id: &str, action: &str, actor: &str) {
 
     let event = chain.append(manager_id, action, actor, Utc::now()).clone();
 
+    let redactor = crate::log_redaction::LogRedactor::new("perigee-log-redaction");
+    let redacted_manager = redactor.redact_address(&event.manager_id);
+    let redacted_actor = redactor.redact_address(&event.actor);
     info!(
         target: "audit_log",
         sequence = event.sequence,
-        manager_id = %event.manager_id,
+        manager_id = %redacted_manager,
         action = %event.action,
-        actor = %event.actor,
+        actor = %redacted_actor,
         timestamp = %event.timestamp.to_rfc3339(),
         prev_hash = %event.prev_hash,
         entry_hash = %event.entry_hash,
         "AUDIT: {} by {}",
         event.action,
-        event.actor
+        redacted_actor
     );
 }
 
@@ -388,6 +395,7 @@ pub fn log_audit_event(manager_id: &str, action: &str, actor: &str) {
 /// - `TOKEN_REVOKED`
 /// - `TOKEN_EXPIRED`
 /// - `UNAUTHORIZED_ACCESS`
+/// - `AUTHORIZATION_DENIED`
 /// - `VAULT_ACCESS_DENIED`
 /// - `AGENT_DISABLED`
 /// - `JWT_KEY_ROTATED`
@@ -402,7 +410,6 @@ pub fn log_security_event(
     reason: Option<&str>,
 ) -> SecurityAuditEvent {
     let now = Utc::now();
-    let timestamp_str = now.to_rfc3339();
 
     let manager_id = agent_id.unwrap_or("system");
     let action = event.as_str();
@@ -412,34 +419,46 @@ pub fn log_security_event(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    let chain_entry = chain.append(manager_id, action, actor, now).clone();
+    let chain_entry = chain.append(manager_id, action, actor, now.clone()).clone();
 
     let sec_event = SecurityAuditEvent {
         event,
         agent_id: agent_id.map(|s| s.to_string()),
         vault_id: vault_id.map(|s| s.to_string()),
-        timestamp: timestamp_str,
+        timestamp: now,
         ip: ip.map(|s| s.to_string()),
         reason: reason.map(|s| s.to_string()),
         metadata: None,
     };
 
-    let json_str = serde_json::to_string(&sec_event).unwrap_or_default();
+    let redactor = crate::log_redaction::LogRedactor::new("perigee-log-redaction");
+    let redacted_agent_id = sec_event
+        .agent_id
+        .as_deref()
+        .map(|value| redactor.redact_address(value));
+    let redacted_vault_id = sec_event
+        .vault_id
+        .as_deref()
+        .map(|value| redactor.redact_vault_id(value));
+    let redacted_ip = sec_event.ip.as_deref().map(|value| redactor.redact_address(value));
+    let redacted_reason = sec_event
+        .reason
+        .as_deref()
+        .map(crate::log_redaction::redact_sensitive_text);
 
     info!(
         target: "audit_log",
         sequence = chain_entry.sequence,
         event = %sec_event.event.as_str(),
-        agent_id = ?sec_event.agent_id,
-        vault_id = ?sec_event.vault_id,
-        timestamp = %sec_event.timestamp,
-        ip = ?sec_event.ip,
-        reason = ?sec_event.reason,
+        agent_id = ?redacted_agent_id,
+        vault_id = ?redacted_vault_id,
+        timestamp = %sec_event.timestamp.to_rfc3339(),
+        ip = ?redacted_ip,
+        reason = ?redacted_reason,
         prev_hash = %chain_entry.prev_hash,
         entry_hash = %chain_entry.entry_hash,
-        security_event_json = %json_str,
         "SECURITY_AUDIT: {}",
-        json_str
+        sec_event.event.as_str()
     );
 
     sec_event
@@ -467,6 +486,7 @@ pub fn log_security_event_with_metrics(
             SecurityEventType::LoginFailed
             | SecurityEventType::TokenExpired
             | SecurityEventType::UnauthorizedAccess
+            | SecurityEventType::AuthorizationDenied
             | SecurityEventType::VaultAccessDenied => "denied",
         });
         metrics
@@ -698,11 +718,24 @@ mod tests {
     fn test_security_event_types_formatting_and_str() {
         assert_eq!(SecurityEventType::LoginSuccess.as_str(), "LOGIN_SUCCESS");
         assert_eq!(SecurityEventType::LoginFailed.as_str(), "LOGIN_FAILED");
-        assert_eq!(SecurityEventType::TokenRefreshed.as_str(), "TOKEN_REFRESHED");
+        assert_eq!(
+            SecurityEventType::TokenRefreshed.as_str(),
+            "TOKEN_REFRESHED"
+        );
         assert_eq!(SecurityEventType::TokenRevoked.as_str(), "TOKEN_REVOKED");
         assert_eq!(SecurityEventType::TokenExpired.as_str(), "TOKEN_EXPIRED");
-        assert_eq!(SecurityEventType::UnauthorizedAccess.as_str(), "UNAUTHORIZED_ACCESS");
-        assert_eq!(SecurityEventType::VaultAccessDenied.as_str(), "VAULT_ACCESS_DENIED");
+        assert_eq!(
+            SecurityEventType::UnauthorizedAccess.as_str(),
+            "UNAUTHORIZED_ACCESS"
+        );
+        assert_eq!(
+            SecurityEventType::AuthorizationDenied.as_str(),
+            "AUTHORIZATION_DENIED"
+        );
+        assert_eq!(
+            SecurityEventType::VaultAccessDenied.as_str(),
+            "VAULT_ACCESS_DENIED"
+        );
         assert_eq!(SecurityEventType::AgentDisabled.as_str(), "AGENT_DISABLED");
         assert_eq!(SecurityEventType::JwtKeyRotated.as_str(), "JWT_KEY_ROTATED");
     }
@@ -721,7 +754,10 @@ mod tests {
         assert_eq!(event.agent_id.as_deref(), Some("agent-123"));
         assert_eq!(event.vault_id.as_deref(), Some("vault-456"));
         assert_eq!(event.ip.as_deref(), Some("192.168.1.100"));
-        assert_eq!(event.reason.as_deref(), Some("Agent not authorized for vault"));
+        assert_eq!(
+            event.reason.as_deref(),
+            Some("Agent not authorized for vault")
+        );
 
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains(r#""event":"VAULT_ACCESS_DENIED""#));
@@ -730,6 +766,24 @@ mod tests {
         assert!(json.contains(r#""ip":"192.168.1.100""#));
         assert!(json.contains(r#""reason":"Agent not authorized for vault""#));
         assert!(json.contains(r#""timestamp":""#));
+    }
+
+    #[test]
+    fn test_authorization_denied_serialization() {
+        let event = log_security_event(
+            SecurityEventType::AuthorizationDenied,
+            Some("GTENANT"),
+            None,
+            None,
+            Some("Admin privileges required to perform this action"),
+        );
+
+        assert_eq!(event.event, SecurityEventType::AuthorizationDenied);
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(r#""event":"AUTHORIZATION_DENIED""#));
+        assert!(json.contains(r#""agentId":"GTENANT""#));
+        assert!(json.contains(r#""reason":"Admin privileges required to perform this action""#));
     }
 
     #[test]

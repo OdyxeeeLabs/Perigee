@@ -1,19 +1,32 @@
 "use client";
 
-import Head from "next/head";
 import { useRouter } from "next/router";
 import { useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 import { ConnectButton } from "../../components/ConnectButton";
 import { SEO } from "../../components/SEO";
+import { Button } from "../../components/ui/Button";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
+import { LiveStatus } from "../../components/LiveRegion";
 import { managerService, type ManagerRecord } from "../../lib/api";
 
+interface PendingDestructiveAction {
+  action: string;
+  target: string;
+  consequence: string;
+  confirmLabel: string;
+  run: () => void;
+}
+
 export default function AdminManagers() {
+  const t = useTranslations();
   const router = useRouter();
   const [managers, setManagers] = useState<ManagerRecord[]>([]);
   const [filter, setFilter] = useState<string>("pending");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingDestructiveAction | null>(null);
 
   useEffect(() => {
     loadManagers();
@@ -27,7 +40,7 @@ export default function AdminManagers() {
       setManagers(records);
     } catch (err: unknown) {
       const msg =
-        err instanceof Error ? err.message : "Failed to load managers";
+        err instanceof Error ? err.message : t("admin.managers.loadFailed");
       setError(msg);
     } finally {
       setLoading(false);
@@ -40,7 +53,7 @@ export default function AdminManagers() {
       await managerService.approve(id);
       await loadManagers();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Approval failed";
+      const msg = err instanceof Error ? err.message : t("admin.managers.approvalFailed");
       alert(msg);
     } finally {
       setActionLoading(null);
@@ -48,26 +61,51 @@ export default function AdminManagers() {
   }
 
   async function handleReject(id: string) {
-    const notes = prompt("Rejection reason (optional):");
+    const notes = prompt(t("admin.managers.rejectionPrompt"));
     if (notes === null) return;
     setActionLoading(id);
     try {
       await managerService.reject(id, notes);
       await loadManagers();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Rejection failed";
+      const msg = err instanceof Error ? err.message : t("admin.managers.rejectionFailed");
       alert(msg);
     } finally {
       setActionLoading(null);
     }
   }
 
+  async function handleRemove(id: string) {
+    setActionLoading(id);
+    try {
+      await managerService.remove(id);
+      await loadManagers();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : t("admin.managers.removalFailed");
+      alert(msg);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  function confirmPendingAction() {
+    const action = pendingAction;
+    setPendingAction(null);
+    action?.run();
+  }
+
+  const filterLabels: Record<string, string> = {
+    "": t("admin.managers.filterAll"),
+    pending: t("admin.managers.filterPending"),
+    approved: t("admin.managers.filterApproved"),
+    rejected: t("admin.managers.filterRejected"),
+  };
+
   return (
     <>
-      <Head />
       <SEO
-        title="Admin — Managers"
-        description="Approve or reject wealth-manager onboarding submissions for the Perigee autonomous portfolio protocol."
+        title={t("admin.managers.title")}
+        description={t("admin.managers.description")}
         path="/admin/managers"
         noIndex
       />
@@ -75,16 +113,14 @@ export default function AdminManagers() {
         <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
           <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
             <div>
-              <h1 className="text-2xl font-bold text-cyan-400">Perigee</h1>
-              <p className="text-sm text-slate-400">Admin — Manager Approval</p>
+              <h1 className="text-2xl font-bold text-cyan-400">{t("app.name")}</h1>
+              <p className="text-sm text-slate-400">{t("admin.managers.subtitle")}</p>
             </div>
             <ConnectButton />
           </div>
         </header>
 
         <section className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
-          import {Button} from "../../components/ui/Button"; // ... (rest of the
-          file)
           <div className="mb-6 flex items-center gap-3">
             {["", "pending", "approved", "rejected"].map((s) => (
               <Button
@@ -92,32 +128,39 @@ export default function AdminManagers() {
                 onClick={() => setFilter(s)}
                 variant={filter === s ? "default" : "secondary"}
               >
-                {s || "All"}
+                {filterLabels[s] || s}
               </Button>
             ))}
           </div>
+          {/* WEB-16 (#470): announce loading/error transitions while the
+              table content changes underneath them. */}
+          <LiveStatus
+            message={loading ? t("admin.managers.loading") : (error ?? "")}
+            label={t("a11y.statusRegionLabel")}
+            data-testid="admin-managers-live-status"
+          />
           {loading ? (
             <div className="flex flex-col items-center justify-center py-12">
               <div
                 className="h-8 w-8 animate-spin rounded-full border-4 border-slate-700 border-t-cyan-400"
-                aria-label="Loading managers"
+                aria-label={t("admin.managers.loading")}
               />
-              <p className="mt-3 text-sm text-slate-500">Loading managers...</p>
+              <p className="mt-3 text-sm text-slate-500">{t("admin.managers.loading")}</p>
             </div>
           ) : error ? (
             <div className="rounded-lg border border-red-800 bg-red-950/40 p-4 text-center">
               <p className="text-red-400">{error}</p>
               <Button onClick={loadManagers} className="mt-3">
-                Retry
+                {t("admin.managers.retry")}
               </Button>
             </div>
           ) : managers.length === 0 ? (
             <div className="py-12 text-center">
               <p className="text-slate-400">
-                No {filter ? `${filter} ` : ""}managers found.
+                {t("admin.managers.emptyTitle", { filter: filter ? `${filter} ` : "" })}
               </p>
               <p className="mt-1 text-sm text-slate-600">
-                Managers will appear here when they are available.
+                {t("admin.managers.emptySubtitle")}
               </p>
             </div>
           ) : (
@@ -126,25 +169,25 @@ export default function AdminManagers() {
                 <thead className="bg-slate-900">
                   <tr>
                     <th className="px-4 py-3 text-left font-medium text-slate-400">
-                      Name
+                      {t("admin.managers.colName")}
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-slate-400">
-                      Stellar Address
+                      {t("admin.managers.colAddress")}
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-slate-400">
-                      Email
+                      {t("admin.managers.colEmail")}
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-slate-400">
-                      Status
+                      {t("admin.managers.colStatus")}
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-slate-400">
-                      KYC Ref
+                      {t("admin.managers.colKyc")}
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-slate-400">
-                      Notes
+                      {t("admin.managers.colNotes")}
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-slate-400">
-                      Actions
+                      {t("admin.managers.colActions")}
                     </th>
                   </tr>
                 </thead>
@@ -188,17 +231,43 @@ export default function AdminManagers() {
                               variant="default"
                               size="sm"
                             >
-                              {actionLoading === m.id ? "..." : "Approve"}
+                              {actionLoading === m.id ? "..." : t("admin.managers.approve")}
                             </Button>
                             <Button
-                              onClick={() => handleReject(m.id)}
+                              onClick={() =>
+                                setPendingAction({
+                                  action: t("admin.managers.reject"),
+                                  target: m.name,
+                                  consequence: t("admin.managers.rejectConsequence"),
+                                  confirmLabel: t("admin.managers.reject"),
+                                  run: () => handleReject(m.id),
+                                })
+                              }
                               disabled={actionLoading === m.id}
                               variant="destructive"
                               size="sm"
                             >
-                              Reject
+                              {t("admin.managers.reject")}
                             </Button>
                           </div>
+                        )}
+                        {m.status !== "pending" && (
+                          <Button
+                            onClick={() =>
+                              setPendingAction({
+                                action: t("admin.managers.remove"),
+                                target: m.name,
+                                consequence: t("admin.managers.removeConsequence"),
+                                confirmLabel: t("admin.managers.remove"),
+                                run: () => handleRemove(m.id),
+                              })
+                            }
+                            disabled={actionLoading === m.id}
+                            variant="destructive"
+                            size="sm"
+                          >
+                            {t("admin.managers.remove")}
+                          </Button>
                         )}
                       </td>
                     </tr>
@@ -209,9 +278,20 @@ export default function AdminManagers() {
           )}
           <div className="mt-6">
             <Button variant="link" onClick={() => router.push("/")}>
-              &larr; Back to Analyzer
+              {t("nav.backToAnalyzer")}
             </Button>
           </div>
+          {pendingAction && (
+            <ConfirmDialog
+              open
+              action={pendingAction.action}
+              target={pendingAction.target}
+              consequence={pendingAction.consequence}
+              confirmLabel={pendingAction.confirmLabel}
+              onConfirm={confirmPendingAction}
+              onCancel={() => setPendingAction(null)}
+            />
+          )}
         </section>
       </main>
     </>

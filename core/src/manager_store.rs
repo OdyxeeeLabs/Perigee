@@ -1,7 +1,12 @@
+use crate::auth::AuthenticatedUser;
+use crate::error_codes::ErrorCode;
+use crate::errors::{ApiJson, AppError};
 use crate::errors::AppError;
+use crate::input_sanitization::{SanitizedJson, SanitizedPath, SanitizedQuery};
 use crate::db;
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
+    extract::State,
     Json,
 };
 use chrono::Utc;
@@ -28,10 +33,18 @@ pub enum ManagerStoreError {
 impl From<ManagerStoreError> for AppError {
     fn from(err: ManagerStoreError) -> Self {
         match err {
-            ManagerStoreError::NotFound(msg) => AppError::NotFound(msg),
-            ManagerStoreError::InvalidData(msg) => AppError::BadRequest(msg),
-            ManagerStoreError::DuplicateAddress(msg) => AppError::Conflict(msg),
-            ManagerStoreError::Database(e) => AppError::Internal(e.to_string()),
+            ManagerStoreError::NotFound(msg) => {
+                AppError::with_code(ErrorCode::ManagerNotFound, msg)
+            }
+            ManagerStoreError::InvalidData(msg) => {
+                AppError::with_code(ErrorCode::InvalidInput, msg)
+            }
+            ManagerStoreError::DuplicateAddress(msg) => {
+                AppError::with_code(ErrorCode::ManagerAlreadyExists, msg)
+            }
+            ManagerStoreError::Database(e) => {
+                AppError::with_code(ErrorCode::DatabaseError, e.to_string())
+            }
         }
     }
 }
@@ -134,6 +147,17 @@ impl ManagerStore {
         })
     }
 
+    /// All managers matching the status filter, for cursor pagination.
+    pub async fn list_all(
+        &self,
+        status_filter: Option<&str>,
+    ) -> Result<Vec<ManagerRecord>, ManagerStoreError> {
+        self.managers
+            .list(status_filter)
+            .await
+            .map_err(ManagerStoreError::Database)
+    }
+
     pub async fn approve(
         &self,
         id: &str,
@@ -157,6 +181,16 @@ impl ManagerStore {
     }
 }
 
+fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
+    if user.is_admin() {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "Administrator role is required".to_string(),
+        ))
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/managers/register",
@@ -170,7 +204,8 @@ impl ManagerStore {
 )]
 pub async fn register_manager_handler(
     State(state): State<Arc<crate::AppState>>,
-    Json(payload): Json<RegisterManagerRequest>,
+    ApiJson(payload): ApiJson<RegisterManagerRequest>,
+    SanitizedJson(payload): SanitizedJson<RegisterManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
     let manager = state.manager_store.register(&payload).await?;
     Ok(Json(manager))
@@ -180,33 +215,35 @@ pub async fn register_manager_handler(
     get,
     path = "/managers",
     params(
-        ("status" = Option<String>, Query, description = "Filter by status: pending, approved, rejected"),
-        ("page" = Option<u32>, Query, description = "Page number (1-indexed, default 1)"),
-        ("page_size" = Option<u32>, Query, description = "Records per page (default 50, max 200)")
+        ("filter[status]" = Option<String>, Query, description = "Filter by status: pending, approved, rejected"),
+        ("limit" = Option<u32>, Query, description = "Page size, 1-100 (default 25)"),
+        ("cursor" = Option<String>, Query, description = "Signed cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "Paginated list of manager records", body = PagedResponse<ManagerRecord>)
+        (status = 200, description = "Cursor-paginated list of manager records"),
+        (status = 400, description = "Invalid limit, sort, filter or cursor")
     ),
     tag = "Managers"
 )]
 pub async fn list_managers_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<Json<crate::db::models::PagedResponse<ManagerRecord>>, AppError> {
-    let status_filter = params.get("status").map(|s| s.as_str());
+    SanitizedQuery(params): SanitizedQuery<std::collections::HashMap<String, String>>,
+) -> Result<Json<crate::pagination::Page<ManagerRecord>>, AppError> {
+    require_admin(&user)?;
+    let codec = crate::pagination::cursor_codec();
+    let pairs: Vec<(String, String)> = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let request = crate::pagination::PageRequest::parse(&crate::pagination::MANAGERS_LIST, codec, &pairs)?;
 
-    let page: u32 = params
-        .get("page")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
-    let page_size: u32 = params
-        .get("page_size")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50);
-
-    let pagination = crate::db::models::PaginationParams { page, page_size };
-    let result = state.manager_store.list(status_filter, &pagination).await?;
-    Ok(Json(result))
+    let rows = state
+        .manager_store
+        .list_all(request.filters.get("status").map(String::as_str))
+        .await?;
+    let page = crate::pagination::paginate_slice(&rows, &request, codec, |m| {
+        (m.created_at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true), m.id.clone())
+    })?;
+    Ok(Json(page))
 }
 
 #[utoipa::path(
@@ -221,8 +258,11 @@ pub async fn list_managers_handler(
 )]
 pub async fn get_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
 ) -> Result<Json<ManagerRecord>, AppError> {
+    require_admin(&user)?;
     let manager = state.manager_store.get(&id).await?;
     Ok(Json(manager))
 }
@@ -241,9 +281,13 @@ pub async fn get_manager_handler(
 )]
 pub async fn approve_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
-    Json(payload): Json<ApproveManagerRequest>,
+    ApiJson(payload): ApiJson<ApproveManagerRequest>,
+    SanitizedPath(id): SanitizedPath<String>,
+    SanitizedJson(payload): SanitizedJson<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
+    require_admin(&user)?;
     let manager = state.manager_store.approve(&id, &payload).await?;
     Ok(Json(manager))
 }
@@ -262,9 +306,13 @@ pub async fn approve_manager_handler(
 )]
 pub async fn reject_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
-    Json(payload): Json<ApproveManagerRequest>,
+    ApiJson(payload): ApiJson<ApproveManagerRequest>,
+    SanitizedPath(id): SanitizedPath<String>,
+    SanitizedJson(payload): SanitizedJson<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
+    require_admin(&user)?;
     let manager = state.manager_store.reject(&id, &payload).await?;
     Ok(Json(manager))
 }
@@ -280,7 +328,7 @@ pub async fn reject_manager_handler(
 )]
 pub async fn check_manager_status_handler(
     State(state): State<Arc<crate::AppState>>,
-    Path(stellar_address): Path<String>,
+    SanitizedPath(stellar_address): SanitizedPath<String>,
 ) -> Result<Json<ManagerStatusResponse>, AppError> {
     let record = state
         .manager_store
@@ -340,7 +388,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        ManagerStore::new(db::schema::TypedSchema::new(std::sync::Arc::new(pool)).managers())
+        ManagerStore::new(
+            db::schema::TypedSchema::new(std::sync::Arc::new(db::MonitoredPool::from_inner(pool)))
+                .managers(),
+        )
     }
 
     #[tokio::test]

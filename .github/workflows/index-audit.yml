@@ -1,0 +1,54 @@
+name: Index audit
+
+# Weekly report of missing, unused and redundant database indexes (#609).
+# Needs the AUDIT_DATABASE_URL secret: a connection string for a READ REPLICA
+# with pg_stat_statements enabled. Without it the job does nothing.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    env:
+      AUDIT_DATABASE_URL: ${{ secrets.AUDIT_DATABASE_URL }}
+    steps:
+      - name: Check configuration
+        id: config
+        run: |
+          if [ -z "$AUDIT_DATABASE_URL" ]; then
+            echo "AUDIT_DATABASE_URL is not set; skipping."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.config.outputs.enabled == 'true'
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.config.outputs.enabled == 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.config.outputs.enabled == 'true'
+
+      - name: Collect statistics
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          psql "$AUDIT_DATABASE_URL" -At -f scripts/index_audit/collect.sql > snapshot.json
+
+      - name: Build the report
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          cargo run --quiet -p Perigee-core --bin index-audit -- snapshot.json --date "$(date -u +%F)" > index-audit.md
+          cat index-audit.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.config.outputs.enabled == 'true'
+        with:
+          name: index-audit
+          path: |
+            index-audit.md
+            snapshot.json

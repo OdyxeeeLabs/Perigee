@@ -1,0 +1,13 @@
+{
+  "current": "0.1.0",
+  "versions": [
+    {
+      "version": "0.1.0",
+      "status": "current",
+      "released": "2026-10-15",
+      "docsPath": "versions/v0.1.0/",
+      "components": 7,
+      "exports": 13
+    }
+  ]
+}

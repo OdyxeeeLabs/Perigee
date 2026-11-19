@@ -8,7 +8,9 @@ use std::time::Duration;
 
 /// Converts a [`StellarServiceError`] into the engine-level [`ProviderError`].
 fn map_err(e: StellarServiceError) -> ProviderError {
+    let message = e.to_string();
     match e {
+        StellarServiceError::CircuitOpen { .. } => ProviderError::CircuitBreakerOpen(message),
         StellarServiceError::Timeout { .. } => ProviderError::NodeTimeout,
         StellarServiceError::Network { source, .. } => {
             ProviderError::NetworkError(source.to_string())
@@ -16,7 +18,7 @@ fn map_err(e: StellarServiceError) -> ProviderError {
         StellarServiceError::HttpError { status, url } => {
             ProviderError::RpcRequestFailed(format!("HTTP {status} from {url}"))
         }
-        other => ProviderError::RpcRequestFailed(other.to_string()),
+        _ => ProviderError::RpcRequestFailed(message),
     }
 }
 

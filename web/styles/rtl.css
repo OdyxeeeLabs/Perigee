@@ -1,0 +1,63 @@
+/* ===========================================================================
+   RTL support — issue #699
+
+   The layout is written with CSS logical properties
+   (margin-inline, padding-inline, inset-inline, border-start-*,
+   text-align: start/end), so a document with dir="rtl" mirrors correctly
+   without a parallel stylesheet. What still needs stating explicitly is:
+
+     1. the two icons whose meaning depends on direction (a "next"/"forward"
+        chevron points the wrong way when the text runs right to left), and
+     2. the handful of transforms that cannot be expressed logically.
+
+   Nothing here changes the LTR rendering: every rule is scoped to
+   [dir="rtl"], so the default document is untouched.
+   =========================================================================== */
+
+[dir="rtl"] {
+  /* Mirrored glyphs: Lucide and inline SVGs are authored pointing "right"
+     for time-series affordances. `scaleX(-1)` is the standard treatment for
+     directional icons, and the list is deliberately short so genuinely
+     symmetric icons (close, check, plus) are not flipped. */
+  [data-mirror-rtl="true"] {
+    transform: scaleX(-1);
+  }
+
+}
+
+/* Same idea for lucide chevrons, which carry no data attribute. */
+[dir="rtl"] .lucide-chevron-right,
+[dir="rtl"] .lucide-arrow-right,
+[dir="rtl"] .lucide-chevrons-right,
+[dir="rtl"] .lucide-move-right {
+  transform: scaleX(-1);
+}
+
+/*
+ * Horizontal progress and shimmer gradients that are painted, not laid out,
+ * also need mirroring.
+ */
+[dir="rtl"] [data-mirror-rtl-gradient="true"] {
+  background-position: right center;
+}
+
+/*
+ * Icons that must NOT mirror even in RTL, because they carry a meaning that
+ * is not directional. `scaleX(-1)` on a checkmark or a clock reads as a
+ * different symbol.
+ */
+[dir="rtl"] [data-no-mirror-rtl="true"] {
+  transform: none;
+}
+
+/*
+ * Reduced motion still applies inside RTL documents (issue #702 keeps the
+ * token-level rules in globals.css; nothing here animates).
+ */
+@media (prefers-reduced-motion: reduce) {
+  [dir="rtl"] [data-mirror-rtl="true"],
+  [dir="rtl"] .lucide-chevron-right,
+  [dir="rtl"] .lucide-arrow-right {
+    transform: none;
+  }
+}

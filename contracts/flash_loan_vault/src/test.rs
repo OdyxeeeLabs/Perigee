@@ -761,3 +761,29 @@ fn test_get_available_after_deposit() {
     fund_vault(&s, 5_000);
     assert_eq!(s.vault_client.get_available(), 5_000);
 }
+
+// ── #849 — initialization state ─────────────────────────────────────────────
+
+#[test]
+fn initialization_state_is_explicit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let vault_id = env.register(FlashLoanVault, ());
+    let client = FlashLoanVaultClient::new(&env, &vault_id);
+
+    assert_eq!(client.try_get_token(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_get_admin(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_set_fee(&100), Err(Ok(Error::NotInitialized)));
+
+    client.initialize(&admin, &token);
+
+    assert_eq!(client.get_token(), token);
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(
+        client.try_initialize(&admin, &token),
+        Err(Ok(Error::AlreadyInitialized))
+    );
+}

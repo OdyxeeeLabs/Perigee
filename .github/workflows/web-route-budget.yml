@@ -1,0 +1,47 @@
+name: Web route JavaScript budget
+
+# Issue #842 / WEB-41: fail when a budgeted route's built JS chunks grow past
+# the committed limit. Sizes come from Next's build manifest, not wall clock.
+
+on:
+  pull_request:
+    paths:
+      - "web/**"
+      - ".github/workflows/web-route-budget.yml"
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/web-route-budget.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-route-budget-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  budget:
+    name: Check route chunks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        working-directory: web
+        run: yarn install --immutable
+
+      - name: Build the app
+        working-directory: web
+        run: yarn build
+
+      - name: Compare route chunks with budgets
+        working-directory: web
+        run: yarn budget:routes

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CommonButton · Perigee Web Component Library</title>
+<meta name="description" content="Nothing new — migrate to Button." />
+<meta name="generator" content="scripts/docs/generate.mjs" />
+<link rel="stylesheet" href="../../assets/docs.css" />
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+<p class="site-title"><a href="../../index.html">Perigee Web Component Library</a></p>
+<p class="meta">Component library docs · generated from source</p>
+<div class="grow"></div>
+<div class="control">
+<label for="version-select">Version</label>
+<select id="version-select" data-navigate><option value="../../index.html" selected>v0.1.0 (current)</option></select>
+</div>
+<div class="control">
+<label for="docs-search">Search docs</label>
+<input id="docs-search" type="search" autocomplete="off" placeholder="Button, accessibility…" aria-describedby="search-status" />
+</div>
+</header>
+<div class="layout">
+<nav class="site-nav" aria-label="Component library">
+<h2>Overview</h2>
+<ul>
+<li><a href="../../index.html">All components</a></li>
+<li><a href="../../migrations.html">Migration guide</a></li>
+<li><a href="../../versions.html">Versions</a></li>
+</ul>
+<h2>Actions</h2><ul><li><a href="../../button.html">Button</a></li></ul><h2>Data display</h2><ul><li><a href="../../badge.html">Badge</a></li><li><a href="../../data-table.html">DataTable</a></li></ul><h2>Feedback</h2><ul><li><a href="../../spinner.html">Spinner</a></li></ul><h2>Layout</h2><ul><li><a href="../../card.html">Card</a></li></ul><h2>Accessibility</h2><ul><li><a href="../../live-region.html">Live regions</a></li></ul><h2>Legacy</h2><ul><li><a href="../../common-button.html" aria-current="page">CommonButton</a></li></ul>
+</nav>
+<main id="content" tabindex="-1">
+<div id="search-results" hidden data-base="">
+<strong>Search results</strong>
+<p id="search-status" role="status" aria-live="polite"></p>
+<ul id="search-results-list"></ul>
+</div>
+<nav class="toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#import">Import</a></li><li><a href="#props">Props</a></li><li><a href="#inherited-attributes">Inherited attributes</a></li><li><a href="#usage">Usage</a></li><li><a href="#accessibility">Accessibility</a></li><li><a href="#migration-notes">Migration notes</a></li><li><a href="#related">Related</a></li></ul></nav>
+<h1 id="common-button">CommonButton</h1>
+<p><em>Legacy · Nothing new — migrate to Button.</em></p>
+<p><strong>Page status:</strong> deprecated</p>
+<p><strong>Status:</strong> deprecated · <strong>Since:</strong> 0.0.1 · <strong>Source:</strong> <code>components/common/Button/Button.tsx:34</code></p>
+<blockquote><p>⚠️ <strong>Deprecated.</strong> Superseded by <code>components/ui/Button</code>. The variant names changed (<code>primary</code> → <code>default</code>) and <code>loading</code> folded into the native <code>disabled</code> attribute. See the <a href="../../migrations.html">migration guide</a>.</p>
+<p>Migrate to <a href="../../button.html"><code>Button</code></a>.</p></blockquote>
+<p>Legacy button from the pre-<code>ui/</code> component set — <strong>prefer <a href="../../button.html"><code>Button</code></a></strong>, which adds <code>size</code>, the full variant set, and native prop forwarding.</p>
+<h2 id="import">Import</h2>
+<pre tabindex="0"><code class="language-tsx">import { CommonButton } from &#39;@/components/common/Button/Button&#39;;</code></pre>
+<h2 id="props">Props</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col">Prop</th><th scope="col">Type</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">Description</th></tr></thead><tbody><tr><td><code>variant</code></td><td><code>&quot;primary&quot; | &quot;secondary&quot; | &quot;outline&quot;</code></td><td><code>&quot;primary&quot;</code></td><td>No</td><td>—</td></tr><tr><td><code>loading</code></td><td><code>boolean</code></td><td><code>false</code></td><td>No</td><td>—</td></tr></tbody></table></div>
+<h3 id="inherited-attributes">Inherited attributes</h3>
+<p><code>React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt;</code> — everything not listed above is spread onto the underlying <code>&lt;button&gt;</code>, including <code>id</code>, <code>style</code>, <code>onClick</code>, <code>aria-*</code>, and <code>data-*</code> attributes.</p>
+<h2 id="usage">Usage</h2>
+<p><em>Example 1</em></p>
+<pre tabindex="0"><code class="language-tsx">// Deprecated
+&lt;CommonButton variant=&quot;primary&quot; loading&gt;Save&lt;/CommonButton&gt;</code></pre>
+<p><em>Example 2</em></p>
+<pre tabindex="0"><code class="language-tsx">// Replacement
+&lt;Button disabled={loading}&gt;Save&lt;/Button&gt;</code></pre>
+<h2 id="accessibility">Accessibility</h2>
+<ul><li>Adding <code>loading</code> also sets <code>disabled</code>, so the control is removed from the tab order while work is in flight and screen readers announce it as unavailable rather than busy.</li></ul>
+<h2 id="migration-notes">Migration notes</h2>
+<ul><li><a href="../../migrations.html#button-replaced-common-button">Button replaced CommonButton</a> — shipped in v0.1.0.<ul><li><code>CommonButton</code> set <code>disabled</code> whenever <code>loading</code> was true, so the disabled mapping preserves behaviour exactly.</li><li><code>size</code>, <code>ghost</code>, <code>link</code>, and <code>destructive</code> variants exist only on <code>Button</code>.</li><li>Update the import path as well as the JSX: <code>components/common/Button/Button</code> → <code>components/ui/Button</code>.</li></ul></li></ul>
+<h2 id="related">Related</h2>
+<ul><li><a href="../../button.html">Button</a></li></ul>
+<hr />
+<p><a href="../../index.html">← All components</a> · <a href="../../migrations.html">Migration guide</a> · Documented at v0.1.0</p>
+<p class="page-footer">Generated from v0.1.0 by <code>npm run docs:build</code>. Edit the component source or <code>scripts/docs/registry.mjs</code>, never this file.</p>
+</main>
+</div>
+<script src="../../assets/docs.js" defer></script>
+</body>
+</html>

@@ -9,7 +9,7 @@ use utoipa::ToSchema;
 ///
 /// - `page` is 1-indexed; defaults to 1.
 /// - `page_size` defaults to 50; maximum is 200.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct PaginationParams {
     #[serde(default = "default_page")]
     pub page: u32,
@@ -138,7 +138,7 @@ pub struct ReconciliationReport {
     pub avg_delta_pct: f64,
     pub max_delta_pct: f64,
     pub summary: Option<ReconciliationSummary>,
-    pub created_at: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -181,7 +181,7 @@ pub struct ReconcileResponse {
     pub message: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct ListReportsQuery {
     #[serde(default = "default_limit")]
     pub limit: i64,

@@ -10,6 +10,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
+import { CopyButton } from "./ui/CopyButton";
 import { useInvocationHistory } from "./InnovocationHistory";
 import type { InvocationResult } from "../lib/sorobantypes";
 
@@ -41,6 +43,7 @@ export function InvocationHistorySidebar({
   const [isOpen, setIsOpen] = useState(true);
   const { history, clearHistory } = useInvocationHistory();
   const t = useTranslations();
+  const [confirmClear, setConfirmClear] = useState(false);
 
   return (
     <div
@@ -54,7 +57,7 @@ export function InvocationHistorySidebar({
       <button
         id="invocation-history-toggle"
         onClick={() => setIsOpen((prev) => !prev)}
-        title={isOpen ? "Hide history" : "Show history"}
+        title={isOpen ? t("history.hide") : t("history.show")}
         style={{
           position: "absolute",
           top: "16px",
@@ -130,7 +133,8 @@ export function InvocationHistorySidebar({
             {history.length > 0 && (
               <button
                 id="clear-history-button"
-                onClick={clearHistory}
+                onClick={() => setConfirmClear(true)}
+                aria-label={t("history.clearAll")}
                 title={t("history.clearAll")}
                 style={{
                   background: "none",
@@ -177,22 +181,20 @@ export function InvocationHistorySidebar({
                 const report = item.analysisReport ?? item.resourceCost;
 
                 return (
-                  <button
+                  <div
                     key={item.id}
                     className="history-item-button"
-                    onClick={() => onSelectResult(item)}
                     style={{
                       width: "100%",
                       padding: "10px 14px",
                       backgroundColor: "transparent",
-                      border: "none",
                       borderBottom:
                         index < history.length - 1
                           ? "1px solid #21262d"
                           : "none",
-                      textAlign: "left",
-                      cursor: "pointer",
-                      display: "block",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "4px",
                       transition: "background-color 0.12s",
                     }}
                     onMouseEnter={(e) => {
@@ -202,86 +204,116 @@ export function InvocationHistorySidebar({
                       e.currentTarget.style.backgroundColor = "transparent";
                     }}
                   >
-                    <div
+                    <button
+                      type="button"
+                      onClick={() => onSelectResult(item)}
+                      aria-label={`${t("history.recent")}: ${item.functionName}`}
                       style={{
-                        display: "flex",
-                        gap: "8px",
-                        alignItems: "flex-start",
+                        flex: 1,
+                        minWidth: 0,
+                        padding: 0,
+                        background: "none",
+                        border: "none",
+                        textAlign: "left",
+                        cursor: "pointer",
+                        color: "inherit",
                       }}
                     >
-                      <div style={{ paddingTop: "1px", flexShrink: 0 }}>
-                        {item.success ? (
-                          <CheckCircle size={13} color="#3fb950" />
-                        ) : (
-                          <XCircle size={13} color="#f85149" />
-                        )}
-                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "8px",
+                          alignItems: "flex-start",
+                        }}
+                      >
+                        <div style={{ paddingTop: "1px", flexShrink: 0 }}>
+                          {item.success ? (
+                            <CheckCircle size={13} color="#3fb950" />
+                          ) : (
+                            <XCircle size={13} color="#f85149" />
+                          )}
+                        </div>
 
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p
-                          style={{
-                            margin: "0 0 2px 0",
-                            fontSize: "12px",
-                            fontWeight: "500",
-                            color: "#c9d1d9",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {item.functionName}
-                        </p>
-
-                        <p
-                          style={{
-                            margin: "0",
-                            fontSize: "11px",
-                            color: "#8b949e",
-                          }}
-                        >
-                          {formatDate(item.timestamp, t)} ·{" "}
-                          {formatTime(item.timestamp)}
-                        </p>
-
-                        {report && item.success && (
+                        <div style={{ flex: 1, minWidth: 0 }}>
                           <p
                             style={{
-                              margin: "3px 0 0 0",
-                              fontSize: "11px",
-                              color: "#00d9ff",
-                              fontFamily: "monospace",
-                            }}
-                          >
-                            {(report.cpu_instructions / 1_000_000).toFixed(1)}M
-                            CPU
-                            {" · "}
-                            {(report.ram_bytes / 1024).toFixed(0)} KB
-                          </p>
-                        )}
-
-                        {item.error && (
-                          <p
-                            style={{
-                              margin: "3px 0 0 0",
-                              fontSize: "11px",
-                              color: "#f85149",
+                              margin: "0 0 2px 0",
+                              fontSize: "12px",
+                              fontWeight: "500",
+                              color: "#c9d1d9",
                               overflow: "hidden",
                               textOverflow: "ellipsis",
                               whiteSpace: "nowrap",
                             }}
                           >
-                            {item.error}
+                            {item.functionName}
                           </p>
-                        )}
+
+                          <p
+                            style={{
+                              margin: "0",
+                              fontSize: "11px",
+                              color: "#8b949e",
+                            }}
+                          >
+                            {formatDate(item.timestamp, t)} ·{" "}
+                            {formatTime(item.timestamp)}
+                          </p>
+
+                          {report && item.success && (
+                            <p
+                              style={{
+                                margin: "3px 0 0 0",
+                                fontSize: "11px",
+                                color: "#00d9ff",
+                                fontFamily: "monospace",
+                              }}
+                            >
+                              {(report.cpu_instructions / 1_000_000).toFixed(1)}M{" "}
+                              {t("history.cpu")}
+                              {" · "}
+                              {(report.ram_bytes / 1024).toFixed(0)}{" "}
+                              {t("history.kb")}
+                            </p>
+                          )}
+
+                          {item.error && (
+                            <p
+                              style={{
+                                margin: "3px 0 0 0",
+                                fontSize: "11px",
+                                color: "#f85149",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {item.error}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                    <CopyButton value={item.id} label="transaction hash" />
+                  </div>
                 );
               })
             )}
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={confirmClear}
+        action={t("confirm.clearHistory")}
+        target={t("confirm.savedInvocations")}
+        consequence={t("confirm.clearHistoryConsequence")}
+        confirmLabel={t("history.clear")}
+        onConfirm={() => {
+          setConfirmClear(false);
+          clearHistory();
+        }}
+        onCancel={() => setConfirmClear(false)}
+      />
     </div>
   );
 }

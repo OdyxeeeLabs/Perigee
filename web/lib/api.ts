@@ -292,6 +292,15 @@ export interface ManagerStatusResponse {
   message: string;
 }
 
+/** Envelope returned by paginated collection endpoints. */
+export interface PagedResponse<T> {
+  data: T[];
+  total_count: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
 export const managerService = {
   async register(req: RegisterManagerRequest): Promise<ManagerRecord> {
     return apiClient.post<ManagerRecord>("/managers/register", req);
@@ -300,6 +309,21 @@ export const managerService = {
   async list(status?: string): Promise<ManagerRecord[]> {
     const params = status ? { status } : undefined;
     return apiClient.get<ManagerRecord[]>("/managers", { params });
+  },
+
+  /**
+   * Admin-only manager list for the App Router administration page.
+   *
+   * Authorization is enforced by the API, never by this client. `no-store`
+   * plus the explicit cache clear on 401/403 in the page prevents manager data
+   * from surviving a loss of admin access.
+   */
+  async listAdminManagers(token?: string): Promise<PagedResponse<ManagerRecord>> {
+    return apiClient.get<PagedResponse<ManagerRecord>>("/managers", {
+      token,
+      cache: "no-store",
+      params: { page: 1, page_size: 100 },
+    });
   },
 
   async get(id: string): Promise<ManagerRecord> {
@@ -316,6 +340,10 @@ export const managerService = {
 
   async checkStatus(stellarAddress: string): Promise<ManagerStatusResponse> {
     return apiClient.get<ManagerStatusResponse>(`/managers/status/${stellarAddress}`);
+  },
+
+  async remove(id: string): Promise<void> {
+    return apiClient.delete<void>(`/managers/${id}`);
   },
 };
 

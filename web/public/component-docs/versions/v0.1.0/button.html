@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Button · Perigee Web Component Library</title>
+<meta name="description" content="Primary and secondary actions, form submits, toolbar controls." />
+<meta name="generator" content="scripts/docs/generate.mjs" />
+<link rel="stylesheet" href="../../assets/docs.css" />
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+<p class="site-title"><a href="../../index.html">Perigee Web Component Library</a></p>
+<p class="meta">Component library docs · generated from source</p>
+<div class="grow"></div>
+<div class="control">
+<label for="version-select">Version</label>
+<select id="version-select" data-navigate><option value="../../index.html" selected>v0.1.0 (current)</option></select>
+</div>
+<div class="control">
+<label for="docs-search">Search docs</label>
+<input id="docs-search" type="search" autocomplete="off" placeholder="Button, accessibility…" aria-describedby="search-status" />
+</div>
+</header>
+<div class="layout">
+<nav class="site-nav" aria-label="Component library">
+<h2>Overview</h2>
+<ul>
+<li><a href="../../index.html">All components</a></li>
+<li><a href="../../migrations.html">Migration guide</a></li>
+<li><a href="../../versions.html">Versions</a></li>
+</ul>
+<h2>Actions</h2><ul><li><a href="../../button.html" aria-current="page">Button</a></li></ul><h2>Data display</h2><ul><li><a href="../../badge.html">Badge</a></li><li><a href="../../data-table.html">DataTable</a></li></ul><h2>Feedback</h2><ul><li><a href="../../spinner.html">Spinner</a></li></ul><h2>Layout</h2><ul><li><a href="../../card.html">Card</a></li></ul><h2>Accessibility</h2><ul><li><a href="../../live-region.html">Live regions</a></li></ul><h2>Legacy</h2><ul><li><a href="../../common-button.html">CommonButton</a></li></ul>
+</nav>
+<main id="content" tabindex="-1">
+<div id="search-results" hidden data-base="">
+<strong>Search results</strong>
+<p id="search-status" role="status" aria-live="polite"></p>
+<ul id="search-results-list"></ul>
+</div>
+<nav class="toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#import">Import</a></li><li><a href="#props">Props</a></li><li><a href="#inherited-attributes">Inherited attributes</a></li><li><a href="#usage">Usage</a></li><li><a href="#accessibility">Accessibility</a></li><li><a href="#related">Related</a></li></ul></nav>
+<h1 id="button">Button</h1>
+<p><em>Actions · Primary and secondary actions, form submits, toolbar controls.</em></p>
+<p><strong>Page status:</strong> stable · Tracks WEB-27 (#113)</p>
+<p><strong>Status:</strong> stable · <strong>Since:</strong> 0.1.0 · <strong>Source:</strong> <code>components/ui/Button.tsx:70</code></p>
+<p>Primary action control for the Perigee component library.</p>
+<p>Renders a native <code>&lt;button&gt;</code> and forwards every unhandled prop to it, so <code>type</code>, <code>disabled</code>, <code>aria-*</code>, and event handlers behave exactly as they would on a plain HTML button. Use <code>variant</code> to express emphasis and <code>size</code> for density; keep a single <code>default</code> button per view for a clear primary action.</p>
+<p>Replaces the legacy <code>components/common/Button</code> (<code>CommonButton</code>), whose <code>primary</code> variant maps onto <code>variant=&quot;default&quot;</code>. See the <a href="../../migrations.html">migration guide</a> for the full mapping.</p>
+<h2 id="import">Import</h2>
+<pre tabindex="0"><code class="language-tsx">import { Button } from &#39;@/components/ui/Button&#39;;</code></pre>
+<h2 id="props">Props</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col">Prop</th><th scope="col">Type</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">Description</th></tr></thead><tbody><tr><td><code>variant</code></td><td><code>&quot;default&quot; | &quot;destructive&quot; | &quot;outline&quot; | &quot;secondary&quot; | &quot;ghost&quot; | &quot;link&quot;</code></td><td><code>&quot;default&quot;</code></td><td>No</td><td>Visual treatment. <code>&quot;default&quot;</code> is the cyan brand action; <code>&quot;destructive&quot;</code> is reserved for irreversible actions; <code>&quot;link&quot;</code> renders text-only styling.</td></tr><tr><td><code>size</code></td><td><code>&quot;default&quot; | &quot;sm&quot; | &quot;lg&quot; | &quot;icon&quot;</code></td><td><code>&quot;default&quot;</code></td><td>No</td><td>Control height and padding. <code>&quot;icon&quot;</code> is a square control for a single glyph.</td></tr><tr><td><code>asChild</code></td><td><code>boolean</code></td><td><code>false</code></td><td>No</td><td>Accepted for Radix-style API parity but <strong>not implemented</strong> yet: the component always renders a <code>&lt;button&gt;</code>. Kept optional so callers migrating from shadcn-based snippets do not fail type checking.</td></tr></tbody></table></div>
+<h3 id="inherited-attributes">Inherited attributes</h3>
+<p><code>React.ButtonHTMLAttributes&lt;HTMLButtonElement&gt;</code> — everything not listed above is spread onto the underlying <code>&lt;button&gt;</code>, including <code>id</code>, <code>style</code>, <code>onClick</code>, <code>aria-*</code>, and <code>data-*</code> attributes.</p>
+<h2 id="usage">Usage</h2>
+<p><em>Example 1</em></p>
+<pre tabindex="0"><code class="language-tsx">// Primary call to action
+&lt;Button onClick={confirmRotation}&gt;Confirm rotation&lt;/Button&gt;</code></pre>
+<p><em>Example 2</em></p>
+<pre tabindex="0"><code class="language-tsx">// Lower-emphasis destructive action
+&lt;Button variant=&quot;destructive&quot; size=&quot;sm&quot;&gt;Remove vault&lt;/Button&gt;</code></pre>
+<h2 id="accessibility">Accessibility</h2>
+<ul><li>Renders a real <code>&lt;button&gt;</code> whose default <code>type</code> is <code>button</code>, so keyboard activation (Enter / Space) works without extra handlers.</li><li>Icon-only controls (<code>size=&quot;icon&quot;</code>) have no text content: always pass an accessible name (<code>aria-label</code> / <code>aria-labelledby</code>) and mark the glyph <code>aria-hidden</code>.</li><li>Focus is visible via <code>focus-visible:ring-2</code>; the ring must not be removed.</li><li><code>disabled</code> uses the native attribute, so the control leaves the tab order and is announced as unavailable. For a loading state that must stay focusable, combine <code>aria-busy</code> with <code>components/ui/Spinner</code> instead.</li></ul>
+<h2 id="related">Related</h2>
+<ul><li><a href="../../common-button.html">CommonButton</a></li><li><a href="../../spinner.html">Spinner</a></li></ul>
+<hr />
+<p><a href="../../index.html">← All components</a> · <a href="../../migrations.html">Migration guide</a> · Documented at v0.1.0</p>
+<p class="page-footer">Generated from v0.1.0 by <code>npm run docs:build</code>. Edit the component source or <code>scripts/docs/registry.mjs</code>, never this file.</p>
+</main>
+</div>
+<script src="../../assets/docs.js" defer></script>
+</body>
+</html>

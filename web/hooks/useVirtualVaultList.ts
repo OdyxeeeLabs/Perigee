@@ -1,86 +1,50 @@
-import { useMemo, useState, useCallback } from "react";
-import type { Vault } from "@/types/vault";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { type RefObject } from "react";
 
-export interface UseVirtualVaultListOptions {
-  rowHeight?: number;
-  estimateSize?: (index: number, vault: Vault) => number;
-  overscan?: number;
-}
+import {
+  DEFAULT_VIRTUAL_HEIGHT,
+  VAULT_OVERSCAN,
+  VAULT_ROW_HEIGHT,
+} from "@/constant/vault.constants";
 
-export interface VirtualVaultItem {
-  vault: Vault;
-  index: number;
-  offsetTop: number;
-  size: number;
-}
-
+/**
+ * Provides a TanStack Virtual `rowVirtualizer` configured for the vault table.
+ *
+ * Dynamic heights are enabled via `measureElement` so rows with variable
+ * content (multi-line names, long addresses) are measured correctly at runtime
+ * rather than relying solely on the static `estimateSize` fallback.
+ *
+ * Resolves #687 — Implement virtualised lists.
+ */
 export function useVirtualVaultList(
-  vaults: Vault[],
-  options: UseVirtualVaultListOptions = {}
+  count: number,
+  parentRef: RefObject<HTMLDivElement | null>,
 ) {
-  const { rowHeight = 72, estimateSize, overscan = 8 } = options;
-  const [scrollTop, setScrollTop] = useState(0);
-  const [viewportHeight, setViewportHeight] = useState(650);
+  const rowVirtualizer = useVirtualizer({
+    count,
+    getScrollElement: () => parentRef.current,
+    
+    /**
+     * Initial height estimate used before the element is measured.
+     * Kept close to the real value to avoid layout thrash on first render.
+     */
+    estimateSize: () => VAULT_ROW_HEIGHT,
 
-  const { items, totalSize, sizes, offsets } = useMemo(() => {
-    const sizes: number[] = [];
-    const offsets: number[] = [];
-    let acc = 0;
+    overscan: VAULT_OVERSCAN,
 
-    const mapped: VirtualVaultItem[] = vaults.map((vault, index) => {
-      const size = estimateSize ? estimateSize(index, vault) : rowHeight;
-      sizes.push(size);
-      offsets.push(acc);
-      const item: VirtualVaultItem = {
-        vault,
-        index,
-        offsetTop: acc,
-        size,
-      };
-      acc += size;
-      return item;
-    });
-
-    return { items: mapped, totalSize: acc, sizes, offsets };
-  }, [vaults, rowHeight, estimateSize]);
-
-  const { startIndex, endIndex } = useMemo(() => {
-    let start = 0;
-    let end = vaults.length - 1;
-
-    for (let i = 0; i < offsets.length; i++) {
-      const bottom = offsets[i] + sizes[i];
-      if (bottom >= scrollTop) {
-        start = Math.max(0, i - overscan);
-        break;
-      }
-    }
-
-    let acc = 0;
-    for (let i = 0; i < sizes.length; i++) {
-      acc += sizes[i];
-      if (acc >= scrollTop + viewportHeight) {
-        end = Math.min(vaults.length - 1, i + overscan);
-        break;
-      }
-    }
-
-    return { startIndex: start, endIndex: end };
-  }, [scrollTop, viewportHeight, vaults.length, overscan, sizes, offsets]);
-
-  const visibleItems = items.slice(startIndex, endIndex + 1);
-
-  const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
-    setScrollTop(event.currentTarget.scrollTop);
-  }, []);
+    /**
+     * Enable auto-measurement of rendered items.
+     * Requires `data-index` and a `ref={rowVirtualizer.measureElement}`
+     * on each row element — see VaultList.tsx.
+     */
+    measureElement:
+      typeof window !== "undefined"
+        ? (element) => element.getBoundingClientRect().height
+        : undefined,
+  });
 
   return {
-    items: visibleItems,
-    totalSize,
-    handleScroll,
-    viewportHeight,
-    setViewportHeight,
-    startIndex,
-    endIndex,
+    rowVirtualizer,
+    containerHeight: DEFAULT_VIRTUAL_HEIGHT,
   };
 }

@@ -1,11 +1,15 @@
 name: E2E — API against Stellar testnet
+name: E2E — API against Stellar testnet
 
-# API-40 (#356): End-to-end test suite covering provision → report → reconcile.
+# API-40 (#356) + DX-33: End-to-end test suite covering provision → report → reconcile.
 #
 # This workflow:
 #   1. Builds the Perigee Rust backend.
 #   2. Spins it up against a SQLite database.
 #   3. Runs tests/e2e/api.e2e.test.mjs using the built-in node:test runner.
+#
+#   4. Runs the Playwright E2E suite (Chromium, Firefox, WebKit) against the
+#      web frontend using the page object model in tests/e2e/pages.
 #
 # The suite calls:
 #   • POST  /vaults             (provision)
@@ -19,6 +23,9 @@ name: E2E — API against Stellar testnet
 # Secrets required (set in repo Settings → Secrets → Actions):
 #   E2E_STELLAR_ADDRESS  — a testnet Stellar public key (G…).
 #                          Does not need a funded balance for these tests.
+#
+# Playwright browsers are installed on demand; no additional secrets are
+# required for the browser suite.
 
 on:
   push:
@@ -28,6 +35,8 @@ on:
   pull_request:
     paths:
       - "core/**"
+      - "web/**"
+      - "tests/e2e/**"
       - "tests/e2e/**"
       - ".github/workflows/e2e-testnet.yml"
 
@@ -36,6 +45,7 @@ jobs:
     name: E2E against Stellar testnet
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    timeout-minutes: 30
 
     env:
       # API server
@@ -46,6 +56,10 @@ jobs:
       APP_ENV: development
       RUST_LOG: warn
       FEE_ANALYSIS_ENABLED: "true"
+
+      # Web frontend
+      WEB_BASE_URL: http://localhost:5173
+      PLAYWRIGHT_BASE_URL: http://localhost:5173
 
       # Test tuning
       MANAGER_STELLAR_ADDRESS: ${{ secrets.E2E_STELLAR_ADDRESS || 'GDUMMY000TESTNET0ADDRESS00000000000000000000000000000000A' }}
@@ -64,6 +78,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+
+      - name: Validate database migrations
+        run: cargo test --package Perigee-core db::migrations
 
       # ── Build backend ─────────────────────────────────────────────────────
       - name: Build Perigee core
@@ -88,9 +105,56 @@ jobs:
           echo "API did not become healthy in time." >&2
           exit 1
 
+      # ── Web frontend ──────────────────────────────────────────────────────
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Start web dev server
+        working-directory: web
+        run: |
+          npm run dev -- --host 127.0.0.1 --port 5173 &
+          echo "WEB_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Wait for web to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5173; then
+              echo "Web is ready."
+              exit 0
+            fi
+            echo "Waiting for web… (attempt $i/30)"
+            sleep 2
+          done
+          echo "Web did not become healthy in time." >&2
+          exit 1
+
       # ── Run e2e tests ─────────────────────────────────────────────────────
       - name: Run e2e test suite
         run: node --test --test-reporter=spec tests/e2e/api.e2e.test.mjs
+
+      - name: Run Playwright E2E suite
+        working-directory: web
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report
+          retention-days: 7
 
       # ── Teardown ──────────────────────────────────────────────────────────
       - name: Stop API server
@@ -100,6 +164,13 @@ jobs:
             kill "$BACKEND_PID" || true
           fi
 
+      - name: Stop web server
+        if: always()
+        run: |
+          if [ -n "$WEB_PID" ]; then
+            kill "$WEB_PID" || true
+          fi
+
       - name: Upload test artefacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -107,4 +178,5 @@ jobs:
           name: e2e-failure-logs
           path: |
             e2e_test.db
+            web/test-results
           retention-days: 3

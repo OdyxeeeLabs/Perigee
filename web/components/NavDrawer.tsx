@@ -1,7 +1,11 @@
 "use client";
 
-import React, { useEffect, useRef, useCallback } from "react";
+import React, { useEffect } from "react";
 import { useTranslations } from "next-intl";
+// Issue #703: the focus trap that used to live inline in this file (and only
+// in this file) is now a shared hook, with the visibility filtering, real
+// tab-order and empty-dialog cases it did not handle.
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 interface NavDrawerProps {
   isOpen: boolean;
@@ -25,58 +29,15 @@ interface NavDrawerProps {
 export function NavDrawer({ isOpen, onClose, children, title }: NavDrawerProps) {
   const t = useTranslations();
   const resolvedTitle = title ?? t("nav.title");
-  const drawerRef = useRef<HTMLDivElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
   const titleId = "nav-drawer-title";
 
-  // Save the element that triggered the drawer so we can restore focus on close
-  useEffect(() => {
-    if (isOpen) {
-      previousFocusRef.current = document.activeElement as HTMLElement;
-    }
-  }, [isOpen]);
-
-  // Move focus into the drawer when it opens; restore when it closes
-  useEffect(() => {
-    if (!isOpen) {
-      previousFocusRef.current?.focus();
-      return;
-    }
-
-    const focusable = getFocusable(drawerRef.current);
-    focusable[0]?.focus();
-  }, [isOpen]);
-
-  // Trap Tab / Shift+Tab and handle Escape
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (e.key === "Escape") {
-        onClose();
-        return;
-      }
-
-      if (e.key !== "Tab") return;
-
-      const focusable = getFocusable(drawerRef.current);
-      if (focusable.length === 0) return;
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-
-      if (e.shiftKey) {
-        if (document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        }
-      } else {
-        if (document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    },
-    [onClose],
-  );
+  const { ref: drawerRef } = useFocusTrap<HTMLDivElement>({
+    active: isOpen,
+    onEscape: onClose,
+    // The close button is the safe default target: focusing the first nav link
+    // would scroll past the only way out of the drawer.
+    initialFocus: "custom",
+  });
 
   // Prevent body scroll while drawer is open
   useEffect(() => {
@@ -108,12 +69,11 @@ export function NavDrawer({ isOpen, onClose, children, title }: NavDrawerProps) 
         aria-modal="true"
         aria-labelledby={titleId}
         className="fixed inset-y-0 left-0 z-50 w-72 max-w-full bg-slate-900 shadow-xl flex flex-col"
-        onKeyDown={handleKeyDown}
       >
         {/* Header with close button */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
           <span id={titleId} className="text-slate-100 font-semibold">
-            {title}
+            {resolvedTitle}
           </span>
           <button
             type="button"
@@ -147,20 +107,3 @@ export function NavDrawer({ isOpen, onClose, children, title }: NavDrawerProps) 
   );
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const FOCUSABLE_SELECTOR = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  "[tabindex]:not([tabindex=\"-1\"])",
-].join(",");
-
-function getFocusable(container: HTMLElement | null): HTMLElement[] {
-  if (!container) return [];
-  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-}

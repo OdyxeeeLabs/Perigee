@@ -1,0 +1,29 @@
+{
+  "$comment": [
+    "Deployment descriptor asserted by scripts/security/verify_encryption_at_rest.py.",
+    "Every control the docs/ENCRYPTION_AT_REST.md baseline requires must be",
+    "declared here. An undeclared control reads as disabled, which is why the",
+    "validator treats a missing field as a failure rather than skipping it."
+  ],
+  "version": 1,
+  "algorithm": "AES-256-GCM",
+  "dek_wrap_mode": "AES-256-GCM",
+  "kek_provider": "aws-kms",
+  "kek_protection": "KMS key with HSM-backed storage, key policy denies root",
+  "dek_rotation_days": 365,
+  "deks_encrypted_at_rest": true,
+  "pii_fields": ["email", "phone", "full_name", "wallet_address_label"],
+  "database_tde": true,
+  "backups_encrypted": true,
+  "backup_retention_days": 35,
+  "key_access_logged": true,
+  "key_access_requires_approval": true,
+  "nonce_strategy": "96-bit random per encryption, never reused with the same DEK",
+  "aad_fields": ["record_type", "tenant_id"],
+  "notes": [
+    "AAD binds a ciphertext to its tenant and record type, so a row copied into",
+    "another tenant's table fails to decrypt rather than silently decrypting.",
+    "Logs, analytics events and error reports carry no PII; see",
+    "docs/ENCRYPTION_AT_REST.md."
+  ]
+}

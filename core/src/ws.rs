@@ -36,15 +36,23 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, State,
+        State,
     },
+    http::HeaderMap,
     response::IntoResponse,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
+use crate::backpressure::{
+    BackpressurePolicy, BackpressureStats, BoundedEventBus, BoundedSubscription, PublishOutcome,
+};
+use crate::input_sanitization::SanitizedPath;
 use crate::jobs::JobId;
 
 // ── Channel capacity ─────────────────────────────────────────────────────────
@@ -52,6 +60,30 @@ use crate::jobs::JobId;
 /// Number of events that can be buffered per broadcast channel slot before
 /// slow consumers are forced to drop events via `RecvError::Lagged`.
 const BUS_CAPACITY: usize = 256;
+const BUS_PUBLISH_TIMEOUT: Duration = Duration::from_millis(100);
+
+// ── Heartbeat & reconnection (CORE-25) ───────────────────────────────────────
+
+/// Interval between server-sent `Ping` frames on an idle connection.
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+
+/// If no `Pong` (or any inbound frame) arrives within this window the
+/// connection is considered dead: the server closes the socket so the client
+/// can reconnect, rather than leaving a zombie stream open.
+pub const PONG_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Base delay of the exponential reconnect backoff.
+pub const RECONNECT_BASE_DELAY: Duration = Duration::from_millis(500);
+
+/// Upper bound on the reconnect backoff delay.
+pub const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
+
+/// Growth factor between successive reconnect attempts.
+pub const RECONNECT_MULTIPLIER: f64 = 2.0;
+
+/// Jitter ratio (0–1) mixed into the backoff so reconnecting clients do not
+/// stampede the server in lockstep.
+pub const RECONNECT_JITTER: f64 = 0.2;
 
 // ── Event types ──────────────────────────────────────────────────────────────
 
@@ -162,25 +194,62 @@ impl SimulationEvent {
 #[derive(Clone)]
 pub struct SimulationBus {
     sender: broadcast::Sender<SimulationEvent>,
+    bounded: BoundedEventBus<SimulationEvent>,
 }
 
 impl SimulationBus {
     /// Create a new bus with the default channel capacity.
     pub fn new() -> Arc<Self> {
         let (sender, _) = broadcast::channel(BUS_CAPACITY);
-        Arc::new(Self { sender })
+        Arc::new(Self {
+            sender,
+            bounded: BoundedEventBus::new(BUS_CAPACITY, BackpressurePolicy::Wait),
+        })
     }
 
-    /// Publish an event.  Returns the number of active subscribers that
-    /// received it (0 if nobody is listening, which is perfectly fine).
     pub fn publish(&self, event: SimulationEvent) -> usize {
+        if self.bounded.is_closed() {
+            return 0;
+        }
+        if event.is_terminal() {
+            self.bounded
+                .publish_with_policy(event.clone(), BackpressurePolicy::DropOldest);
+        } else {
+            self.bounded.publish(event.clone());
+        }
         self.sender.send(event).unwrap_or(0)
     }
 
-    /// Subscribe to the bus.  The returned receiver will lag (and skip events)
-    /// if it cannot keep up with the publication rate.
+    pub async fn publish_async(&self, event: SimulationEvent) -> PublishOutcome {
+        if self.bounded.is_closed() {
+            return PublishOutcome::Closed;
+        }
+        let outcome = if event.is_terminal() {
+            self.bounded
+                .publish_with_policy(event.clone(), BackpressurePolicy::DropOldest)
+        } else {
+            self.bounded
+                .publish_async(event.clone(), Some(BUS_PUBLISH_TIMEOUT))
+                .await
+        };
+        let _ = self.sender.send(event);
+        outcome
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<SimulationEvent> {
         self.sender.subscribe()
+    }
+
+    pub fn subscribe_bounded(&self) -> BoundedSubscription<SimulationEvent> {
+        self.bounded.subscribe()
+    }
+
+    pub fn backpressure_stats(&self) -> BackpressureStats {
+        self.bounded.stats()
+    }
+
+    pub fn close(&self) {
+        self.bounded.close();
     }
 
     // ── Convenience constructors ─────────────────────────────────────────
@@ -268,8 +337,159 @@ impl SimulationBus {
 impl Default for SimulationBus {
     fn default() -> Self {
         let (sender, _) = broadcast::channel(BUS_CAPACITY);
-        Self { sender }
+        Self {
+            sender,
+            bounded: BoundedEventBus::new(BUS_CAPACITY, BackpressurePolicy::Wait),
+        }
     }
+}
+
+// ── Connection lifecycle (CORE-25) ───────────────────────────────────────────
+
+/// Lifecycle state of a WebSocket session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionState {
+    /// The wire is up and the server is streaming events and heartbeats.
+    Connected,
+    /// The wire dropped; the client is waiting [`reconnect_backoff`] before
+    /// dialling again.
+    Reconnecting { attempt: u32 },
+    /// Terminal — the session will not be resumed (e.g. job finished).
+    Closed,
+}
+
+impl ConnectionState {
+    /// Returns `true` while a client may still dial back in.
+    pub fn is_resumable(&self) -> bool {
+        !matches!(self, Self::Closed)
+    }
+}
+
+/// Exponential backoff delay (with jitter) before the `attempt`-th reconnect,
+/// where `0` is the first attempt after a drop.
+///
+/// ```text
+/// delay = min(max_delay, base * multiplier^min(attempt, cap))
+///       × (1 - jitter + 2·jitter·rand)
+/// ```
+///
+/// Bounded by [`RECONNECT_MAX_DELAY`]; mixed with [`RECONNECT_JITTER`] so a
+/// field of dropped clients reconnects over a spread of delays.
+pub fn reconnect_backoff(attempt: u32) -> Duration {
+    let exponent = attempt.min(20) as i32;
+    let raw = RECONNECT_BASE_DELAY.as_millis() as f64 * RECONNECT_MULTIPLIER.powi(exponent);
+    let capped = raw.min(RECONNECT_MAX_DELAY.as_millis() as f64);
+    let rnd = rand::random::<f64>();
+    let jittered = capped * (1.0 - RECONNECT_JITTER + (2.0 * RECONNECT_JITTER * rnd));
+    Duration::from_millis(jittered.max(1.0) as u64)
+}
+
+// ── Simulation memoization (CORE-24) ─────────────────────────────────────────
+
+/// Upper bound on the number of terminal results retained in the memo.
+const MEMO_MAX_ENTRIES: usize = 1024;
+
+/// Content-addressable cache of simulation results, keyed by a hash of the
+/// request inputs (contract + function + serialised inputs).
+///
+/// When a request matches one already completed — e.g. a WebSocket client
+/// reconnecting after its stream dropped, or a frequently-run analysis — the
+/// cached terminal result is replayed instead of re-running the full
+/// simulation (CORE-24).
+///
+/// This module is deliberately small and self-contained: wiring it into the
+/// simulation runner and the WebSocket handler is left to the contributors who
+/// own those modules.
+pub struct SimulationMemo {
+    entries: Mutex<HashMap<String, SimulationEvent>>,
+}
+
+impl SimulationMemo {
+    /// Create an empty memo.
+    pub fn new() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Content-addressable request hash over length-prefixed input segments.
+    ///
+    /// Length-prefixes each segment (mirroring `audit_log`) so no two different
+    /// splits of the same bytes can collide.
+    pub fn request_hash(segments: &[&[u8]]) -> String {
+        let mut hasher = Sha256::new();
+        for segment in segments {
+            hasher.update((segment.len() as u64).to_be_bytes());
+            hasher.update(segment);
+        }
+        hex::encode(hasher.finalize())
+    }
+
+    /// Number of cached results.
+    pub fn len(&self) -> usize {
+        self.entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    }
+
+    /// Whether the memo holds no results.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Store `event` under `request_hash` if it is terminal, evicting an
+    /// arbitrary entry once the memo reaches [`MEMO_MAX_ENTRIES`].
+    pub fn store(&self, request_hash: &str, event: &SimulationEvent) {
+        if !event.is_terminal() {
+            return;
+        }
+
+        let mut guard = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entries = &mut *guard;
+
+        if entries.len() >= MEMO_MAX_ENTRIES && !entries.contains_key(request_hash) {
+            if let Some(stale) = entries.keys().next().cloned() {
+                entries.remove(&stale);
+            }
+        }
+
+        entries.insert(request_hash.to_string(), event.clone());
+    }
+
+    /// Look up a previously stored terminal result, if any.
+    pub fn get(&self, request_hash: &str) -> Option<SimulationEvent> {
+        self.entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(request_hash)
+            .cloned()
+    }
+}
+
+impl Default for SimulationMemo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Process-wide memo backing [`memoize_result`] and [`memoized_result`].
+fn global_memo() -> &'static SimulationMemo {
+    static MEMO: OnceLock<SimulationMemo> = OnceLock::new();
+    MEMO.get_or_init(SimulationMemo::new)
+}
+
+/// Record a terminal simulation result under its request hash (CORE-24).
+pub fn memoize_result(request_hash: &str, event: &SimulationEvent) {
+    global_memo().store(request_hash, event);
+}
+
+/// Replay a previously memoised terminal result, if the request has been seen.
+pub fn memoized_result(request_hash: &str) -> Option<SimulationEvent> {
+    global_memo().get(request_hash)
 }
 
 // ── Axum extractor alias ─────────────────────────────────────────────────────
@@ -300,19 +520,68 @@ pub struct WsState {
 )]
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
-    Path(job_id): Path<String>,
+    SanitizedPath(job_id): SanitizedPath<String>,
     State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, job_id, state))
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    ws.on_upgrade(move |socket| handle_socket(socket, job_id, state, request_id))
 }
 
-async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::AppState>) {
-    tracing::info!(job_id = %job_id, "WebSocket client connected");
+async fn handle_socket(
+    mut socket: WebSocket,
+    job_id: String,
+    state: Arc<crate::AppState>,
+    request_id: String,
+) {
+    tracing::info!(request_id = %request_id, job_id = %job_id, "WebSocket client connected");
 
     let mut rx = state.simulation_bus.subscribe();
+    let shutdown = state.shutdown.clone();
+    let mut rx = state.simulation_bus.subscribe_bounded();
+
+    // CORE-25: heartbeat cadence + liveness window so dead sessions are closed
+    // instead of left half-open.
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_pong = Instant::now();
+    let mut connection_state = ConnectionState::Connected;
 
     loop {
         tokio::select! {
+            _ = shutdown.cancelled() => {
+                connection_state = ConnectionState::Closed;
+                let _ = socket.send(Message::Close(None)).await;
+                break;
+            }
+
+            // CORE-25: send a periodic ping and watch for the pong timeout.
+            _ = heartbeat.tick() => {
+                if last_pong.elapsed() >= PONG_TIMEOUT {
+                    tracing::warn!(
+                        request_id = %request_id,
+                        job_id = %job_id,
+                        elapsed_ms = last_pong.elapsed().as_millis(),
+                        "WebSocket heartbeat missed — closing connection for reconnection"
+                    );
+                    connection_state = ConnectionState::Reconnecting { attempt: 0 };
+                    break;
+                }
+
+                if socket
+                    .send(Message::Ping("perigee-heartbeat".into()))
+                    .await
+                    .is_err()
+                {
+                    connection_state = ConnectionState::Reconnecting { attempt: 0 };
+                    break;
+                }
+            }
+
             // Receive next event from the bus
             result = rx.recv() => {
                 match result {
@@ -328,8 +597,9 @@ async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::
                             Ok(s) => s,
                             Err(e) => {
                                 tracing::error!(
+                                    request_id = %request_id,
                                     job_id = %job_id,
-                                    error = %e,
+                                    error = %crate::log_redaction::redact_display(&e),
                                     "Failed to serialise SimulationEvent"
                                 );
                                 continue;
@@ -338,17 +608,20 @@ async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::
 
                         if socket.send(Message::Text(json)).await.is_err() {
                             // Client disconnected
+                            connection_state = ConnectionState::Reconnecting { attempt: 0 };
                             break;
                         }
 
                         if is_terminal {
                             // Close gracefully after the terminal event
+                            connection_state = ConnectionState::Closed;
                             let _ = socket.send(Message::Close(None)).await;
                             break;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(
+                            request_id = %request_id,
                             job_id = %job_id,
                             skipped = n,
                             "WebSocket consumer lagged — events were skipped"
@@ -357,6 +630,8 @@ async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         // Bus was dropped — server shutting down
+                    Err(_) => {
+                        connection_state = ConnectionState::Closed;
                         break;
                     }
                 }
@@ -366,16 +641,29 @@ async fn handle_socket(mut socket: WebSocket, job_id: String, state: Arc<crate::
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Ping(payload))) => {
+                        last_pong = Instant::now();
                         let _ = socket.send(Message::Pong(payload)).await;
                     }
-                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Pong(_))) => {
+                        // Pong in reply to our heartbeat — the client is alive.
+                        last_pong = Instant::now();
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        connection_state = ConnectionState::Closed;
+                        break;
+                    }
                     _ => {} // ignore text/binary frames from the client
                 }
             }
         }
     }
 
-    tracing::info!(job_id = %job_id, "WebSocket client disconnected");
+    tracing::info!(
+        request_id = %request_id,
+        job_id = %job_id,
+        connection_state = ?connection_state,
+        "WebSocket client disconnected"
+    );
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -456,5 +744,87 @@ mod tests {
         // publish with zero subscribers — should silently return 0
         let n = bus.publish(SimulationBus::progress(&fake_id, 10, "start"));
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn reconnect_backoff_is_bounded_and_grows() {
+        let first = reconnect_backoff(0);
+        let later = reconnect_backoff(4);
+
+        // Always at least 1 ms (never a busy spin) and never beyond the cap.
+        assert!(first.as_millis() >= 1);
+        assert!(later.as_millis() <= RECONNECT_MAX_DELAY.as_millis());
+
+        // Enough backoff growth that a later attempt is strictly later in
+        // expectation — we assert within jitter bounds for attempt 0 vs 4.
+        let raw_0 = RECONNECT_BASE_DELAY.as_millis() as f64;
+        let raw_4 = raw_0 * RECONNECT_MULTIPLIER.powi(4);
+        assert!(first.as_millis() as f64 <= raw_0 * 1.2);
+        assert!(later.as_millis() as f64 <= raw_4.min(RECONNECT_MAX_DELAY.as_millis() as f64) * 1.2);
+        assert!(later.as_millis() as f64 >= raw_4 * 0.4);
+    }
+
+    #[test]
+    fn reconnect_backoff_caps_at_max_delay() {
+        let capped = reconnect_backoff(100);
+        let max_ms = RECONNECT_MAX_DELAY.as_millis() as f64;
+        assert!(capped.as_millis() as f64 >= max_ms * 0.4);
+        assert!(capped.as_millis() as f64 <= max_ms * 1.2);
+    }
+
+    #[test]
+    fn connection_state_resumability() {
+        assert!(ConnectionState::Connected.is_resumable());
+        assert!(ConnectionState::Reconnecting { attempt: 3 }.is_resumable());
+        assert!(!ConnectionState::Closed.is_resumable());
+    }
+
+    #[test]
+    fn request_hash_is_content_addressable() {
+        // Same inputs → same hash.
+        let a = SimulationMemo::request_hash(&["contract:1".as_bytes(), "fn=mint".as_bytes()]);
+        let b = SimulationMemo::request_hash(&["contract:1".as_bytes(), "fn=mint".as_bytes()]);
+        assert_eq!(a, b);
+
+        // Different inputs → different hash.
+        let c = SimulationMemo::request_hash(&["contract:1".as_bytes(), "fn=burn".as_bytes()]);
+        assert_ne!(a, c);
+
+        // Length-prefix encoding keeps splits unambiguous.
+        let split = SimulationMemo::request_hash(&["ab".as_bytes(), "c".as_bytes()]);
+        let joined = SimulationMemo::request_hash(&["a".as_bytes(), "bc".as_bytes()]);
+        assert_ne!(split, joined);
+    }
+
+    #[tokio::test]
+    async fn memo_stores_and_replays_terminal_results() {
+        let memo = SimulationMemo::new();
+        let fake_id = JobId::new();
+        let resources = crate::simulation::SorobanResources {
+            cpu_instructions: 1000,
+            ram_bytes: 2048,
+            ledger_read_bytes: 128,
+            ledger_write_bytes: 64,
+            transaction_size_bytes: 512,
+        };
+        let completed = SimulationBus::completed(&fake_id, &resources, 500);
+        let hash = SimulationMemo::request_hash(&["contract:1".as_bytes(), "fn=mint".as_bytes()]);
+
+        assert!(memo.get(&hash).is_none());
+        memo.store(&hash, &completed);
+
+        let replayed = memo.get(&hash).expect("stored terminal result");
+        assert!(replayed.is_terminal());
+        assert_eq!(replayed.job_id(), fake_id.to_string());
+    }
+
+    #[test]
+    fn memo_ignores_non_terminal_events() {
+        let memo = SimulationMemo::new();
+        let fake_id = JobId::new();
+        // A progress event must never be memoised — only terminal results.
+        let progress = SimulationBus::progress(&fake_id, 50, "running");
+        memo.store("some-hash", &progress);
+        assert!(memo.is_empty());
     }
 }
