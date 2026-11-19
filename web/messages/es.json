@@ -4,5 +4,15 @@
   "palette.title": "Menú de comandos",
   "a11y.languageSwitcher": "Idioma",
   "a11y.highContrast": "Alto contraste",
-  "a11y.reduceMotion": "Reducir movimiento"
+  "a11y.reduceMotion": "Reducir movimiento",
+  "managers.metaTitle": "Gestores | Perigee",
+  "managers.metaDescription": "Explora los gestores de patrimonio registrados en la plataforma Perigee.",
+  "managers.title": "Gestores",
+  "managers.subtitle": "Explora los gestores de patrimonio registrados que ofrecen carteras impulsadas por Perigee.",
+  "managers.empty": "No se encontraron gestores. Vuelve a consultar más tarde.",
+  "admin.managers.directoryMetaTitle": "Administración de gestores | Perigee",
+  "admin.managers.directoryMetaDescription": "Gestiona los gestores de patrimonio de marca blanca en la plataforma Perigee.",
+  "admin.managers.directoryTitle": "Administración de gestores",
+  "admin.managers.directorySubtitle": "Gestiona los gestores de patrimonio de marca blanca y las asignaciones de sus carteras de clientes.",
+  "admin.managers.directoryEmpty": "No hay gestores configurados. Usa la API para aprovisionar carteras."
 }

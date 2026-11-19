@@ -1,5 +1,7 @@
 import type { KeyboardEvent } from "react";
 import type { Vault } from "@/types/vault";
+import { useLocale } from "@/components/LocaleSync";
+import { FormattedAmount, FormattedPercent } from "@/components/ui/FormattedAmount";
 import { PrefetchLink } from "./PrefetchLink";
 
 export interface VaultRowProps {
@@ -31,6 +33,7 @@ export function VaultRow({
   onFocus,
 }: VaultRowProps) {
   const interactive = Boolean(onClick);
+  const locale = useLocale();
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (onClick && (event.key === "Enter" || event.key === " ")) {
@@ -71,8 +74,12 @@ export function VaultRow({
         <span className="text-xs text-slate-400">{vault.owner}</span>
       </div>
       <div className="flex items-center gap-4 text-xs text-slate-400">
-        <span className="font-mono text-cyan-400">{vault.balance.toLocaleString()} {vault.asset}</span>
-        <span className="text-emerald-400">{vault.apy !== undefined ? `${vault.apy}%` : "0.0%"}</span>
+        <span className="font-mono text-cyan-400">
+          <FormattedAmount value={vault.balance} locale={locale} asset={vault.asset} />
+        </span>
+        <span className="text-emerald-400">
+          <FormattedPercent value={vault.apy ?? 0} locale={locale} digits={2} />
+        </span>
         <span
           className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
             vault.status === "ACTIVE"

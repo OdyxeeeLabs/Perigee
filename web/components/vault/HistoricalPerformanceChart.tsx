@@ -1,6 +1,8 @@
 import { useId } from "react";
 import { formatNumber } from "@/lib/locale/format";
 import type { VaultHistoryPoint } from "@/types/vault";
+import { useLocale } from "@/components/LocaleSync";
+import { formatAmount } from "@/lib/locale/format";
 
 export interface HistoricalPerformanceChartProps {
   history: VaultHistoryPoint[];
@@ -34,6 +36,7 @@ export function HistoricalPerformanceChart({
   height = 120,
   className = "",
 }: HistoricalPerformanceChartProps) {
+  const locale = useLocale();
   const id = useId();
   const descriptionId = `${id}-description`;
 
@@ -81,71 +84,32 @@ export function HistoricalPerformanceChart({
     `Lowest ${min.toLocaleString()}, highest ${max.toLocaleString()}.`;
 
   return (
-    <figure className={className} style={{ width }} data-testid="historical-performance-chart">
-    <div className={`w-full ${className}`}>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        width="100%"
-        height={height}
-        role="img"
-        aria-label={`Historical ${metricLabel} chart, ${history.length} data points, trending ${
-          trendUp ? "up" : "down"
-        } from ${first.toLocaleString()} to ${last.toLocaleString()}`}
-        aria-describedby={descriptionId}
-        data-testid="historical-performance-chart-svg"
-        aria-label={`Historical ${metric === "apy" ? "APY" : "TVL"} chart, ${history.length} data points, trending ${
-          trendUp ? "up" : "down"
-        } from ${formatNumber(first)} to ${formatNumber(last)}`}
-      >
-        <path d={areaPath} fill={trendUp ? "rgba(52,211,153,0.12)" : "rgba(248,113,113,0.12)"} stroke="none" />
-        <polyline
-          points={polyline}
-          fill="none"
-          stroke={trendUp ? "#34d399" : "#f87171"}
-          strokeWidth={2}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-        <circle
-          cx={points[points.length - 1][0]}
-          cy={points[points.length - 1][1]}
-          r={3}
-          fill={trendUp ? "#34d399" : "#f87171"}
-        />
-      </svg>
-      <figcaption id={descriptionId} className="sr-only" data-testid="historical-performance-chart-description">
-        {description}
-      </figcaption>
-      <table className="sr-only" data-testid="historical-performance-chart-data">
-        <caption>
-          Historical {metricLabel} values from {startTime} to {endTime}
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Date</th>
-            <th scope="col">{metricLabel}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {history.map((point, index) => (
-            <tr key={`${point.timestamp}-${index}`}>
-              <th scope="row">{formatDate(point.timestamp)}</th>
-              <td>{point[metric].toLocaleString()}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </figure>
-      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-400">
-        <span>First: <strong className="font-semibold text-slate-200">{formatNumber(first)}</strong></span>
-        <span>Latest: <strong className="font-semibold text-slate-200">{formatNumber(last)}</strong></span>
-        <span>
-          Trend:{" "}
-          <strong className={trendUp ? "font-semibold text-emerald-400" : "font-semibold text-red-400"}>
-            {trendUp ? "Up" : "Down"}
-          </strong>
-        </span>
-      </div>
-    </div>
+    <svg
+      data-no-mirror-rtl="true"
+      viewBox={`0 0 ${width} ${height}`}
+      width="100%"
+      height={height}
+      className={className}
+      role="img"
+      aria-label={`Historical ${metric === "apy" ? "APY" : "TVL"} chart, ${history.length} data points, trending ${
+        trendUp ? "up" : "down"
+      } from ${formatAmount(first, locale)} to ${formatAmount(last, locale)}`}
+    >
+      <path d={areaPath} fill={trendUp ? "rgba(52,211,153,0.12)" : "rgba(248,113,113,0.12)"} stroke="none" />
+      <polyline
+        points={polyline}
+        fill="none"
+        stroke={trendUp ? "#34d399" : "#f87171"}
+        strokeWidth={2}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <circle
+        cx={points[points.length - 1][0]}
+        cy={points[points.length - 1][1]}
+        r={3}
+        fill={trendUp ? "#34d399" : "#f87171"}
+      />
+    </svg>
   );
 }

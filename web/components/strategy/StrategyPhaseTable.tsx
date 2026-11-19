@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { useLocale } from '@/components/LocaleSync';
 import { DataTable, type ColumnDef } from '../ui/DataTable';
 import { strategyPhases, type StrategyPhase } from './strategyPhases';
 
@@ -25,6 +26,8 @@ const columns: ColumnDef<StrategyPhase>[] = [
 ];
 
 function StrategyPhaseTableImpl() {
+  const locale = useLocale();
+
   return (
     <DataTable<StrategyPhase>
       columns={columns}
@@ -36,6 +39,7 @@ function StrategyPhaseTableImpl() {
       filterPlaceholder="Filter phases…"
       emptyMessage="No matching phases."
       data-testid="strategy-phase-table"
+      locale={locale}
     />
   );
 }

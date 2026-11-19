@@ -27,10 +27,9 @@ import {
   Zap,
 } from "lucide-react";
 import { SEO } from "../../components/SEO";
-import { useDateRange } from "../../hooks/useDateRange";
-import { DATE_RANGE_PRESETS, dateRangeToApiParams } from "../../lib/dateRange";
-import { AnalyticsSection } from "../../components/analytics/AnalyticsSection";
-import { useAnalyticsSection } from "../../hooks/useAnalyticsSection";
+import { useLocale } from "@/components/LocaleSync";
+import { FormattedPercent } from "@/components/ui/FormattedAmount";
+import { formatNumber, formatTime, pluralize } from "@/lib/locale/format";
 import {
   trackTelemetryEvent,
   trackFunnelEvent,
@@ -50,6 +49,7 @@ async function loadTelemetry(timeframe: string): Promise<TelemetrySummary> {
 }
 
 export default function AnalyticsDashboardPage() {
+  const locale = useLocale();
   const [summary, setSummary] = useState<TelemetrySummary | null>(null);
   const [loading, setLoading] = useState(true);
   const {
@@ -344,7 +344,7 @@ export default function AnalyticsDashboardPage() {
                     <Activity className="h-4 w-4 text-cyan-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-white">
-                    {overview.state.data?.sampleCount?.toLocaleString() || 0}
+                    {summary ? formatNumber(summary.sampleCount, locale, { maximumFractionDigits: 0 }) : "0"}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">In-memory circular buffer</p>
                 </div>
@@ -355,7 +355,7 @@ export default function AnalyticsDashboardPage() {
                     <UserCheck className="h-4 w-4 text-emerald-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-emerald-400">
-                    {overview.state.data?.uniqueSessions?.toLocaleString() || 0}
+                    {summary ? formatNumber(summary.uniqueSessions, locale, { maximumFractionDigits: 0 }) : "0"}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">Zero cookies / rotating hash</p>
                 </div>
@@ -366,7 +366,7 @@ export default function AnalyticsDashboardPage() {
                     <TrendingUp className="h-4 w-4 text-cyan-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-white">
-                    {funnel.overallConversionRate}%
+                    <FormattedPercent value={funnel.overallConversionRate} locale={locale} digits={1} />
                   </p>
                   <p className="mt-1 text-[11px] text-cyan-400/80">Connect → Vault → Deposit</p>
                 </div>
@@ -377,7 +377,7 @@ export default function AnalyticsDashboardPage() {
                     <ShieldAlert className="h-4 w-4 text-amber-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-amber-400">
-                    {overview.state.data?.categoryCounts?.error || 0}
+                    {formatNumber(summary?.categoryCounts?.error ?? 0, locale, { maximumFractionDigits: 0 })}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">Sanitized error traces</p>
                 </div>
@@ -388,7 +388,7 @@ export default function AnalyticsDashboardPage() {
                     <Zap className="h-4 w-4 text-emerald-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-white">
-                    {overview.state.data?.categoryCounts?.performance || 0}
+                    {formatNumber(summary?.categoryCounts?.performance ?? 0, locale, { maximumFractionDigits: 0 })}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">LCP, INP, CLS, TTFB, Hydration</p>
                 </div>
@@ -405,7 +405,7 @@ export default function AnalyticsDashboardPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="rounded-full bg-cyan-950 px-3 py-1 text-xs font-semibold text-cyan-400 border border-cyan-800">
-                      Overall: {funnel.overallConversionRate}%
+                      Overall: <FormattedPercent value={funnel.overallConversionRate} locale={locale} digits={1} />
                     </span>
                   </div>
                 </div>
@@ -423,11 +423,13 @@ export default function AnalyticsDashboardPage() {
                       </div>
                       <Wallet className="h-4 w-4 text-cyan-400" />
                     </div>
-                    <p className="text-2xl font-bold text-white">{funnel.walletConnect}</p>
+                    <p className="text-2xl font-bold text-white">{formatNumber(funnel.walletConnect, locale, { maximumFractionDigits: 0 })}</p>
                     <p className="text-xs text-slate-500 mt-1">Unique wallet connections</p>
                     <div className="mt-4 pt-3 border-t border-slate-900 flex items-center justify-between text-xs">
                       <span className="text-slate-400">Step 1 → 2 Rate</span>
-                      <span className="font-semibold text-cyan-300">{funnel.walletToVaultRate}%</span>
+                      <span className="font-semibold text-cyan-300">
+                        <FormattedPercent value={funnel.walletToVaultRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
 
@@ -442,11 +444,13 @@ export default function AnalyticsDashboardPage() {
                       </div>
                       <Eye className="h-4 w-4 text-cyan-400" />
                     </div>
-                    <p className="text-2xl font-bold text-white">{funnel.vaultView}</p>
+                    <p className="text-2xl font-bold text-white">{formatNumber(funnel.vaultView, locale, { maximumFractionDigits: 0 })}</p>
                     <p className="text-xs text-slate-500 mt-1">Vault details viewed</p>
                     <div className="mt-4 pt-3 border-t border-slate-900 flex items-center justify-between text-xs">
                       <span className="text-slate-400">Step 2 → 3 Rate</span>
-                      <span className="font-semibold text-cyan-300">{funnel.vaultToDepositRate}%</span>
+                      <span className="font-semibold text-cyan-300">
+                        <FormattedPercent value={funnel.vaultToDepositRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
 
@@ -461,11 +465,13 @@ export default function AnalyticsDashboardPage() {
                       </div>
                       <CheckCircle2 className="h-4 w-4 text-emerald-400" />
                     </div>
-                    <p className="text-2xl font-bold text-emerald-400">{funnel.deposit}</p>
+                    <p className="text-2xl font-bold text-emerald-400">{formatNumber(funnel.deposit, locale, { maximumFractionDigits: 0 })}</p>
                     <p className="text-xs text-slate-500 mt-1">Deposits completed</p>
                     <div className="mt-4 pt-3 border-t border-emerald-900/60 flex items-center justify-between text-xs">
                       <span className="text-slate-400">Total Funnel Success</span>
-                      <span className="font-semibold text-emerald-300">{funnel.overallConversionRate}%</span>
+                      <span className="font-semibold text-emerald-300">
+                        <FormattedPercent value={funnel.overallConversionRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -490,32 +496,31 @@ export default function AnalyticsDashboardPage() {
                         <span className="text-xs text-slate-500">Sorted by count</span>
                       </div>
 
-                      {topFeatures.length === 0 ? (
-                        <div className="py-8 text-center text-xs text-slate-500">
-                          No feature usage recorded yet in this timeframe.
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {topFeatures.map((feat) => {
-                            const maxCount = topFeatures[0]?.count || 1;
-                            const pct = Math.round((feat.count / maxCount) * 100);
-                            return (
-                              <div key={feat.name} className="space-y-1">
-                                <div className="flex items-center justify-between text-xs">
-                                  <span className="font-mono text-cyan-300">{feat.name}</span>
-                                  <span className="font-semibold text-white">{feat.count}</span>
-                                </div>
-                                <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
-                                  <div
-                                    className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-500"
-                                    style={{ width: `${pct}%` }}
-                                  />
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                  {(summary?.topFeatures || []).length === 0 ? (
+                    <div className="py-8 text-center text-xs text-slate-500">
+                      No feature usage recorded yet in this timeframe.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {summary?.topFeatures.map((feat) => {
+                        const maxCount = summary.topFeatures[0]?.count || 1;
+                        const pct = Math.round((feat.count / maxCount) * 100);
+                        return (
+                          <div key={feat.name} className="space-y-1">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-mono text-cyan-300">{feat.name}</span>
+                              <span className="font-semibold text-white">{formatNumber(feat.count, locale, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                            <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                              <div
+                                data-mirror-rtl="true"
+                                className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-500"
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </AnalyticsSection>
@@ -536,9 +541,26 @@ export default function AnalyticsDashboardPage() {
                         </span>
                       </div>
 
-                      {recentErrors.length === 0 ? (
-                        <div className="py-8 text-center text-xs text-emerald-400">
-                          ✓ No errors recorded in this timeframe. System healthy.
+                  {(summary?.recentErrors || []).length === 0 ? (
+                    <div className="py-8 text-center text-xs text-emerald-400">
+                      ✓ No errors recorded in this timeframe. System healthy.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {summary?.recentErrors.map((err, idx) => (
+                        <div
+                          key={idx}
+                          className="rounded-xl border border-red-950/60 bg-red-950/20 p-3 text-xs"
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-mono text-[11px] font-semibold text-red-300 truncate max-w-[200px]">
+                              {err.component || "Global error"}
+                            </span>
+                            <span className="rounded bg-red-900/60 px-2 py-0.5 text-[10px] text-red-200">
+                              {formatNumber(err.count, locale, { maximumFractionDigits: 0 })} {pluralize(err.count, { one: "occurrence", other: "occurrences" }, locale)}
+                            </span>
+                          </div>
+                          <p className="text-slate-300 font-mono text-[11px] break-all">{err.message}</p>
                         </div>
                       ) : (
                         <div className="space-y-3">
@@ -591,18 +613,21 @@ export default function AnalyticsDashboardPage() {
                           </p>
                         </div>
                       </div>
-                      <span className="text-2xl font-bold text-white">{funnel.walletConnect}</span>
+                      <span className="text-2xl font-bold text-white">{formatNumber(funnel.walletConnect, locale, { maximumFractionDigits: 0 })}</span>
                     </div>
 
                     <div className="mt-4 flex items-center gap-4 text-xs text-slate-400">
                       <span>Conversion to Vault View:</span>
                       <div className="h-2 flex-1 rounded-full bg-slate-800 overflow-hidden">
                         <div
+                          data-mirror-rtl="true"
                           className="h-full bg-cyan-500 rounded-full"
                           style={{ width: `${Math.min(funnel.walletToVaultRate, 100)}%` }}
                         />
                       </div>
-                      <span className="font-bold text-cyan-300">{funnel.walletToVaultRate}%</span>
+                      <span className="font-bold text-cyan-300">
+                        <FormattedPercent value={funnel.walletToVaultRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
 
@@ -620,18 +645,21 @@ export default function AnalyticsDashboardPage() {
                           </p>
                         </div>
                       </div>
-                      <span className="text-2xl font-bold text-white">{funnel.vaultView}</span>
+                      <span className="text-2xl font-bold text-white">{formatNumber(funnel.vaultView, locale, { maximumFractionDigits: 0 })}</span>
                     </div>
 
                     <div className="mt-4 flex items-center gap-4 text-xs text-slate-400">
                       <span>Conversion to Deposit:</span>
                       <div className="h-2 flex-1 rounded-full bg-slate-800 overflow-hidden">
                         <div
+                          data-mirror-rtl="true"
                           className="h-full bg-emerald-500 rounded-full"
                           style={{ width: `${Math.min(funnel.vaultToDepositRate, 100)}%` }}
                         />
                       </div>
-                      <span className="font-bold text-emerald-300">{funnel.vaultToDepositRate}%</span>
+                      <span className="font-bold text-emerald-300">
+                        <FormattedPercent value={funnel.vaultToDepositRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
 
@@ -649,12 +677,14 @@ export default function AnalyticsDashboardPage() {
                           </p>
                         </div>
                       </div>
-                      <span className="text-2xl font-bold text-emerald-400">{funnel.deposit}</span>
+                      <span className="text-2xl font-bold text-emerald-400">{formatNumber(funnel.deposit, locale, { maximumFractionDigits: 0 })}</span>
                     </div>
 
                     <div className="mt-4 pt-4 border-t border-emerald-900/60 flex items-center justify-between text-xs">
                       <span className="text-slate-300 font-medium">End-to-End Funnel Conversion:</span>
-                      <span className="text-lg font-bold text-emerald-300">{funnel.overallConversionRate}%</span>
+                      <span className="text-lg font-bold text-emerald-300">
+                        <FormattedPercent value={funnel.overallConversionRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -696,7 +726,7 @@ export default function AnalyticsDashboardPage() {
                 {() => (
               <div className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden backdrop-blur">
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
+                  <table className="w-full text-start text-xs">
                     <thead className="border-b border-slate-800 bg-slate-950/80 text-slate-400">
                       <tr>
                         <th className="px-4 py-3 font-semibold">Timestamp</th>
@@ -716,7 +746,7 @@ export default function AnalyticsDashboardPage() {
                         filteredEvents.map((ev, i) => (
                           <tr key={i} className="hover:bg-slate-800/30 transition-colors">
                             <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
-                              {ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : "Just now"}
+                              {ev.timestamp ? formatTime(ev.timestamp, locale) : "Just now"}
                             </td>
                             <td className="px-4 py-3">
                               <span

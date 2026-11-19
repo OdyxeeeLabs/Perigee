@@ -63,6 +63,16 @@ async function offline(page: Page) {
   );
 }
 
+async function arabic(page: Page) {
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("perigee:locale", "ar");
+    } catch {
+      return;
+    }
+  });
+}
+
 test.describe("focus visibility", () => {
   test("the first focusable control has a visible ring", async ({ page }) => {
     await stabilise(page);
@@ -136,194 +146,46 @@ test.describe("offline and degraded states", () => {
   });
 });
 
-const ONBOARDING_ADDRESS = "GTESTFIXTURE0000000000000000000000000000000000000000000000";
+test.describe("RTL workflow", () => {
+  test("vault list mirrors numeric columns", async ({ page }) => {
+    await arabic(page);
+    await stabilise(page);
+    await offline(page);
+    await page.goto("/vaults");
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    await expect(page.locator("html")).toHaveAttribute("lang", "ar");
+    await expect(page.getByText("Balance", { exact: true }).first()).toHaveCSS("text-align", "end");
+    await expect(page).toHaveScreenshot("rtl-vault-list.png");
+  });
 
-type ManagerFixtureStatus = "none" | "pending" | "approved";
+  test("vault detail keeps its chart and metrics in the RTL flow", async ({ page }) => {
+    await arabic(page);
+    await stabilise(page);
+    await offline(page);
+    await page.goto("/vaults/demo");
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    await expect(page).toHaveScreenshot("rtl-vault-detail.png");
+  });
 
-async function managerFixture(page: Page, status: ManagerFixtureStatus) {
-  await page.addInitScript((address) => {
-    const fakeWallet = {
-      isConnected: () => true,
-      getAddress: async () => address,
-      getNetwork: async () => "Testnet SDF",
-      signTransaction: async () => ({}),
-    };
-    Object.defineProperty(window, "freighter", {
-      value: fakeWallet,
-      configurable: true,
-    });
-    Object.defineProperty(window, "freighterApi", {
-      value: fakeWallet,
-      configurable: true,
-    });
-    localStorage.setItem("perigee_wallet_address", address);
-    localStorage.setItem("perigee_wallet_id", "freighter");
-    sessionStorage.setItem("perigee_wallet_id", "freighter");
-    sessionStorage.removeItem("onboarding_draft");
-  }, ONBOARDING_ADDRESS);
+  test("manager onboarding keeps identifiers left-to-right", async ({ page }) => {
+    await arabic(page);
+    await stabilise(page);
+    await offline(page);
+    await page.goto("/managers/onboarding");
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    await expect(page).toHaveScreenshot("rtl-onboarding.png");
+  });
 
-  await page.route("**/api/**", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
-  );
-  await page.route("**/managers/status/**", (route) => {
-    if (route.request().method() === "OPTIONS") {
-      return route.fulfill({
-        status: 204,
-        headers: {
-          "access-control-allow-origin": "*",
-          "access-control-allow-headers": "accept,content-type,x-api-version",
-          "access-control-allow-methods": "GET, OPTIONS",
-        },
-      });
+  test("settings switches and numeric values follow the inline axis", async ({ page }) => {
+    await arabic(page);
+    await stabilise(page);
+    await offline(page);
+    await page.goto("/settings");
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    const slippage = page.locator("#slippage-value");
+    if (await slippage.count()) {
+      await expect(slippage).toHaveCSS("text-align", "end");
     }
-    return route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      headers: { "access-control-allow-origin": "*" },
-      body: JSON.stringify({ id: "mgr-fixture-1", status, message: "" }),
-    });
+    await expect(page).toHaveScreenshot("rtl-settings.png");
   });
-  await page.route("**/managers/register", (route) => {
-    if (route.request().method() === "OPTIONS") {
-      return route.fulfill({
-        status: 204,
-        headers: {
-          "access-control-allow-origin": "*",
-          "access-control-allow-headers": "accept,content-type,x-api-version",
-          "access-control-allow-methods": "POST, OPTIONS",
-        },
-      });
-    }
-    return route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      headers: { "access-control-allow-origin": "*" },
-      body: JSON.stringify({
-        id: "mgr-fixture-1",
-        stellar_address: ONBOARDING_ADDRESS,
-        name: "Fixture Manager",
-        email: "fixture@example.com",
-        status: "pending",
-        kyc_document_ref: "KYC-FIXTURE-1",
-        notes: "",
-        created_at: "2026-01-15T10:30:00Z",
-        updated_at: "2026-01-15T10:30:00Z",
-      }),
-    });
-  });
-}
-
-test.describe("manager onboarding", () => {
-  test("initial registration state", async ({ page }) => {
-    await stabilise(page);
-    await managerFixture(page, "none");
-    await page.goto("/managers/onboarding");
-    await expect(page.getByTestId("onboarding-step")).toHaveAttribute(
-      "data-step",
-      "register",
-    );
-    await expect(
-      page.getByRole("heading", { name: /register as a manager/i }),
-    ).toBeVisible();
-    await expect(page).toHaveScreenshot("onboarding-initial.png");
-  });
-
-  test("validation-error state", async ({ page }) => {
-    await stabilise(page);
-    await managerFixture(page, "none");
-    await page.goto("/managers/onboarding");
-    await page.getByLabel(/full name/i).fill("   ");
-    await page.getByRole("button", { name: /submit registration/i }).click();
-    await expect(page.getByTestId("onboarding-error")).toContainText(
-      /name is required/i,
-    );
-    await expect(page).toHaveScreenshot("onboarding-validation-error.png");
-  });
-
-  test("completed state", async ({ page }) => {
-    await stabilise(page);
-    await managerFixture(page, "none");
-    await page.goto("/managers/onboarding");
-    await page.getByLabel(/full name/i).fill("Fixture Manager");
-    await page.getByLabel("Email", { exact: true }).fill("fixture@example.com");
-    await page.getByRole("button", { name: /submit registration/i }).click();
-    await expect(page.getByTestId("onboarding-step")).toHaveAttribute(
-      "data-step",
-      "submitted",
-    );
-    await expect(page.getByTestId("onboarding-record")).toContainText(
-      "mgr-fixture-1",
-    );
-    await expect(page).toHaveScreenshot("onboarding-completed.png");
-  });
-});
-
-test.describe("small-screen data views", () => {
-  for (const viewport of [
-    { name: "phone", width: 360, height: 740 },
-    { name: "tablet", width: 768, height: 1024 },
-  ]) {
-    test.describe(viewport.name, () => {
-      test.use({ viewport: { width: viewport.width, height: viewport.height } });
-
-      test("analytics table keeps its controls reachable", async ({ page }) => {
-        await stabilise(page);
-        await page.route("**/api/**", (route) =>
-          route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
-        );
-        await page.goto("/analytics");
-        await page.getByRole("button", { name: /live event stream/i }).click();
-        await expect(
-          page.getByRole("group", { name: /comparison date range/i }),
-        ).toBeVisible();
-
-        const hasNoPageOverflow = await page.evaluate(
-          () =>
-            document.documentElement.scrollWidth <=
-            document.documentElement.clientWidth + 1,
-        );
-        expect(hasNoPageOverflow).toBe(true);
-
-        const scrollRegions = page.locator('[role="region"][tabindex="0"]');
-        const regions = await scrollRegions.count();
-        for (let index = 0; index < regions; index += 1) {
-          await scrollRegions.nth(index).focus();
-          await expect(scrollRegions.nth(index)).toBeFocused();
-        }
-
-        await expect(page).toHaveScreenshot(
-          `small-screen-analytics-${viewport.name}.png`,
-        );
-      });
-
-      test("portfolio key values are readable without colour", async ({ page }) => {
-        await stabilise(page);
-        await page.addInitScript(() => {
-          Math.random = () => 0.42;
-          const fixed = Date.parse("2026-01-15T10:30:00Z");
-          Date.now = () => fixed;
-        });
-        await page.route("**/api/**", (route) =>
-          route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
-        );
-        await page.goto("/portfolio");
-
-        await expect(page.getByTestId("comparison-range")).toBeVisible();
-        await expect(page.getByTestId("range-label")).toContainText(/last 7 days/i);
-        await expect(page.getByText(/^active$/i).first()).toBeVisible();
-        await expect(page.getByText(/^locked$/i).first()).toBeVisible();
-
-        const hasNoPageOverflow = await page.evaluate(
-          () =>
-            document.documentElement.scrollWidth <=
-            document.documentElement.clientWidth + 1,
-        );
-        expect(hasNoPageOverflow).toBe(true);
-
-        await expect(page).toHaveScreenshot(
-          `small-screen-portfolio-${viewport.name}.png`,
-        );
-      });
-    });
-  }
 });

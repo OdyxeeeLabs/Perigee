@@ -3,6 +3,9 @@ import type { GetServerSideProps } from "next";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { SEO } from "../../components/SEO";
+import { useLocale } from "../../components/LocaleSync";
+import { FormattedAmount, FormattedPercent } from "../../components/ui/FormattedAmount";
+import { formatAmount, formatNumber } from "../../lib/locale/format";
 import { Vault } from "../../types/vault";
 import {
   buildVaultJsonLd,
@@ -42,6 +45,7 @@ export default function PagesVaultDetailPage({
   vault,
 }: VaultDetailPageProps) {
   const t = useTranslations();
+  const locale = useLocale();
   const [depositOpen, setDepositOpen] = useState(false);
   const [depositAmount, setDepositAmount] = useState("100");
   const [depositSuccess, setDepositSuccess] = useState(false);
@@ -97,9 +101,9 @@ export default function PagesVaultDetailPage({
     ? t("vault.metaDescription", {
         name: vault.name,
         siteName: t("app.name"),
-        balance: String(vault.balance),
+        balance: formatAmount(vault.balance, locale),
         asset: vault.asset,
-        apy: String(vault.apy),
+        apy: formatNumber(vault.apy ?? 0, locale, { maximumFractionDigits: 2 }),
         status: vault.status,
       })
     : t("vault.defaultDescription");
@@ -184,7 +188,7 @@ export default function PagesVaultDetailPage({
                 <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 backdrop-blur">
                   <p className="text-xs font-medium text-slate-400">{t("vault.totalBalance")}</p>
                   <p className="mt-2 text-2xl font-bold text-white">
-                    {vault.balance.toLocaleString()}{" "}
+                    <FormattedAmount value={vault.balance} locale={locale} />{" "}
                     <span className="text-sm font-normal text-cyan-400">{vault.asset}</span>
                   </p>
                 </div>
@@ -192,7 +196,11 @@ export default function PagesVaultDetailPage({
                 <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 backdrop-blur">
                   <p className="text-xs font-medium text-slate-400">{t("vault.projectedApy")}</p>
                   <p className="mt-2 text-2xl font-bold text-emerald-400">
-                    {vault.apy !== undefined ? `${vault.apy}%` : "0.0%"}
+                    <FormattedPercent
+                      value={vault.apy ?? 0}
+                      locale={locale}
+                      digits={2}
+                    />
                   </p>
                 </div>
 

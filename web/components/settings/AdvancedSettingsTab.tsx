@@ -68,8 +68,8 @@ export function AdvancedSettingsTab() {
             }`}
           >
             <span
-              className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-                advanced.debugMode ? "translate-x-5" : "translate-x-0.5"
+              className={`absolute start-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                advanced.debugMode ? "translate-x-5 rtl:-translate-x-5" : "translate-x-0"
               }`}
             />
           </button>
@@ -88,7 +88,7 @@ export function AdvancedSettingsTab() {
               key={flag.key}
               className="flex items-center justify-between rounded border border-slate-700 bg-slate-900 px-3 py-2"
             >
-              <div className="min-w-0 pr-3">
+              <div className="min-w-0 pe-3">
                 <div className="text-sm text-slate-200">{flag.key}</div>
                 {flag.description && (
                   <div className="truncate text-xs text-slate-400">{flag.description}</div>
@@ -105,8 +105,8 @@ export function AdvancedSettingsTab() {
                 }`}
               >
                 <span
-                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
-                    flagValues[flag.key] ? "translate-x-5" : "translate-x-0.5"
+                  className={`absolute start-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${
+                    flagValues[flag.key] ? "translate-x-5 rtl:-translate-x-5" : "translate-x-0"
                   }`}
                 />
               </button>

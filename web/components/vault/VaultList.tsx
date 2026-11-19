@@ -38,9 +38,9 @@ function VaultTableHeader() {
       "
     >
       <span>Vault</span>
-      <span className="text-right">Balance</span>
-      <span className="text-right">APY</span>
-      <span className="text-right">Status</span>
+      <span className="text-end">Balance</span>
+      <span className="text-end">APY</span>
+      <span className="text-end">Status</span>
     </div>
   );
 }
@@ -177,7 +177,7 @@ export function VaultList({
                 data-index={index}
                 style={{
                   position: "absolute",
-                  left: 0,
+                  insetInlineStart: 0,
                   top: 0,
                   width: "100%",
                   transform: `translateY(${virtualRow.start}px)`,
