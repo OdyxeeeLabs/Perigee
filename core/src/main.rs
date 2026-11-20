@@ -2388,7 +2388,8 @@ impl utoipa::Modify for SecurityAddon {
         vault_store::list_deleted_vaults_handler,
         manager_store::register_manager_handler, manager_store::list_managers_handler,
         manager_store::get_manager_handler, manager_store::approve_manager_handler,
-        manager_store::reject_manager_handler, manager_store::check_manager_status_handler,
+        manager_store::reject_manager_handler, manager_store::manager_audit_handler,
+        manager_store::check_manager_status_handler,
         reconciliation::reconcile_handler, reconciliation::get_reconcile_job_handler,
         reconciliation::list_reports_handler,
         ws::ws_handler
@@ -2421,6 +2422,7 @@ impl utoipa::Modify for SecurityAddon {
         vault_store::ListDeletedVaultsQuery,
         manager_store::ManagerRecord, manager_store::RegisterManagerRequest,
         manager_store::ApproveManagerRequest, manager_store::ManagerStatusResponse,
+        crate::audit_log::AuditEvent,
         reconciliation::ReconcileRequest, reconciliation::ReconcileResponse,
         reconciliation::ReconciliationReport, reconciliation::ListReportsQuery,
         crate::jobs::Job, crate::jobs::JobStatus, crate::jobs::JobType,
@@ -3706,6 +3708,10 @@ async fn main() {
         .route(
             "/managers/:id/reject",
             post(manager_store::reject_manager_handler),
+        )
+        .route(
+            "/managers/:id/audit",
+            get(manager_store::manager_audit_handler),
         )
         .route(
             "/reconcile",
