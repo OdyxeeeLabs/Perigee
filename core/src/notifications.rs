@@ -318,15 +318,88 @@ impl DeliveryQueue for InMemoryQueue {
 // Preferences
 // ---------------------------------------------------------------------------
 
+/// Event categories known to the preferences API (API-30).
+///
+/// `security` and `account` are **mandatory**: they are always delivered and
+/// cannot be muted. The others are user-controllable per channel. Free-form
+/// categories outside this list keep the legacy behaviour (only channel
+/// switches and unsubscribes apply).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationCategory {
+    VaultActivity,
+    StrategyAlerts,
+    AgentHealth,
+    Reports,
+    ProductUpdates,
+    Security,
+    Account,
+}
+
+impl NotificationCategory {
+    pub const ALL: [NotificationCategory; 7] = [
+        Self::VaultActivity,
+        Self::StrategyAlerts,
+        Self::AgentHealth,
+        Self::Reports,
+        Self::ProductUpdates,
+        Self::Security,
+        Self::Account,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VaultActivity => "vault_activity",
+            Self::StrategyAlerts => "strategy_alerts",
+            Self::AgentHealth => "agent_health",
+            Self::Reports => "reports",
+            Self::ProductUpdates => "product_updates",
+            Self::Security => "security",
+            Self::Account => "account",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.as_str() == value)
+    }
+
+    /// Mandatory notices ignore every preference and opt-out.
+    pub fn is_mandatory(self) -> bool {
+        matches!(self, Self::Security | Self::Account)
+    }
+
+    /// Default when the user has not chosen: everything on, except product
+    /// updates, which are limited to email and in-app.
+    pub fn default_enabled(self, channel: Channel) -> bool {
+        match self {
+            Self::ProductUpdates => matches!(channel, Channel::Email | Channel::InApp),
+            _ => true,
+        }
+    }
+}
+
+pub const ALL_CHANNELS: [Channel; 4] = [Channel::Email, Channel::Push, Channel::InApp, Channel::Sms];
+
 #[derive(Debug, Clone, Default)]
 struct Preferences {
     disabled_channels: HashSet<Channel>,
     /// `(channel, category)`; category [`ALL_CATEGORIES`] covers the channel.
     unsubscribed: HashSet<(Channel, String)>,
+    /// Explicit per-category, per-channel choices (API-30).
+    category_channels: HashMap<(NotificationCategory, Channel), bool>,
     locale: Option<String>,
 }
 
 impl Preferences {
+    fn category_enabled(&self, category: NotificationCategory, channel: Channel) -> bool {
+        category.is_mandatory()
+            || self
+                .category_channels
+                .get(&(category, channel))
+                .copied()
+                .unwrap_or_else(|| category.default_enabled(channel))
+    }
+
     fn suppression(&self, channel: Channel, category: &str) -> Option<&'static str> {
         if self.disabled_channels.contains(&channel) {
             Some("channel disabled by user")
@@ -334,10 +407,54 @@ impl Preferences {
             || self.unsubscribed.contains(&(channel, category.to_string()))
         {
             Some("unsubscribed")
+        } else if NotificationCategory::parse(category)
+            .is_some_and(|known| !self.category_enabled(known, channel))
+        {
+            Some("category muted by user preference")
         } else {
             None
         }
     }
+}
+
+/// One category row of a user's preferences.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CategoryPreference {
+    pub category: NotificationCategory,
+    /// `true` for security/account notices, which cannot be muted.
+    pub mandatory: bool,
+    pub channels: BTreeMap<Channel, bool>,
+}
+
+/// A user's effective notification preferences.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PreferencesView {
+    /// Channel master switches.
+    pub channels_enabled: BTreeMap<Channel, bool>,
+    pub categories: Vec<CategoryPreference>,
+}
+
+/// Partial update. Category keys are strings so unknown values produce a
+/// specific error instead of a generic parse failure.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreferencesUpdate {
+    #[serde(default)]
+    pub channels_enabled: BTreeMap<Channel, bool>,
+    #[serde(default)]
+    pub categories: BTreeMap<String, BTreeMap<Channel, bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PreferenceError {
+    #[error("unsupported notification category `{0}`")]
+    UnsupportedCategory(String),
+    #[error("`{0}` notices are mandatory and cannot be changed")]
+    MandatoryCategory(String),
+    #[error("the update is empty")]
+    Empty,
+    #[error("notification state unavailable")]
+    StatePoisoned,
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +546,67 @@ impl NotificationService {
         Ok(())
     }
 
+    /// Effective preferences for `user_id`, with defaults filled in.
+    pub fn preferences(&self, user_id: &str) -> Result<PreferencesView, PreferenceError> {
+        let state = self.state.lock().map_err(|_| PreferenceError::StatePoisoned)?;
+        let default = Preferences::default();
+        let prefs = state.preferences.get(user_id).unwrap_or(&default);
+        Ok(PreferencesView {
+            channels_enabled: ALL_CHANNELS
+                .iter()
+                .map(|c| (*c, !prefs.disabled_channels.contains(c)))
+                .collect(),
+            categories: NotificationCategory::ALL
+                .iter()
+                .map(|category| CategoryPreference {
+                    category: *category,
+                    mandatory: category.is_mandatory(),
+                    channels: ALL_CHANNELS
+                        .iter()
+                        .map(|channel| (*channel, prefs.category_enabled(*category, *channel)))
+                        .collect(),
+                })
+                .collect(),
+        })
+    }
+
+    /// Validate the whole update, then apply it atomically.
+    pub fn update_preferences(
+        &self,
+        user_id: &str,
+        update: &PreferencesUpdate,
+    ) -> Result<PreferencesView, PreferenceError> {
+        if update.channels_enabled.is_empty() && update.categories.is_empty() {
+            return Err(PreferenceError::Empty);
+        }
+        let mut parsed = Vec::new();
+        for (name, channels) in &update.categories {
+            let category = NotificationCategory::parse(name)
+                .ok_or_else(|| PreferenceError::UnsupportedCategory(name.clone()))?;
+            if category.is_mandatory() {
+                return Err(PreferenceError::MandatoryCategory(name.clone()));
+            }
+            parsed.push((category, channels));
+        }
+        {
+            let mut state = self.state.lock().map_err(|_| PreferenceError::StatePoisoned)?;
+            let prefs = state.preferences.entry(user_id.to_string()).or_default();
+            for (channel, enabled) in &update.channels_enabled {
+                if *enabled {
+                    prefs.disabled_channels.remove(channel);
+                } else {
+                    prefs.disabled_channels.insert(*channel);
+                }
+            }
+            for (category, channels) in parsed {
+                for (channel, enabled) in channels {
+                    prefs.category_channels.insert((category, *channel), *enabled);
+                }
+            }
+        }
+        self.preferences(user_id)
+    }
+
     // -- unsubscribe ------------------------------------------------------
 
     fn mac(&self, data: &str) -> Result<HmacSha256, NotificationError> {
@@ -507,13 +685,17 @@ impl NotificationService {
             template_version: template.version,
         };
 
-        let suppression = if request.transactional {
+        // Precedence: transactional and mandatory (security/account) notices
+        // are never suppressed; otherwise channel switches, unsubscribes and
+        // per-category choices (or their defaults) apply.
+        let mandatory = NotificationCategory::parse(&request.category).is_some_and(NotificationCategory::is_mandatory);
+        let suppression = if request.transactional || mandatory {
             None
         } else {
-            state
-                .preferences
-                .get(&request.user_id)
-                .and_then(|p| p.suppression(request.channel, &request.category))
+            match state.preferences.get(&request.user_id) {
+                Some(prefs) => prefs.suppression(request.channel, &request.category),
+                None => Preferences::default().suppression(request.channel, &request.category),
+            }
         };
 
         let mut record = DeliveryRecord {
@@ -962,5 +1144,157 @@ mod tests {
         assert!(provider.sent.lock().unwrap().is_empty());
         assert_eq!(svc.test_outbox().unwrap()[0].body, "Hello Ada");
         assert_eq!(svc.delivery(&id).unwrap().unwrap().detail.as_deref(), Some("test mode: not sent"));
+    }
+
+    // -- API-30: per-user preferences --------------------------------------
+
+    fn categorised(user: &str, channel: Channel, category: NotificationCategory) -> NotificationRequest {
+        let mut req = request(channel);
+        req.user_id = user.into();
+        req.category = category.as_str().into();
+        req
+    }
+
+    fn status_of(svc: &NotificationService, req: &NotificationRequest) -> DeliveryStatus {
+        let id = svc.send(req, 0).unwrap();
+        svc.delivery(&id).unwrap().unwrap().status
+    }
+
+    fn update(json: serde_json::Value) -> PreferencesUpdate {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn defaults_are_reported_and_enforced() {
+        let provider = FakeProvider::new(Channel::Email);
+        let svc = service_with(&provider);
+        let view = svc.preferences("new-user").unwrap();
+        assert_eq!(view.categories.len(), NotificationCategory::ALL.len());
+        assert!(view.channels_enabled.values().all(|enabled| *enabled));
+        let product = view
+            .categories
+            .iter()
+            .find(|c| c.category == NotificationCategory::ProductUpdates)
+            .unwrap();
+        assert!(product.channels[&Channel::Email]);
+        assert!(!product.channels[&Channel::Sms]);
+        let security = view.categories.iter().find(|c| c.category == NotificationCategory::Security).unwrap();
+        assert!(security.mandatory);
+        assert!(security.channels.values().all(|enabled| *enabled));
+
+        // A user with no stored preferences still gets the defaults applied.
+        assert_eq!(
+            status_of(&svc, &categorised("new-user", Channel::Sms, NotificationCategory::ProductUpdates)),
+            DeliveryStatus::Suppressed
+        );
+        assert_eq!(
+            status_of(&svc, &categorised("new-user", Channel::Sms, NotificationCategory::VaultActivity)),
+            DeliveryStatus::Queued
+        );
+    }
+
+    #[test]
+    fn valid_updates_apply_and_are_enforced() {
+        let provider = FakeProvider::new(Channel::Email);
+        let svc = service_with(&provider);
+        let view = svc
+            .update_preferences(
+                "u1",
+                &update(serde_json::json!({
+                    "categories": {"vault_activity": {"sms": false}, "product_updates": {"sms": true}},
+                    "channels_enabled": {"push": false}
+                })),
+            )
+            .unwrap();
+        let vault = view.categories.iter().find(|c| c.category == NotificationCategory::VaultActivity).unwrap();
+        assert!(!vault.channels[&Channel::Sms]);
+        assert!(vault.channels[&Channel::Email], "untouched channels keep their value");
+        assert!(!view.channels_enabled[&Channel::Push]);
+
+        assert_eq!(
+            status_of(&svc, &categorised("u1", Channel::Sms, NotificationCategory::VaultActivity)),
+            DeliveryStatus::Suppressed
+        );
+        assert_eq!(
+            status_of(&svc, &categorised("u1", Channel::Sms, NotificationCategory::ProductUpdates)),
+            DeliveryStatus::Queued
+        );
+        assert_eq!(
+            status_of(&svc, &categorised("u1", Channel::Email, NotificationCategory::VaultActivity)),
+            DeliveryStatus::Queued
+        );
+    }
+
+    #[test]
+    fn unsupported_and_mandatory_categories_are_rejected_without_partial_writes() {
+        let provider = FakeProvider::new(Channel::Email);
+        let svc = service_with(&provider);
+        let before = svc.preferences("u1").unwrap();
+        assert_eq!(
+            svc.update_preferences(
+                "u1",
+                &update(serde_json::json!({"categories": {"vault_activity": {"sms": false}, "lottery": {"sms": true}}}))
+            ),
+            Err(PreferenceError::UnsupportedCategory("lottery".into()))
+        );
+        assert_eq!(
+            svc.update_preferences("u1", &update(serde_json::json!({"categories": {"security": {"email": false}}}))),
+            Err(PreferenceError::MandatoryCategory("security".into()))
+        );
+        assert_eq!(svc.update_preferences("u1", &PreferencesUpdate::default()), Err(PreferenceError::Empty));
+        assert_eq!(svc.preferences("u1").unwrap(), before, "rejected updates change nothing");
+
+        // Unknown channels and fields fail to parse at all.
+        assert!(serde_json::from_value::<PreferencesUpdate>(serde_json::json!({"categories": {"reports": {"fax": true}}})).is_err());
+        assert!(serde_json::from_value::<PreferencesUpdate>(serde_json::json!({"mute_everything": true})).is_err());
+    }
+
+    #[test]
+    fn preferences_are_isolated_per_user() {
+        let provider = FakeProvider::new(Channel::Email);
+        let svc = service_with(&provider);
+        svc.update_preferences("alice", &update(serde_json::json!({"categories": {"reports": {"email": false}}})))
+            .unwrap();
+        let bob = svc.preferences("bob").unwrap();
+        let reports = bob.categories.iter().find(|c| c.category == NotificationCategory::Reports).unwrap();
+        assert!(reports.channels[&Channel::Email]);
+        assert_eq!(
+            status_of(&svc, &categorised("bob", Channel::Email, NotificationCategory::Reports)),
+            DeliveryStatus::Queued
+        );
+        assert_eq!(
+            status_of(&svc, &categorised("alice", Channel::Email, NotificationCategory::Reports)),
+            DeliveryStatus::Suppressed
+        );
+    }
+
+    #[test]
+    fn mandatory_notices_override_every_opt_out() {
+        let provider = FakeProvider::new(Channel::Email);
+        let svc = service_with(&provider);
+        svc.update_preferences("u1", &update(serde_json::json!({"channels_enabled": {"email": false}})))
+            .unwrap();
+        let token = svc.unsubscribe_token("u1", Channel::Email, ALL_CATEGORIES).unwrap();
+        svc.unsubscribe(&token).unwrap();
+
+        for category in [NotificationCategory::Security, NotificationCategory::Account] {
+            assert_eq!(
+                status_of(&svc, &categorised("u1", Channel::Email, category)),
+                DeliveryStatus::Queued,
+                "{category:?} must still be delivered"
+            );
+        }
+        assert_eq!(
+            status_of(&svc, &categorised("u1", Channel::Email, NotificationCategory::VaultActivity)),
+            DeliveryStatus::Suppressed
+        );
+    }
+
+    #[test]
+    fn legacy_free_form_categories_keep_their_behaviour() {
+        let provider = FakeProvider::new(Channel::Email);
+        let svc = service_with(&provider);
+        // "marketing" is not a known category: defaults do not apply to it.
+        assert_eq!(status_of(&svc, &request(Channel::Sms)), DeliveryStatus::Queued);
     }
 }

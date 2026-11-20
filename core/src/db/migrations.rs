@@ -79,6 +79,12 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../../migrations/010_create_archival_tables.sql"),
         down_sql: include_str!("../../migrations/010_create_archival_tables.down.sql"),
     },
+    Migration {
+        version: 11,
+        name: "create_vault_metadata_table",
+        sql: include_str!("../../migrations/011_create_vault_metadata_table.sql"),
+        down_sql: include_str!("../../migrations/011_create_vault_metadata_table.down.sql"),
+    },
 ];
 
 pub fn validate_migrations(migrations: &[Migration]) -> Result<(), String> {
@@ -152,7 +158,7 @@ impl MigrationRunner {
         )
         .execute(&mut *transaction)
         .await?;
-        adopt_legacy_history(&mut *transaction, &self.migrations).await?;
+        adopt_legacy_history(&mut transaction, &self.migrations).await?;
         let known_versions: HashSet<i64> = self.migrations.iter().map(|m| m.version).collect();
         let applied_versions = sqlx::query_scalar::<_, i64>(
             "SELECT version FROM _perigee_migrations ORDER BY version",
@@ -204,10 +210,10 @@ impl MigrationRunner {
 
             let already_applied = match migration.name {
                 "add_vault_idempotency_key" => {
-                    column_exists(&mut *transaction, "vaults", "idempotency_key").await?
+                    column_exists(&mut transaction, "vaults", "idempotency_key").await?
                 }
                 "add_vault_soft_delete" => {
-                    column_exists(&mut *transaction, "vaults", "deleted_at").await?
+                    column_exists(&mut transaction, "vaults", "deleted_at").await?
                 }
                 _ => false,
             };
@@ -472,6 +478,7 @@ mod tests {
             "reconciliation_discrepancies",
             "vaults",
             "managers",
+            "vault_metadata",
         ] {
             assert!(tables.iter().any(|name| name == table), "missing {table}");
         }
@@ -482,7 +489,7 @@ mod tests {
         .fetch_all(&pool)
         .await
         .unwrap();
-        let expected_versions: Vec<i64> = (1..=10).collect();
+        let expected_versions: Vec<i64> = (1..=11).collect();
         assert_eq!(versions, expected_versions);
 
         let vault_columns = sqlx::query_scalar::<_, String>(
@@ -498,9 +505,9 @@ mod tests {
     async fn rollback_one_reverts_latest_migration_and_can_be_reapplied() {
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         run_migrations(&pool).await.unwrap();
-        assert_eq!(MigrationRunner::new().rollback_one(&pool).await.unwrap(), Some(10));
-        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='archive_manifest'").fetch_one(&pool).await.unwrap(), 0);
+        assert_eq!(MigrationRunner::new().rollback_one(&pool).await.unwrap(), Some(11));
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='vault_metadata'").fetch_one(&pool).await.unwrap(), 0);
         run_migrations(&pool).await.unwrap();
-        assert_eq!(MigrationRunner::new().rollback_one(&pool).await.unwrap(), Some(10));
+        assert_eq!(MigrationRunner::new().rollback_one(&pool).await.unwrap(), Some(11));
     }
 }
