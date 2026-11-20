@@ -491,7 +491,7 @@ pub mod manager {
             id: &str,
             notes: &str,
         ) -> Result<models::ManagerRecord, sqlx::Error> {
-            self.table.update_status(id, "approved", notes, Utc::now()).await
+            self.table.update_status(id, "pending", "approved", notes, Utc::now()).await
         }
 
         pub async fn reject(
@@ -499,7 +499,7 @@ pub mod manager {
             id: &str,
             notes: &str,
         ) -> Result<models::ManagerRecord, sqlx::Error> {
-            self.table.update_status(id, "rejected", notes, Utc::now()).await
+            self.table.update_status(id, "pending", "rejected", notes, Utc::now()).await
         }
     }
 }

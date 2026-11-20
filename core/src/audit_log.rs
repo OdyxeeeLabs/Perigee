@@ -145,7 +145,7 @@ pub enum AuditChainError {
 }
 
 /// One recorded administrative action.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct AuditEvent {
     /// Position in the chain, starting at 0.
     pub sequence: u64,
@@ -153,6 +153,7 @@ pub struct AuditEvent {
     pub action: String,
     pub actor: String,
     pub timestamp: DateTime<Utc>,
+    pub reason: Option<String>,
     /// Hash of the preceding entry, or [`GENESIS_HASH`] for the first.
     pub prev_hash: String,
     /// HMAC over `prev_hash` and this entry's fields.
@@ -210,6 +211,17 @@ impl AuditChain {
         actor: &str,
         timestamp: DateTime<Utc>,
     ) -> &AuditEvent {
+        self.append_with_reason(manager_id, action, actor, timestamp, None)
+    }
+
+    pub fn append_with_reason(
+        &mut self,
+        manager_id: &str,
+        action: &str,
+        actor: &str,
+        timestamp: DateTime<Utc>,
+        reason: Option<String>,
+    ) -> &AuditEvent {
         let sequence = self.entries.len() as u64;
         let prev_hash = self.head_hash();
 
@@ -221,6 +233,7 @@ impl AuditChain {
             action,
             actor,
             timestamp,
+            reason.as_deref(),
         );
 
         self.entries.push(AuditEvent {
@@ -229,6 +242,7 @@ impl AuditChain {
             action: action.to_string(),
             actor: actor.to_string(),
             timestamp,
+            reason,
             prev_hash,
             entry_hash,
         });
@@ -272,6 +286,7 @@ impl AuditChain {
                 &entry.action,
                 &entry.actor,
                 entry.timestamp,
+                entry.reason.as_deref(),
             );
 
             if recomputed != entry.entry_hash {
@@ -300,6 +315,7 @@ impl AuditChain {
         action: &str,
         actor: &str,
         timestamp: DateTime<Utc>,
+        reason: Option<&str>,
     ) -> String {
         let mut mac = HmacSha256::new_from_slice(key.unwrap_or(&[]))
             .expect("HMAC accepts keys of any length");
@@ -317,6 +333,7 @@ impl AuditChain {
         absorb(action.as_bytes());
         absorb(actor.as_bytes());
         absorb(timestamp.to_rfc3339().as_bytes());
+        absorb(reason.unwrap_or("").as_bytes());
 
         hex::encode(mac.finalize().into_bytes())
     }
@@ -362,11 +379,28 @@ fn global_chain() -> &'static Mutex<AuditChain> {
 /// including its hash and link so a log aggregator holds enough to verify the
 /// chain independently of the process that wrote it.
 pub fn log_audit_event(manager_id: &str, action: &str, actor: &str) {
+    log_audit_event_with_reason(manager_id, action, actor, None);
+}
+
+pub fn log_audit_event_with_reason(
+    manager_id: &str,
+    action: &str,
+    actor: &str,
+    reason: Option<&str>,
+) {
     let mut chain = global_chain()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    let event = chain.append(manager_id, action, actor, Utc::now()).clone();
+    let event = chain
+        .append_with_reason(
+            manager_id,
+            action,
+            actor,
+            Utc::now(),
+            reason.map(str::to_string),
+        )
+        .clone();
 
     let redactor = crate::log_redaction::LogRedactor::new("perigee-log-redaction");
     let redacted_manager = redactor.redact_address(&event.manager_id);
@@ -378,6 +412,7 @@ pub fn log_audit_event(manager_id: &str, action: &str, actor: &str) {
         action = %event.action,
         actor = %redacted_actor,
         timestamp = %event.timestamp.to_rfc3339(),
+        reason = ?event.reason,
         prev_hash = %event.prev_hash,
         entry_hash = %event.entry_hash,
         "AUDIT: {} by {}",
@@ -506,6 +541,17 @@ pub fn verify_global_chain() -> Result<(), AuditChainError> {
         .verify()
 }
 
+pub fn global_entries_for_manager(manager_id: &str) -> Vec<AuditEvent> {
+    global_chain()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entries()
+        .iter()
+        .filter(|entry| entry.manager_id == manager_id)
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,6 +662,7 @@ mod tests {
             &chain.entries[0].action,
             &chain.entries[0].actor,
             chain.entries[0].timestamp,
+            chain.entries[0].reason.as_deref(),
         );
 
         // Entry 0 now hashes correctly, so the chain link is what catches it.
@@ -663,6 +710,7 @@ mod tests {
             &chain.entries[0].action,
             &chain.entries[0].actor,
             chain.entries[0].timestamp,
+            chain.entries[0].reason.as_deref(),
         );
 
         assert!(chain.verify().is_err());

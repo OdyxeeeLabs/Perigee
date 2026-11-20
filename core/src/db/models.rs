@@ -74,6 +74,9 @@ pub struct RegisterManagerRequest {
 pub struct ApproveManagerRequest {
     #[serde(default)]
     pub notes: String,
+    /// Optional administrative reason. Limited to 500 characters.
+    #[serde(default)]
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

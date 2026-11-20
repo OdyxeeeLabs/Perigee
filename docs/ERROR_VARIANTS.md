@@ -122,6 +122,27 @@ The canonical spelling is uppercase snake case. The values below are the stable 
 
 `ErrorCode` also implements `FromStr`, so an SDK or internal component can parse a canonical code without maintaining a second string table.
 
+## Manager onboarding lifecycle
+
+Manager administrative lifecycle:
+
+- `pending` is created by `POST /managers/register`.
+- Only an authenticated administrator can perform `POST /managers/{id}/approve` or `POST /managers/{id}/reject`.
+- `pending -> approved` and `pending -> rejected` are the only allowed transitions.
+- Once approved or rejected, another administrative transition is rejected with `409 STATE_MISMATCH`.
+- Approval and rejection accept an optional `reason` or legacy `notes` value; reason text is limited to 500 characters.
+- Each successful transition is appended to the tamper-evident audit chain with manager ID, actor, timestamp, and reason.
+- `GET /managers/{id}/audit` is administrator-only and returns the transition entries for that manager.
+
+Expected onboarding errors:
+
+| HTTP status | Code | Condition |
+| --- | --- | --- |
+| `403` | `FORBIDDEN` | Caller is not an administrator |
+| `404` | `MANAGER_NOT_FOUND` | Manager ID does not exist |
+| `409` | `STATE_MISMATCH` | Transition is not allowed from the current state |
+| `400` | `INVALID_INPUT` | Reason exceeds 500 characters or other request data is invalid |
+
 ## Conversion guide
 
 ### Simulation errors
