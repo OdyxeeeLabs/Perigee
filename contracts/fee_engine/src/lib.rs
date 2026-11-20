@@ -113,6 +113,135 @@ pub enum DataKey {
     Stake(Address),
 }
 
+fn load_config(env: &Env) -> Result<FeeConfig, Error> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Config)
+        .ok_or(Error::ConfigNotSet)
+}
+
+fn load_vault(env: &Env, vault: &Address) -> Result<VaultState, Error> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Vault(vault.clone()))
+        .ok_or(Error::VaultNotFound)
+}
+
+fn default_vault_state() -> VaultState {
+    VaultState {
+        principal: 0,
+        high_water_mark: 0,
+        last_crystallized: 0,
+        last_accrual: 0,
+        fees_paid: 0,
+    }
+}
+
+fn load_vault_or_default(env: &Env, vault: &Address) -> VaultState {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Vault(vault.clone()))
+        .unwrap_or_else(default_vault_state)
+}
+
+fn save_vault(env: &Env, vault: &Address, state: &VaultState) {
+    let key = DataKey::Vault(vault.clone());
+    env.storage().persistent().set(&key, state);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_LEDGERS, TTL_LEDGERS);
+}
+
+fn default_stake() -> Stake {
+    Stake { staked: 0, tier: 0 }
+}
+
+fn load_stake_or_default(env: &Env, staker: &Address) -> Stake {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Stake(staker.clone()))
+        .unwrap_or_else(default_stake)
+}
+
+fn save_stake(env: &Env, staker: &Address, stake: &Stake) {
+    let key = DataKey::Stake(staker.clone());
+    env.storage().persistent().set(&key, stake);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TTL_LEDGERS, TTL_LEDGERS);
+}
+
+fn load_staking_token(env: &Env) -> Result<Address, Error> {
+    env.storage()
+        .instance()
+        .get(&DataKey::StakingToken)
+        .ok_or(Error::NotInitialized)
+}
+
+fn load_tiers<T>(env: &Env, key: &DataKey) -> Vec<T>
+where
+    T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val> + Clone,
+{
+    env.storage()
+        .instance()
+        .get(key)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn checked_add(a: i128, b: i128) -> Result<i128, Error> {
+    a.checked_add(b).ok_or(Error::MathOverflow)
+}
+
+/// The highest discount tier a stake qualifies for (0 = none).
+fn tier_for_stake(env: &Env, staked: i128) -> u32 {
+    let tiers: Vec<DiscountTier> = load_tiers(env, &DataKey::DiscountTiers);
+    let mut tier = 0u32;
+    for i in 0..tiers.len() {
+        if staked >= tiers.get(i).unwrap().min_stake {
+            tier = (i + 1) as u32;
+        }
+    }
+    tier
+}
+
+fn rebate_for_stake(env: &Env, staked: i128) -> u32 {
+    let tier = tier_for_stake(env, staked);
+    if tier == 0 {
+        return 0;
+    }
+    let tiers: Vec<DiscountTier> = load_tiers(env, &DataKey::DiscountTiers);
+    tiers.get((tier - 1) as u32).unwrap().rebate_bps
+}
+
+/// The performance-fee rate for a given profit, or `None` if no tier matches.
+fn perf_rate_for_profit(env: &Env, profit: i128) -> Option<u32> {
+    let tiers: Vec<PerformanceTier> = load_tiers(env, &DataKey::PerfTiers);
+    let mut rate = None;
+    for i in 0..tiers.len() {
+        if profit >= tiers.get(i).unwrap().min_profit {
+            rate = Some(tiers.get(i).unwrap().fee_bps);
+        }
+    }
+    rate
+}
+
+/// Pure performance-fee computation used by the property tests.
+///
+/// Returns `(fee, new_high_water_mark)`. The fee is charged only on profit
+/// strictly above `high_water_mark`, the fee rounds down via integer division,
+/// and the mark advances only when `nav` exceeds it. A NAV at or below the mark
+/// charges nothing and never lowers the mark.
+pub fn perf_fee_and_mark(nav: i128, high_water_mark: i128, fee_bps: u32) -> (i128, i128) {
+    if nav <= high_water_mark {
+        return (0, high_water_mark);
+    }
+    let profit = nav - high_water_mark;
+    let fee = profit * (fee_bps as i128) / BPS_DENOMINATOR;
+    (fee, nav)
+}
+
+// ── Contract ─────────────────────────────────────────────────────────────────
+
 #[contract]
 pub struct FeeEngine;
 
