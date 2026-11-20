@@ -339,7 +339,9 @@ export const managerService = {
   },
 
   async checkStatus(stellarAddress: string): Promise<ManagerStatusResponse> {
-    return apiClient.get<ManagerStatusResponse>(`/managers/status/${stellarAddress}`);
+    return apiClient.get<ManagerStatusResponse>(`/managers/status/${stellarAddress}`, {
+      cache: "no-store",
+    });
   },
 
   async remove(id: string): Promise<void> {
@@ -403,6 +405,7 @@ export const vaultService = {
     return apiClient.get<VaultRecord[]>("/vaults", {
       params: { manager_id: managerId },
       token,
+      cache: "no-store",
     });
   },
 

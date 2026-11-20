@@ -7,6 +7,7 @@ mod admin_overview;
 mod agent_fleet;
 mod api_keys;
 mod agent_health;
+mod agent_health_summary;
 mod agent_identity;
 mod audit_log;
 mod auth;
@@ -37,6 +38,8 @@ pub mod fee_store {
 }
 
 mod namespaced_errors;
+mod notification_preferences;
+mod notifications;
 mod outbox;
 pub mod fee_analytics;
 pub mod fee_collector;
@@ -66,10 +69,13 @@ mod secret_hash;
 mod simulation;
 mod simulation_service;
 mod signed_receipt;
+mod hysteresis;
 mod stellar_service;
+mod strategy_simulation;
 mod timestamps;
 mod transaction_outcome;
 mod two_phase_commit;
+pub mod vault_bulk_metadata;
 pub mod vault_store;
 mod manager_quota;
 mod manager_store;
@@ -3475,6 +3481,49 @@ async fn main() {
     // API-38: scoped API keys for server-to-server integrations.
     let api_key_store = Arc::new(api_keys::ApiKeyStore::new());
 
+    // API-27: atomic bulk vault metadata updates over the SQLite vault store.
+    let vault_bulk_metadata = Arc::new(
+        match sqlx::SqlitePool::connect_lazy(&config.database_url) {
+            Ok(pool) => vault_bulk_metadata::VaultBulkMetadataService::new(pool),
+            Err(error) => {
+                tracing::error!(
+                    error = %crate::log_redaction::redact_display(&error),
+                    "Bulk vault metadata store unavailable"
+                );
+                vault_bulk_metadata::VaultBulkMetadataService::unavailable()
+            }
+        },
+    );
+
+    // API-28: manager-facing agent health, attested by the fleet's health and
+    // identity services.
+    let agent_health_summary = {
+        let fleet = Arc::clone(&agent_fleet);
+        Arc::new(
+            agent_health_summary::AgentHealthRegistry::default()
+                .with_attestation(move |agent_id| Some(fleet.is_healthy(agent_id))),
+        )
+    };
+
+    // API-29: read-only strategy simulation over approved strategies.
+    let strategy_simulation = Arc::new(strategy_simulation::StrategySimulationService::new());
+
+    // API-30: notification service backing per-user preferences. The secret
+    // signs unsubscribe tokens; a random one is used when none is configured.
+    let notification_service = {
+        let secret = std::env::var("PERIGEE_NOTIFICATION_SECRET")
+            .map(String::into_bytes)
+            .unwrap_or_else(|_| {
+                let mut bytes = [0u8; 32];
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+                bytes.to_vec()
+            });
+        Arc::new(notifications::NotificationService::new(
+            &secret,
+            Arc::new(notifications::InMemoryQueue::default()),
+        ))
+    };
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
@@ -3573,6 +3622,31 @@ async fn main() {
             "/api-keys/:key_id",
             axum::routing::delete(api_keys::revoke_api_key_handler),
         )
+        // Atomic, bounded bulk metadata update; never touches policy (API-27)
+        .route(
+            "/vaults/bulk-metadata",
+            post(vault_bulk_metadata::bulk_update_vault_metadata_handler),
+        )
+        // Tenant-scoped agent health summaries (API-28)
+        .route(
+            "/vaults/:id/agent-health",
+            get(agent_health_summary::vault_agent_health_handler),
+        )
+        .route(
+            "/agents/health",
+            get(agent_health_summary::manager_agent_health_handler),
+        )
+        // Side-effect-free strategy preview (API-29)
+        .route(
+            "/strategies/:id/simulate",
+            post(strategy_simulation::simulate_strategy_handler),
+        )
+        // The caller's own notification preferences (API-30)
+        .route(
+            "/notifications/preferences",
+            get(notification_preferences::get_notification_preferences_handler)
+                .put(notification_preferences::update_notification_preferences_handler),
+        )
         // Runs inside auth so the authenticated manager is known.
         .route_layer(axum::middleware::from_fn(
             manager_quota::manager_quota_middleware,
@@ -3580,7 +3654,11 @@ async fn main() {
         .route_layer(axum::middleware::from_fn(auth::auth_middleware))
         .layer(Extension(admin_overview))
         .layer(Extension(manager_quotas))
-        .layer(Extension(Arc::clone(&api_key_store)));
+        .layer(Extension(Arc::clone(&api_key_store)))
+        .layer(Extension(vault_bulk_metadata))
+        .layer(Extension(agent_health_summary))
+        .layer(Extension(strategy_simulation))
+        .layer(Extension(notification_service));
 
     // Routes authenticated with `X-API-Key` instead of a wallet session (API-38).
     let integration_routes = Router::new()

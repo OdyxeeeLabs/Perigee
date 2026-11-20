@@ -72,6 +72,22 @@ export function normalizeVaultData(
   return { id, name, balance, asset, apy, owner, status };
 }
 
+export function vaultFromRecord(record: VaultRecord): Vault {
+  const normalized = normalizeVaultData(record, record.id);
+  const now = new Date().toISOString();
+  return {
+    id: normalized.id,
+    name: normalized.name,
+    owner: normalized.owner,
+    balance: normalized.balance,
+    asset: normalized.asset,
+    apy: normalized.apy,
+    status: normalized.status as Vault["status"],
+    createdAt: record.created_at || now,
+    updatedAt: record.updated_at || now,
+  };
+}
+
 /**
  * Builds standard Open Graph custom tag dictionary containing vault name, balance, and APY.
  */
@@ -177,18 +193,7 @@ export async function fetchVaultData(id: string): Promise<Vault | null> {
   try {
     const record = await vaultService.get(id);
     if (record) {
-      const normalized = normalizeVaultData(record, id);
-      return {
-        id: normalized.id,
-        name: normalized.name,
-        owner: normalized.owner,
-        balance: normalized.balance,
-        asset: normalized.asset,
-        apy: normalized.apy,
-        status: normalized.status as Vault["status"],
-        createdAt: record.created_at || new Date().toISOString(),
-        updatedAt: record.updated_at || new Date().toISOString(),
-      };
+      return vaultFromRecord(record);
     }
   } catch {
     // Return mock fallback for demo/test IDs if backend API is not running

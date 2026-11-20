@@ -11,7 +11,7 @@ import React from "react";
 export const VaultCardSkeleton: React.FC = () => {
   return (
     <div
-      className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/60 px-4 py-3 animate-pulse"
+      className="flex flex-col items-stretch gap-3 rounded-lg border border-slate-800 bg-slate-900/60 px-4 py-3 animate-pulse sm:flex-row sm:items-center sm:justify-between"
       role="row"
       aria-label="Vault loading"
       aria-busy="true"
@@ -20,7 +20,7 @@ export const VaultCardSkeleton: React.FC = () => {
         <div className="h-3.5 w-32 rounded bg-slate-700" />
         <div className="h-3 w-20 rounded bg-slate-800" />
       </div>
-      <div className="flex items-center gap-4" role="cell">
+      <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center sm:gap-4" role="cell">
         <div className="h-3 w-16 rounded bg-slate-700" />
         <div className="h-3 w-10 rounded bg-slate-700" />
         <div className="h-4 w-14 rounded-full bg-slate-800" />

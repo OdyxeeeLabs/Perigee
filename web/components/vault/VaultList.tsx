@@ -22,6 +22,7 @@ function VaultTableHeader() {
         sticky
         top-0
         z-10
+        hidden
         grid
         grid-cols-[1fr_auto_auto_auto]
         gap-4
@@ -35,6 +36,7 @@ function VaultTableHeader() {
         uppercase
         tracking-wider
         text-slate-400
+        sm:grid
       "
     >
       <span>Vault</span>
@@ -186,6 +188,7 @@ export function VaultList({
               >
                 <VaultRow
                   vault={vault}
+                  href={`/vaults/${vault.id}`}
                   onClick={onVaultClick}
                   rowRef={roving.ref}
                   tabIndex={activeIndex === index ? 0 : -1}
