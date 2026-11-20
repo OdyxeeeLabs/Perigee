@@ -389,6 +389,21 @@ fn perf_rate_for_profit(env: &Env, profit: i128) -> Option<u32> {
     rate
 }
 
+/// Pure performance-fee computation used by the property tests.
+///
+/// Returns `(fee, new_high_water_mark)`. The fee is charged only on profit
+/// strictly above `high_water_mark`, the fee rounds down via integer division,
+/// and the mark advances only when `nav` exceeds it. A NAV at or below the mark
+/// charges nothing and never lowers the mark.
+pub fn perf_fee_and_mark(nav: i128, high_water_mark: i128, fee_bps: u32) -> (i128, i128) {
+    if nav <= high_water_mark {
+        return (0, high_water_mark);
+    }
+    let profit = nav - high_water_mark;
+    let fee = profit * (fee_bps as i128) / BPS_DENOMINATOR;
+    (fee, nav)
+}
+
 // ── Contract ─────────────────────────────────────────────────────────────────
 
 #[contract]
