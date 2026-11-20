@@ -100,6 +100,7 @@ pub mod idempotency;
 pub mod idempotency_sqlite;
 pub mod pagination;
 pub mod validation_pipeline;
+pub mod notification_preferences;
 pub mod notifications;
 pub mod timestamps;
 pub mod db;

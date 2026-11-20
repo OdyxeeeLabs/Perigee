@@ -38,6 +38,8 @@ pub mod fee_store {
 }
 
 mod namespaced_errors;
+mod notification_preferences;
+mod notifications;
 mod outbox;
 pub mod fee_analytics;
 pub mod fee_collector;
@@ -3506,6 +3508,22 @@ async fn main() {
     // API-29: read-only strategy simulation over approved strategies.
     let strategy_simulation = Arc::new(strategy_simulation::StrategySimulationService::new());
 
+    // API-30: notification service backing per-user preferences. The secret
+    // signs unsubscribe tokens; a random one is used when none is configured.
+    let notification_service = {
+        let secret = std::env::var("PERIGEE_NOTIFICATION_SECRET")
+            .map(String::into_bytes)
+            .unwrap_or_else(|_| {
+                let mut bytes = [0u8; 32];
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+                bytes.to_vec()
+            });
+        Arc::new(notifications::NotificationService::new(
+            &secret,
+            Arc::new(notifications::InMemoryQueue::default()),
+        ))
+    };
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
@@ -3623,6 +3641,12 @@ async fn main() {
             "/strategies/:id/simulate",
             post(strategy_simulation::simulate_strategy_handler),
         )
+        // The caller's own notification preferences (API-30)
+        .route(
+            "/notifications/preferences",
+            get(notification_preferences::get_notification_preferences_handler)
+                .put(notification_preferences::update_notification_preferences_handler),
+        )
         // Runs inside auth so the authenticated manager is known.
         .route_layer(axum::middleware::from_fn(
             manager_quota::manager_quota_middleware,
@@ -3633,7 +3657,8 @@ async fn main() {
         .layer(Extension(Arc::clone(&api_key_store)))
         .layer(Extension(vault_bulk_metadata))
         .layer(Extension(agent_health_summary))
-        .layer(Extension(strategy_simulation));
+        .layer(Extension(strategy_simulation))
+        .layer(Extension(notification_service));
 
     // Routes authenticated with `X-API-Key` instead of a wallet session (API-38).
     let integration_routes = Router::new()
