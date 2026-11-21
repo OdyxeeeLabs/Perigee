@@ -8,7 +8,7 @@
 //! ```ignore
 //! let manager = ConfigManager::load().expect("invalid config");
 //! let cfg = manager.get();          // Arc<AppSettings>
-//! manager.hot_reload().await;       // refresh non-sensitive keys from env
+//! manager.hot_reload()?;            // refresh non-sensitive keys from env
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,7 @@ impl Environment {
 
 /// Feature flags that can be toggled without restarting the service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FeatureFlags {
     /// Enable experimental distributed tracing export.
     pub distributed_tracing: bool,
@@ -116,6 +117,7 @@ impl FeatureFlags {
 /// Sensitive fields (`jwt_private_key`, `database_url`, `redis_url`) are
 /// **not** hot-reloadable — they require a restart.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppSettings {
     // ── Server ──────────────────────────────────────────────────────────────
     pub server_port: u16,
@@ -184,6 +186,9 @@ fn validate(settings: &AppSettings) -> Result<(), ConfigValidationError> {
     if settings.database_url.is_empty() {
         errors.push("DATABASE_URL must not be empty".into());
     }
+    if settings.redis_url.is_empty() {
+        errors.push("REDIS_URL must not be empty".into());
+    }
     if settings.soroban_rpc_url.is_empty() {
         errors.push("SOROBAN_RPC_URL must not be empty".into());
     }
@@ -239,7 +244,47 @@ impl ConfigManager {
 
     /// Returns the current validated settings snapshot.
     pub fn get(&self) -> Arc<AppSettings> {
-        self.inner.read().unwrap().clone()
+        self.inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Parse, validate, and atomically install a complete JSON settings snapshot.
+    /// Parsing errors are deliberately generic so malformed secret values never
+    /// appear in returned diagnostics.
+    pub fn reload_json(&self, candidate: &str) -> Result<(), ConfigValidationError> {
+        let parsed: AppSettings = serde_json::from_str(candidate).map_err(|error| {
+            let message = match error.classify() {
+                serde_json::error::Category::Syntax => format!(
+                    "configuration syntax is invalid at line {} column {}",
+                    error.line(),
+                    error.column()
+                ),
+                serde_json::error::Category::Data => {
+                    "configuration has missing or invalid fields".to_string()
+                }
+                serde_json::error::Category::Eof => "configuration is incomplete".to_string(),
+                serde_json::error::Category::Io => "configuration could not be read".to_string(),
+            };
+            ConfigValidationError {
+                errors: vec![message],
+            }
+        })?;
+
+        self.reload(parsed)
+    }
+
+    /// Validate a complete candidate before publishing it to readers.
+    /// Existing readers keep their `Arc` snapshot; new readers see the full
+    /// candidate after the single pointer replacement.
+    pub fn reload(&self, candidate: AppSettings) -> Result<(), ConfigValidationError> {
+        validate(&candidate)?;
+        *self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(candidate);
+        Ok(())
     }
 
     /// Reload *non-sensitive* settings (feature flags, log level, OTLP endpoint)
@@ -247,7 +292,7 @@ impl ConfigManager {
     ///
     /// Sensitive fields (`database_url`, `redis_url`, `jwt_private_key`) are
     /// intentionally skipped — they require a restart.
-    pub fn hot_reload(&self) {
+    pub fn hot_reload(&self) -> Result<(), ConfigValidationError> {
         let current = self.get();
         let updated = AppSettings {
             // Keep sensitive / structural fields unchanged.
@@ -264,8 +309,9 @@ impl ConfigManager {
             features: FeatureFlags::from_env(),
         };
 
-        *self.inner.write().unwrap() = Arc::new(updated);
+        self.reload(updated)?;
         tracing::info!("config hot-reloaded: feature flags and log level refreshed");
+        Ok(())
     }
 
     fn build_from_env() -> AppSettings {
@@ -342,5 +388,85 @@ mod tests {
         };
         let err = validate(&settings).unwrap_err();
         assert!(err.errors.iter().any(|e| e.contains("DATABASE_URL")));
+    }
+
+    #[test]
+    fn failed_reload_keeps_the_active_snapshot_and_redacts_values() {
+        let manager = ConfigManager::load().unwrap();
+        let before = manager.get();
+        let secret = "postgres://operator:do-not-print@db.example/private";
+        let invalid = AppSettings {
+            database_url: String::new(),
+            redis_url: secret.into(),
+            ..(*before).clone()
+        };
+
+        let error = manager.reload(invalid).unwrap_err();
+        assert!(error.to_string().contains("DATABASE_URL"));
+        assert!(!error.to_string().contains("do-not-print"));
+        assert!(Arc::ptr_eq(&before, &manager.get()));
+    }
+
+    #[test]
+    fn valid_reload_replaces_the_active_snapshot() {
+        let manager = ConfigManager::load().unwrap();
+        let mut candidate = (*manager.get()).clone();
+        candidate.log_level = "warn".into();
+
+        manager.reload(candidate).unwrap();
+
+        assert_eq!(manager.get().log_level, "warn");
+    }
+
+    #[test]
+    fn valid_json_reload_takes_effect_as_one_snapshot() {
+        let manager = ConfigManager::load().unwrap();
+        let mut candidate = (*manager.get()).clone();
+        candidate.log_level = "warn".into();
+        let json = serde_json::to_string(&candidate).unwrap();
+
+        manager.reload_json(&json).unwrap();
+
+        assert_eq!(manager.get().log_level, "warn");
+    }
+
+    #[test]
+    fn malformed_json_reload_preserves_the_active_snapshot_without_echoing_input() {
+        let manager = ConfigManager::load().unwrap();
+        let before = manager.get();
+        let secret = "private-config-value";
+
+        let error = manager
+            .reload_json(&format!("{{\"database_url\":\"{secret}\", broken"))
+            .unwrap_err();
+
+        assert!(!error.to_string().contains(secret));
+        assert!(Arc::ptr_eq(&before, &manager.get()));
+    }
+
+    #[test]
+    fn concurrent_readers_observe_complete_config_snapshots() {
+        let manager = Arc::new(ConfigManager::load().unwrap());
+        let reader_manager = Arc::clone(&manager);
+        let reader = std::thread::spawn(move || {
+            for _ in 0..10_000 {
+                let snapshot = reader_manager.get();
+                assert_eq!(snapshot.server_port == 3100, snapshot.log_level == "first");
+                assert_eq!(snapshot.server_port == 3200, snapshot.log_level == "second");
+            }
+        });
+
+        for index in 0..100 {
+            let mut candidate = (*manager.get()).clone();
+            if index % 2 == 0 {
+                candidate.server_port = 3100;
+                candidate.log_level = "first".into();
+            } else {
+                candidate.server_port = 3200;
+                candidate.log_level = "second".into();
+            }
+            manager.reload(candidate).unwrap();
+        }
+        reader.join().unwrap();
     }
 }

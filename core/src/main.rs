@@ -2539,37 +2539,22 @@ async fn ready_check(
     Extension(cancellation): Extension<RequestCancellation>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    
-    let db_ok = match state.database_pool.acquire().await {
-        Ok(mut connection) => sqlx::query("SELECT 1")
-            .execute(&mut *connection)
-            .await
-            .is_ok(),
-        Err(_) => false,
-    };
-    let db_ok = state.database_health.is_healthy()
-        && state.worker_job_database_health.is_healthy()
-        && state.job_database_health.is_healthy()
-        && db::health_check(
-            state.reconciliation_repo.pool(),
-            state.database_health_timeout,
-        )
-        .await
-        && state
-            .job_queue
-            .health_check(state.database_health_timeout)
-            .await;
-    let db_ok = cancellation
-        .wait(sqlx::query("SELECT 1").execute(state.reconciliation_repo.pool()))
-        .await
-        .is_ok_and(|result| result.is_ok());
-        
-    let rpc_ok = !state.provider_registry.healthy_providers().await.is_empty();
+
+    const READY_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+    let db_ok = tokio::time::timeout(
+        READY_PROBE_TIMEOUT,
+        cancellation.wait(sqlx::query("SELECT 1").execute(state.reconciliation_repo.pool())),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok_and(|query| query.is_ok()));
+
     let agents_ok = state.agent_fleet.is_operational("server");
-    let rpc_ok = cancellation
-        .wait(state.provider_registry.healthy_providers())
-        .await
-        .is_ok_and(|providers| !providers.is_empty());
+    let rpc_ok = tokio::time::timeout(
+        READY_PROBE_TIMEOUT,
+        cancellation.wait(state.provider_registry.healthy_providers()),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok_and(|providers| !providers.is_empty()));
 
     if db_ok && rpc_ok && agents_ok {
         (axum::http::StatusCode::OK, "OK").into_response()
@@ -3684,7 +3669,9 @@ async fn main() {
 
     let public_routes = Router::new()
         .route("/health", get(health_check))
+        .route("/health/live", get(health_check))
         .route("/ready", get(ready_check))
+        .route("/health/ready", get(ready_check))
         .route("/metrics", get(metrics_handler))
         .route("/auth/challenge", post(auth::challenge_handler))
         .route("/auth/verify", post(auth::verify_handler))
@@ -3752,7 +3739,9 @@ async fn main() {
 
     let api_routes = Router::new()
         .route("/health", get(health_check))
+        .route("/health/live", get(health_check))
         .route("/ready", get(ready_check))
+        .route("/health/ready", get(ready_check))
         .route("/metrics", get(metrics_handler))
         .route("/auth/challenge", post(auth::challenge_handler))
         .route("/auth/verify", post(auth::verify_handler))

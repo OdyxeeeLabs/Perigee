@@ -11,7 +11,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use std::time::Instant;
+
+const DEPENDENCY_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,12 +70,23 @@ impl DependencyCheck {
     }
 
     /// Construct a failed check result.
-    pub fn fail(name: impl Into<String>, latency_ms: Option<u64>, error: impl Into<String>) -> Self {
+    pub fn fail(name: impl Into<String>, latency_ms: Option<u64>, _error: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             status: HealthStatus::Unhealthy,
             latency_ms,
-            error: Some(error.into()),
+            // Probe errors often embed credentials, hostnames or database names.
+            // The public readiness response only needs to report availability.
+            error: Some("dependency unavailable".into()),
+        }
+    }
+
+    fn timed_out(name: impl Into<String>, latency_ms: u64) -> Self {
+        Self {
+            name: name.into(),
+            status: HealthStatus::Unhealthy,
+            latency_ms: Some(latency_ms),
+            error: Some("dependency timed out".into()),
         }
     }
 }
@@ -206,29 +220,54 @@ impl HealthService {
         let mut futs = Vec::new();
 
         if let Some(db_url) = self.config.database_url.clone() {
-            futs.push(tokio::spawn(async move { probe_postgres(db_url).await }));
+            futs.push(tokio::spawn(async move {
+                probe_with_timeout("postgres", DEPENDENCY_PROBE_TIMEOUT, probe_postgres(db_url)).await
+            }));
         }
         if let Some(redis_url) = self.config.redis_url.clone() {
-            futs.push(tokio::spawn(async move { probe_redis(redis_url).await }));
+            futs.push(tokio::spawn(async move {
+                probe_with_timeout("redis", DEPENDENCY_PROBE_TIMEOUT, probe_redis(redis_url)).await
+            }));
         }
-        for url in &self.config.rpc_node_urls {
+        for (index, url) in self.config.rpc_node_urls.iter().enumerate() {
             let url = url.clone();
-            futs.push(tokio::spawn(async move { probe_rpc_node(url).await }));
+            let name = format!("rpc_node_{}", index + 1);
+            futs.push(tokio::spawn(async move {
+                probe_with_timeout(name, DEPENDENCY_PROBE_TIMEOUT, probe_rpc_node(url)).await
+            }));
         }
 
         let mut checks = Vec::new();
         for handle in futs {
             match handle.await {
                 Ok(check) => checks.push(check),
-                Err(e) => checks.push(DependencyCheck::fail(
-                    "unknown",
+                Err(_) => checks.push(DependencyCheck::fail(
+                    "dependency",
                     None,
-                    format!("task panicked: {e}"),
+                    "dependency unavailable",
                 )),
             }
         }
 
         HealthCheck::new(checks)
+    }
+}
+
+async fn probe_with_timeout<F>(
+    name: impl Into<String>,
+    timeout: std::time::Duration,
+    probe: F,
+) -> DependencyCheck
+where
+    F: Future<Output = DependencyCheck>,
+{
+    let name = name.into();
+    match tokio::time::timeout(timeout, probe).await {
+        Ok(mut check) => {
+            check.name = name;
+            check
+        }
+        Err(_) => DependencyCheck::timed_out(name, timeout.as_millis() as u64),
     }
 }
 
@@ -276,7 +315,7 @@ async fn probe_redis(url: String) -> DependencyCheck {
 
 /// Probe an RPC node by issuing an HTTP GET to its health or root endpoint.
 async fn probe_rpc_node(url: String) -> DependencyCheck {
-    let name = format!("rpc_node:{}", sanitize_url_for_name(&url));
+    let name = "rpc_node".to_string();
     let t0 = Instant::now();
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -300,16 +339,6 @@ async fn probe_rpc_node(url: String) -> DependencyCheck {
             }
         }
     }
-}
-
-/// Strip scheme/auth from a URL so it's safe to use as a map key.
-fn sanitize_url_for_name(url: &str) -> String {
-    url.trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .split('/')
-        .next()
-        .unwrap_or(url)
-        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -375,14 +404,8 @@ mod tests {
     fn test_dependency_check_fail_serializes_error() {
         let dc = DependencyCheck::fail("redis", Some(10), "timeout");
         let json = serde_json::to_string(&dc).unwrap();
-        assert!(json.contains("\"error\":\"timeout\""));
+        assert!(json.contains("\"error\":\"dependency unavailable\""));
         assert!(json.contains("\"status\":\"unhealthy\""));
-    }
-
-    #[test]
-    fn test_sanitize_url() {
-        assert_eq!(sanitize_url_for_name("https://rpc.example.com/path"), "rpc.example.com");
-        assert_eq!(sanitize_url_for_name("http://localhost:8000"), "localhost:8000");
     }
 
     #[tokio::test]
@@ -403,5 +426,47 @@ mod tests {
         let result = svc.check_ready().await;
         assert_eq!(result.status, HealthStatus::Healthy);
         assert!(result.checks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn readiness_probe_results_are_redacted() {
+        let result = probe_with_timeout(
+            "postgres",
+            std::time::Duration::from_secs(1),
+            async { DependencyCheck::fail("postgres", None, "postgres://user:secret@db/private") },
+        )
+        .await;
+
+        assert_eq!(result.error.as_deref(), Some("dependency unavailable"));
+        assert_eq!(result.status, HealthStatus::Unhealthy);
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("secret"));
+        assert!(!json.contains("db/private"));
+    }
+
+    #[tokio::test]
+    async fn healthy_dependency_passes_readiness_probe() {
+        let result = probe_with_timeout(
+            "postgres",
+            std::time::Duration::from_secs(1),
+            async { DependencyCheck::ok("postgres", 1) },
+        )
+        .await;
+
+        assert_eq!(result.status, HealthStatus::Healthy);
+        assert_eq!(result.error, None);
+    }
+
+    #[tokio::test]
+    async fn readiness_probe_timeout_is_bounded_and_generic() {
+        let result = probe_with_timeout(
+            "redis",
+            std::time::Duration::from_millis(1),
+            std::future::pending::<DependencyCheck>(),
+        )
+        .await;
+
+        assert_eq!(result.status, HealthStatus::Unhealthy);
+        assert_eq!(result.error.as_deref(), Some("dependency timed out"));
     }
 }
