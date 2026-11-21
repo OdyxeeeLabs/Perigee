@@ -39,6 +39,33 @@ Errors follow the GraphQL shape with a stable `extensions.code`: `GRAPHQL_PARSE_
 at. Publishing to Apollo Studio's registry is a CI step (`rover subgraph publish`) outside this
 crate.
 
+The public SDL is checked in twice so compatibility can be reviewed in a pull
+request:
+
+- `docs/graphql/schema.graphql` is the proposed schema. Export the composed
+  gateway SDL here whenever a subgraph or gateway field changes.
+- `docs/graphql/schema.baseline.graphql` is the last reviewed client contract.
+
+The **GraphQL schema compatibility** workflow compares the proposed SDL with the
+baseline. Additions pass. The check fails with a table of path, baseline value,
+proposed value, and client impact for removals (types, fields, arguments, enum
+values, union members, root operations), definition-kind changes, type changes,
+nullable-to-required changes, output required-to-nullable changes, and input
+default changes.
+
+For an intentional breaking change, migrate clients first and then run:
+
+```bash
+cargo run -p graphql-schema-check --bin graphql-schema-tools -- \
+  update docs/graphql/schema.baseline.graphql docs/graphql/schema.graphql \
+  --reason "clients migrated in #123"
+```
+
+This records an approval header in the baseline. Commit the proposed schema and
+the baseline together; the baseline diff is the explicit, review-required
+approval. See [Contributing → GraphQL schema compatibility](../CONTRIBUTING.md#graphql-schema-compatibility)
+for the full process.
+
 ## Vault event subscriptions
 
 `SubscriptionHub` fans out committed vault events with hard limits: 100 concurrent
