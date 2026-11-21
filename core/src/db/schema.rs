@@ -175,22 +175,27 @@ impl ManagersTable {
     pub async fn update_status(
         &self,
         id: &str,
+        expected_status: &str,
         status: &str,
         notes: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<crate::db::models::ManagerRecord, sqlx::Error> {
         let mut connection = self.pool.acquire().await?;
-        sqlx::query(
-            "UPDATE managers SET status = ?1, notes = ?2, updated_at = ?3 WHERE id = ?4 AND status = 'pending'",
+        let result = sqlx::query(
+            "UPDATE managers SET status = ?1, notes = ?2, updated_at = ?3 WHERE id = ?4 AND status = ?5",
         )
         .bind(status)
         .bind(notes)
         .bind(now)
         .bind(id)
+        .bind(expected_status)
         .execute(&mut *connection)
         .await?;
         drop(connection);
 
+        if result.rows_affected() != 1 {
+            return Err(sqlx::Error::RowNotFound);
+        }
         self.find_by_id(id).await?.ok_or(sqlx::Error::RowNotFound)
     }
 }

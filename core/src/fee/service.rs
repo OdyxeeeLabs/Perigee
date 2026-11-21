@@ -1,6 +1,7 @@
 //! Fee service orchestration — sponsored fees and transparency queries (#669, #670).
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Kind of on-chain fee event (mirrors fee_engine `kind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -12,7 +13,7 @@ pub enum FeeKind {
 }
 
 /// Off-chain view of a fee_engine `FeeRecord` for analytics integration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct FeeRecordView {
     pub seq: u64,
     pub vault: String,
