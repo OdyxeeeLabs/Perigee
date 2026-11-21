@@ -7,6 +7,7 @@ pub mod analytics;
 pub mod calculation;
 pub mod collector;
 pub mod persistence;
+pub mod reconciliation;
 pub mod service;
 pub mod validation;
 

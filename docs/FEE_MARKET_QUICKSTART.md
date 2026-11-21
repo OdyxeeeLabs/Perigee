@@ -150,6 +150,20 @@ sqlite3 Perigee.db "SELECT COUNT(*) FROM ledger_fee_samples;"
 curl http://localhost:8080/fees/analytics | jq
 ```
 
+## Fee history reconciliation
+
+The fee reconciliation service compares fee-history records with indexed
+`fee_chg` ledger events over an inclusive ledger range, capped at 10,000
+ledgers. The serialized report has an explicit `status`: `clean` means the range was
+completed with no differences, while `discrepancies_found` includes missing
+history, missing ledger events, or conflicting records in `discrepancies`.
+Each audit report records the tenant, initiating actor, range, and timestamp.
+
+The comparison does not update fee history or prior reports. Persist each result
+with `FeeReconciliationRepository::reconcile_and_persist`; when creating
+tenant-tagged inputs, use the authenticated tenant identity rather than a tenant
+value supplied by the caller. Reports can then be read back only for that tenant.
+
 ## ⚙️ Configuration Options
 
 ### Change collection frequency

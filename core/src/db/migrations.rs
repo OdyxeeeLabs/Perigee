@@ -53,6 +53,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "add_vault_soft_delete",
         sql: include_str!("../../migrations/007_add_vault_soft_delete.sql"),
     },
+    Migration {
+        version: 8,
+        name: "create_fee_reconciliation_reports",
+        sql: include_str!("../../migrations/008_create_fee_reconciliation_reports.sql"),
+    },
 ];
 
 pub fn validate_migrations(migrations: &[Migration]) -> Result<(), String> {
