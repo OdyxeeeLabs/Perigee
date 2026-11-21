@@ -12,6 +12,37 @@ As a project in the **Stellar Wave Program**, we value collaboration and clear c
 
 ## 🧭 Runtime conventions
 
+### Database schema migrations
+
+The SQLite schema is managed by `core/migrations` and the embedded SQLx runner
+in `core/src/db/migrations.rs`. Submit exactly one migration per pull request.
+Use the next numeric prefix and paired files, for example
+`011_add_example_column.sql` and `011_add_example_column.down.sql`. Once a
+migration has shipped, never edit its up or down file; add a new version.
+
+Each migration must include both directions. Keep the up migration safe to
+retry where the database supports it (`IF NOT EXISTS`, guarded updates), and
+run schema changes in a transaction. The runner applies the complete pending
+set atomically and records a checksum; changed applied files stop deployment.
+Rollback is one version at a time with `cargo run -p Perigee-core -- migrate
+rollback`. Applying migrations uses `cargo run -p Perigee-core -- migrate`.
+Both commands use `DATABASE_URL`. Review rollback effects before using it on
+production data: down migrations may remove data stored in newly added tables
+or columns.
+
+For production changes, use expand-contract: first add nullable columns,
+tables, or compatible indexes; deploy code that can read both representations;
+backfill large datasets in a resumable job with bounded batches; switch reads
+and writes; then remove old schema in a later pull request after old code is
+gone. Avoid long table rewrites and blocking index creation in request-serving
+deployments. Put operational backfills in jobs, not in a long-running DDL
+transaction.
+
+The migration CI check applies the full catalog to a fresh in-memory test
+database, reapplies it to verify idempotency, and rolls back/reapplies the
+latest migration. Add migration-specific assertions alongside this check when
+introducing data transformations.
+
 These are project-wide rules enforced by code review. New code must follow them.
 
 ### Timestamps are always UTC
@@ -24,6 +55,8 @@ All timestamps emitted by the API and embedded in report payloads are **UTC** an
 
 If you need to migrate an existing `u64` (Unix epoch seconds) field, prefer upgrading the field type to `DateTime<Utc>` so the wire format is self-documenting.
 
+Use the `core/src/timestamps.rs` serde helpers for public fields; the full convention (precision, accepted offsets, ledger sequences) is in [`docs/API_STYLE_GUIDE.md`](./docs/API_STYLE_GUIDE.md#timestamps).
+
 ### Structured logging via `tracing`
 
 The `core` server uses [`tracing`](https://docs.rs/tracing) + `tracing-subscriber`. Application code should **never** write to `stdout`/`stderr` directly for diagnostic output:
@@ -32,6 +65,15 @@ The `core` server uses [`tracing`](https://docs.rs/tracing) + `tracing-subscribe
 - Severity is controlled by the `RUST_LOG` env var (e.g. `RUST_LOG=info,core=debug`).
 - Set `LOG_FORMAT=json` in production / container deployments to emit line-delimited JSON for log aggregators; omit it for the default pretty text format during local development.
 - The CLI subcommands (`merkle`, `compare`, `export`, `restore`) intentionally keep `println!`/`eprintln!` because their output is meant for shell pipelines, not log aggregation.
+
+### API error codes
+
+`ErrorCode` (`core/src/error_codes.rs`), `docs/ERROR_VARIANTS.md`, and the generated OpenAPI schema must list
+exactly the same set of public error codes. A CI test
+(`error_catalog_sync_tests::error_code_catalog_is_synchronized` in `core/src/main.rs`) fails the build if they
+drift apart. See [`docs/ERROR_VARIANTS.md` → "Adding a new error code"](./docs/ERROR_VARIANTS.md#adding-a-new-error-code)
+for the steps: add the enum variant, add its HTTP status mapping, add a row to the docs table, then re-run the
+sync check.
 
 ### Graceful shutdown
 

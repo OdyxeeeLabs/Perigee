@@ -117,3 +117,18 @@ admin rotation.
 The `create_vault` deployment path needs a real uploaded WASM artifact and is
 exercised by the factory's own integration harness; the authorization and registry
 behaviour around it is what the unit suite covers.
+## Address prediction
+
+`predict_vault_address(owner, seed, implementation)` returns the address
+`create_vault` will deploy to. It is a pure function of the factory address and
+those three arguments:
+
+- It does **not** depend on the caller, the ledger sequence, the admin, the
+  default implementation or the approved-WASM list, so rotating any of those
+  never moves a predicted address.
+- The proxy WASM hash is **not** part of the salt. Two vaults with the same
+  `(owner, seed, implementation)` therefore map to the same address regardless
+  of which approved WASM is named.
+- Deploying the same triple twice resolves to an address that is already taken
+  and `create_vault` fails with `DeterministicAddressCollision`; use a new
+  `seed` to create another vault for the same owner and implementation.

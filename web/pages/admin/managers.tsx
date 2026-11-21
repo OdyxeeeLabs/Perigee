@@ -6,8 +6,17 @@ import { useTranslations } from "next-intl";
 import { ConnectButton } from "../../components/ConnectButton";
 import { SEO } from "../../components/SEO";
 import { Button } from "../../components/ui/Button";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { LiveStatus } from "../../components/LiveRegion";
 import { managerService, type ManagerRecord } from "../../lib/api";
+
+interface PendingDestructiveAction {
+  action: string;
+  target: string;
+  consequence: string;
+  confirmLabel: string;
+  run: () => void;
+}
 
 export default function AdminManagers() {
   const t = useTranslations();
@@ -17,6 +26,7 @@ export default function AdminManagers() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingDestructiveAction | null>(null);
 
   useEffect(() => {
     loadManagers();
@@ -63,6 +73,25 @@ export default function AdminManagers() {
     } finally {
       setActionLoading(null);
     }
+  }
+
+  async function handleRemove(id: string) {
+    setActionLoading(id);
+    try {
+      await managerService.remove(id);
+      await loadManagers();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : t("admin.managers.removalFailed");
+      alert(msg);
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  function confirmPendingAction() {
+    const action = pendingAction;
+    setPendingAction(null);
+    action?.run();
   }
 
   const filterLabels: Record<string, string> = {
@@ -205,7 +234,15 @@ export default function AdminManagers() {
                               {actionLoading === m.id ? "..." : t("admin.managers.approve")}
                             </Button>
                             <Button
-                              onClick={() => handleReject(m.id)}
+                              onClick={() =>
+                                setPendingAction({
+                                  action: t("admin.managers.reject"),
+                                  target: m.name,
+                                  consequence: t("admin.managers.rejectConsequence"),
+                                  confirmLabel: t("admin.managers.reject"),
+                                  run: () => handleReject(m.id),
+                                })
+                              }
                               disabled={actionLoading === m.id}
                               variant="destructive"
                               size="sm"
@@ -213,6 +250,24 @@ export default function AdminManagers() {
                               {t("admin.managers.reject")}
                             </Button>
                           </div>
+                        )}
+                        {m.status !== "pending" && (
+                          <Button
+                            onClick={() =>
+                              setPendingAction({
+                                action: t("admin.managers.remove"),
+                                target: m.name,
+                                consequence: t("admin.managers.removeConsequence"),
+                                confirmLabel: t("admin.managers.remove"),
+                                run: () => handleRemove(m.id),
+                              })
+                            }
+                            disabled={actionLoading === m.id}
+                            variant="destructive"
+                            size="sm"
+                          >
+                            {t("admin.managers.remove")}
+                          </Button>
                         )}
                       </td>
                     </tr>
@@ -226,6 +281,17 @@ export default function AdminManagers() {
               {t("nav.backToAnalyzer")}
             </Button>
           </div>
+          {pendingAction && (
+            <ConfirmDialog
+              open
+              action={pendingAction.action}
+              target={pendingAction.target}
+              consequence={pendingAction.consequence}
+              confirmLabel={pendingAction.confirmLabel}
+              onConfirm={confirmPendingAction}
+              onCancel={() => setPendingAction(null)}
+            />
+          )}
         </section>
       </main>
     </>

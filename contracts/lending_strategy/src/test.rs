@@ -183,8 +183,8 @@ fn supply_can_restore_a_position_below_the_health_threshold() {
     let (env, contract, market, _operator, _admin) = setup(Protocol::AaveV3);
     let client = strategy_client(&env, &contract);
     market_client(&env, &market).set_position(
-        contract.clone(),
-        LendingPosition {
+        &contract,
+        &LendingPosition {
             supplied: 1_000,
             borrowed: 500,
             net_asset_value: 500,

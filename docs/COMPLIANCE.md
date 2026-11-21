@@ -22,6 +22,14 @@ python3 scripts/compliance/collect_evidence.py --evidence-dir evidence/2026-Q1
 | GDPR | Personal data | Lawful basis, data-subject rights, retention, breach notification at 72 h. |
 | PCI DSS | Cardholder data | Scope reduction: Perigee does **not** touch cardholder data, so most of PCI does not apply. |
 
+### User-facing privacy notice
+
+The web notice links to configurable privacy and telemetry documentation and is
+enabled by default. Deployments can override `NEXT_PUBLIC_PRIVACY_NOTICE_ENABLED`,
+`NEXT_PUBLIC_PRIVACY_POLICY_URL`, `NEXT_PUBLIC_TELEMETRY_DOCS_URL`, and
+`NEXT_PUBLIC_PRIVACY_LEGAL_NOTE`. The notice and its default copy do not assert
+certification or legal compliance; deployment owners supply any legal wording.
+
 ### Scope statement (PCI)
 
 Perigee moves no cardholder data. Deposits are made through Stellar Classic

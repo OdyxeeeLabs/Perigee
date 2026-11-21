@@ -1,0 +1,33 @@
+name: Database migrations
+
+on:
+  pull_request:
+    paths:
+      - "core/migrations/**"
+      - "core/src/db/migrations.rs"
+      - "core/src/db/mod.rs"
+      - "core/Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/database-migrations.yml"
+  push:
+    branches: [main]
+    paths:
+      - "core/migrations/**"
+      - "core/src/db/migrations.rs"
+      - "core/src/db/mod.rs"
+      - "core/Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/database-migrations.yml"
+
+jobs:
+  migrate-and-rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - name: Apply, repeat, rollback, and reapply migrations on SQLite
+        run: cargo test --package Perigee-core db::migrations

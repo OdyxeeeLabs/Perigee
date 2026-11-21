@@ -16,7 +16,9 @@
 //!   ledger before volume counts; `min_volume_for_reward` filters dust.
 //! - Reward claims pull from an admin-funded reward pool.
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol,
+};
 
 pub const BPS_DENOMINATOR: u32 = 10_000;
 
@@ -37,6 +39,7 @@ pub enum Error {
     NothingToClaim = 11,
     MathOverflow = 12,
     ReferrerNotFound = 13,
+    DuplicateAction = 14,
 }
 
 #[contracttype]
@@ -78,6 +81,8 @@ pub enum DataKey {
     Referrer(Address),
     /// First ledger an address was observed (anti-sybil age).
     FirstSeen(Address),
+    /// Action ids already credited through `attribute_action`.
+    Action(BytesN<32>),
 }
 
 fn require_admin(env: &Env, caller: &Address) -> Result<(), Error> {
@@ -225,11 +230,42 @@ impl Referral {
     }
 
     /// Attribute volume to a referee and accrue referrer rewards when anti-sybil checks pass.
+    ///
+    /// This entry point has no notion of *which* action the volume came from, so
+    /// calling it twice with the same amount credits it twice. Callers that need
+    /// at-most-once attribution per action should use
+    /// [`Referral::attribute_action`].
     pub fn attribute_volume(
         env: Env,
         referee: Address,
         volume: i128,
     ) -> Result<i128, Error> {
+        Self::attribute_inner(&env, referee, volume)
+    }
+
+    /// Attribute volume for a uniquely identified action, at most once.
+    ///
+    /// A repeated `action_id` is rejected with [`Error::DuplicateAction`] before
+    /// any state is touched. The id is only recorded when attribution succeeds,
+    /// so a rejected attempt (too new, too small, unknown referee) does not burn
+    /// the id and the action can be retried once it qualifies.
+    pub fn attribute_action(
+        env: Env,
+        referee: Address,
+        action_id: BytesN<32>,
+        volume: i128,
+    ) -> Result<i128, Error> {
+        let key = DataKey::Action(action_id);
+        if env.storage().persistent().has(&key) {
+            return Err(Error::DuplicateAction);
+        }
+        let reward = Self::attribute_inner(&env, referee, volume)?;
+        env.storage().persistent().set(&key, &true);
+        Ok(reward)
+    }
+
+    fn attribute_inner(env: &Env, referee: Address, volume: i128) -> Result<i128, Error> {
+        let env = env.clone();
         if volume <= 0 {
             return Err(Error::InvalidAmount);
         }

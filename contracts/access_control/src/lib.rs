@@ -100,6 +100,9 @@ use soroban_sdk::{
 mod selector;
 
 #[cfg(test)]
+mod test_precedence;
+
+#[cfg(test)]
 mod test;
 
 pub use selector::{SelectorKind, MAX_SELECTOR_LEN, WILDCARD};
@@ -1778,3 +1781,6 @@ impl AccessControl {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+mod test_batch_atomicity;

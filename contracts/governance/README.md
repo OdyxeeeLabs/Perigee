@@ -19,6 +19,31 @@ This contract provides a full-featured governance system where proposals progres
 - **Quorum Requirements**: Minimum participation thresholds
 - **Timelock Execution**: Delayed execution for security
 - **Admin Controls**: Proposal cancellation and parameter management
+- **Threshold Governance**: A configurable signer committee authorizes privileged operations
+- **Authorized Modules**: Multisig-approved modules can invoke contract actions
+
+## Multisig Governance
+
+`initialize` remains available for a one-signer deployment. For a threshold
+committee, call `initialize_with_signers(admins, signature_threshold,
+min_voting_units, identity_required)`. Every signer must authorize
+initialization, and the threshold must be between one and the number of unique
+signers.
+
+The legacy `register_voter`, `create_proposal`, and `close_proposal` entrypoints
+submit only the first signer as an approval, so they remain usable for a
+one-signer deployment. For a multisig committee, use the corresponding
+`*_with_approvals` entrypoint and supply distinct signer addresses. Signers are
+managed with `add_signer`, `remove_signer`, and
+`set_signature_threshold`; each change requires the current threshold.
+
+`execute_transaction` executes an arbitrary Soroban contract method only after
+the configured threshold has authorized that transaction.
+
+Modules are enabled or disabled with multisig approval. An enabled module must
+authorize each `execute_module` call; it can then invoke a Soroban contract
+method with Soroban `Val` arguments. This is native Soroban module support and
+does not deploy or bridge to an EVM Gnosis Safe.
 
 ## Proposal States
 

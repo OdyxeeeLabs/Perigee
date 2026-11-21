@@ -2504,6 +2504,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "perigee-cross-chain-governance"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "perigee-dex-lp-strategy"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "perigee-dynamic-fees"
 version = "0.1.0"
 dependencies = [
@@ -2532,6 +2546,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "perigee-lending-strategy"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "perigee-leverage-strategy"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "perigee-options-strategy"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "perigee-policy-vault"
 version = "0.1.0"
 dependencies = [
@@ -2553,6 +2588,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "perigee-staking-strategy"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "perigee-strategy-analytics"
 version = "0.1.0"
 dependencies = [
@@ -2568,6 +2610,13 @@ dependencies = [
 
 [[package]]
 name = "perigee-strategy-orchestration"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "perigee-timelock-controller"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -2603,6 +2652,13 @@ dependencies = [
 
 [[package]]
 name = "perigee-vault-metadata"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "perigee-vault-migration"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",

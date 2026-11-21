@@ -4,7 +4,9 @@
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod admin_overview;
 pub mod agent_fleet;
+pub mod api_keys;
 pub mod backpressure;
 pub mod billing_service;
 pub mod config;
@@ -49,8 +51,19 @@ pub mod simulation_service;
 pub mod wasm_branch_analysis;
 pub mod safe_math;
 pub mod hysteresis;
+pub mod strategy_simulation;
 pub mod strategy_persistence;
 pub mod circuit_breaker;
+pub mod graphql_gateway;
+pub mod job_queue;
+pub mod rest_api;
+pub mod webhooks;
+pub mod webhook_retry;
+pub mod webhook_keys;
+pub mod outbox_health;
+pub mod rate_limit_failure_policy;
+pub mod graphql_registry;
+pub mod vault_bulk_metadata;
 pub mod vault_validation;
 pub mod namespaced_errors;
 pub mod policy_expiry;
@@ -64,18 +77,32 @@ pub mod two_phase_commit;
 pub mod signed_receipt;
 pub mod config_versioning;
 pub mod settlement;
+pub mod archival;
+pub mod index_audit;
+pub mod outbox;
+pub mod soft_delete;
 pub mod note_privacy;
 pub mod rounding;
 pub mod agent_identity;
 pub mod agent_health;
+pub mod agent_health_summary;
 pub mod failover;
+pub mod manager_quota;
 pub mod rate_limiter;
 pub mod validation;
 pub mod fee_validation;
 pub mod secure_ids;
 pub mod audit_log;
+pub mod session;
 pub mod metrics;
 pub mod input_sanitization;
+pub mod idempotency;
+pub mod idempotency_sqlite;
+pub mod pagination;
+pub mod validation_pipeline;
+pub mod notification_preferences;
+pub mod notifications;
+pub mod timestamps;
 pub mod db;
 
 #[cfg(test)]

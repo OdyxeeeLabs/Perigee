@@ -81,6 +81,35 @@ anyone reading the state that this vault did not pause for a routine reason, and
 actually been lifted. So the incident cannot be closed while it is still in
 progress, and it cannot be erased before the pause ends either.
 
+## Pause-state matrix (#861)
+
+`is_paused(operation)` is the single source of truth, and the tests walk every
+combination rather than sampling:
+
+| State | Deposit | Withdraw | Rotate | FeeChange | Upgrade |
+| --- | --- | --- | --- | --- | --- |
+| Nothing paused | open | open | open | open | open |
+| Partial mask | blocked only if its bit is set | blocked only if its bit is set | same | same | same |
+| Global pause / trip | blocked | blocked | blocked | blocked | blocked |
+| Global pause lifted | back to the partial mask | back to the partial mask | same | same | same |
+
+There is **no** emergency exit that bypasses a global pause: while `pause()` or
+`trip()` is in force, withdrawals are blocked like everything else. The only way
+to keep withdrawals available during an incident is a *partial* pause that leaves
+`OP_WITHDRAW` out of the mask. A global pause does not clear the partial mask, so
+lifting it restores whatever partial mask was in place.
+
+## Unpause timing (#862)
+
+- The delay is measured in **ledger sequence** from `paused_at`, not wall-clock.
+- `unpause` succeeds when `current_sequence - paused_at >= UNPAUSE_DELAY_LEDGERS`
+  (inclusive): one ledger early fails, the exact threshold succeeds.
+- A failed `unpause` writes nothing, so repeated early calls cannot shorten the
+  delay and the pause stays in force.
+- This guard has no separate "schedule" step and no cancel/replace: the pause
+  itself starts the clock. The `pause` event carries the start ledger and the
+  `unpause` event carries the elapsed ledgers, which together record both ends.
+
 ## Errors
 
 | Code | Variant | Meaning |

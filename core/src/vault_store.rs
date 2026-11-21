@@ -180,6 +180,19 @@ impl VaultStore {
         })
     }
 
+    /// Active vaults of one manager (bounded at 10 000 rows) for cursor pagination.
+    pub async fn list_all_by_manager(
+        &self,
+        manager_id: &str,
+    ) -> Result<Vec<VaultRecord>, VaultStoreError> {
+        let (rows, _) = self
+            .vaults
+            .list_by_manager_paginated(manager_id, 10_000, 0)
+            .await
+            .map_err(VaultStoreError::Database)?;
+        Ok(rows)
+    }
+
     pub async fn get(&self, id: &str) -> Result<VaultRecord, VaultStoreError> {
         self.vaults
             .find_by_id(id)
@@ -366,11 +379,13 @@ pub struct ListVaultsQuery {
     path = "/vaults",
     params(
         ("manager_id" = String, Query, description = "Manager ID to list vaults for"),
-        ("page" = Option<u32>, Query, description = "Page number (1-indexed, default 1)"),
-        ("page_size" = Option<u32>, Query, description = "Records per page (default 50, max 200)")
+        ("limit" = Option<u32>, Query, description = "Page size, 1-100 (default 25)"),
+        ("cursor" = Option<String>, Query, description = "Signed cursor from the previous page's next_cursor"),
+        ("sort" = Option<String>, Query, description = "created_at or name; prefix - for descending")
     ),
     responses(
-        (status = 200, description = "Paginated list of vaults for the manager", body = PagedResponse<VaultRecord>),
+        (status = 200, description = "Cursor-paginated list of vaults for the manager"),
+        (status = 400, description = "Invalid limit, sort, filter or cursor"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
@@ -383,23 +398,35 @@ pub struct ListVaultsQuery {
 pub async fn list_vaults_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    SanitizedQuery(query): SanitizedQuery<ListVaultsQuery>,
-) -> Result<Json<crate::db::models::PagedResponse<VaultRecord>>, AppError> {
+    SanitizedQuery(params): SanitizedQuery<std::collections::HashMap<String, String>>,
+) -> Result<Json<crate::pagination::Page<VaultRecord>>, AppError> {
     user.authorize_vault_read("*")?;
-    verify_ownership(&state, &user, &query.manager_id).await?;
-    let pagination = crate::db::models::PaginationParams {
-        page: query.page,
-        page_size: query.page_size,
-    };
-    let mut result = state
-        .vault_store
-        .list_by_manager(&query.manager_id, &pagination)
-        .await?;
-    if !user.can_access_all_vaults() {
-        result.data.retain(|v| user.can_access_vault(&v.id));
-        result.total_count = result.data.len() as i64;
+    let manager_id = params
+        .get("manager_id")
+        .ok_or_else(|| AppError::BadRequest("manager_id is required".into()))?;
+    verify_ownership(&state, &user, manager_id).await?;
+
+    let codec = crate::pagination::cursor_codec();
+    let pairs: Vec<(String, String)> = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let request = crate::pagination::PageRequest::parse(&crate::pagination::VAULTS_LIST, codec, &pairs)?;
+
+    let mut rows = state.vault_store.list_all_by_manager(manager_id).await?;
+    if let Some(status) = request.filters.get("status") {
+        rows.retain(|v| &v.status == status);
     }
-    Ok(Json(result))
+    if !user.can_access_all_vaults() {
+        rows.retain(|v| user.can_access_vault(&v.id));
+    }
+    let by_name = request.sort.field == "name";
+    let page = crate::pagination::paginate_slice(&rows, &request, codec, |v| {
+        let value = if by_name {
+            v.name.clone()
+        } else {
+            v.created_at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+        };
+        (value, v.id.clone())
+    })?;
+    Ok(Json(page))
 }
 
 #[utoipa::path(
@@ -558,9 +585,7 @@ fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
             None,
             Some("Admin privileges required to perform this action"),
         );
-        Err(AppError::Unauthorized(
-            "Admin privileges required to perform this action".into(),
-        ))
+        crate::role_guard::require(user, crate::role_guard::Permission::ProtocolAdmin)
     }
 }
 

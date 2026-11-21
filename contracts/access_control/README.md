@@ -95,6 +95,27 @@ refuse to orphan live permissions — a per-pattern usage counter tracks how man
 direct grants and role selectors still reference the pattern, and removal is
 rejected while that count is non-zero.
 
+### Precedence (#870)
+
+The ACL is **purely additive**. There are no deny entries, so there is nothing
+for an exact selector to "override": a call is allowed when *any* of the rules in
+the authorization list above matches, and denied when none does.
+
+| Situation | Result |
+|---|---|
+| No matching rule | denied |
+| Exact grant only | allowed for that selector only (not siblings, not wildcards) |
+| Namespace wildcard `vault.*` | allowed for selectors starting with `vault.` |
+| Universal `*` | allowed for every well-formed selector |
+| Exact **and** wildcard both held | allowed; revoking the exact grant does **not** remove access the wildcard still gives |
+| Held directly **and** through a role | allowed until *both* are removed |
+| Malformed selector (`""`, `a*b`, `*x`) | denied for everyone except the root admin, even with `*` |
+| Root admin | always allowed |
+
+To take access away from someone holding a wildcard, revoke the wildcard
+itself; narrowing it with an exact rule is not supported. Rules for different
+principals never interact.
+
 ### Batch updates
 
 | Entry point | Semantics |
@@ -108,6 +129,22 @@ Batches are all-or-nothing: Soroban rolls the invocation back on error, so a
 batch that trips a limit half way through leaves no partial grant behind. Each
 batch is additionally capped by `max_batch_size`. The batch operations return
 the number of entries actually applied, which makes them safe to re-run.
+
+### Batch atomicity (#871)
+
+Every batch entry point is **all-or-nothing**:
+
+- If any entry fails — invalid selector, unregistered namespace wildcard, a bound
+  such as `max_grants_per_address` or `max_members_per_role`, an oversized or
+  empty batch — the call returns that error and **nothing** from the batch is
+  applied. For `batch_set_members` / `batch_set_permissions` this includes the
+  removals performed before the additions: a failed replacement leaves the
+  previous roster / selector set exactly as it was.
+- Entries that are merely redundant are skipped without error: `batch_grant`
+  skips pairs already held, `batch_revoke` skips pairs not held. Duplicate
+  entries inside one batch count once.
+- The return value and the emitted events describe only what was **actually
+  applied**: one event per applied entry, none for skipped ones.
 
 ### Events
 

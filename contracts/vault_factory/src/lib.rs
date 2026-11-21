@@ -48,6 +48,16 @@
 //! so it costs no rent, but a future version can claim `ProxyConfig` fields in the
 //! reserved region without moving the existing ones, which is what keeps a layout
 //! change from reinterpreting live entries.
+//!
+//! ## Layout compatibility
+//!
+//! [`ProxyConfig::storage_version`] is stamped at initialization. Every read of
+//! the config checks it against [`PROXY_STORAGE_VERSION`]; a value from an
+//! unknown layout is refused with [`Error::UnsupportedStorageVersion`] before
+//! any field is interpreted or written. Adding a field therefore requires an
+//! explicit migration that rewrites the config with a new version number, rather
+//! than letting a new binary silently misread old state. The current keys and
+//! the compatibility policy are documented in `docs/contract-storage-compatibility.md`.
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, xdr::ToXdr, Address, BytesN,
@@ -112,6 +122,9 @@ pub enum Error {
     ImplementationNotApproved = 11,
     /// A value would have overflowed its storage width.
     Overflow = 12,
+    /// The stored proxy config uses an unknown layout version. Refuse to read
+    /// or write it until an explicit migration rewrites it.
+    UnsupportedStorageVersion = 13,
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -387,10 +400,15 @@ impl VaultProxy {
 }
 
 fn load_proxy(env: &Env) -> Result<ProxyConfig, Error> {
-    env.storage()
+    let config: ProxyConfig = env
+        .storage()
         .instance()
         .get(&ProxyKey::Config)
-        .ok_or(Error::NotInitialized)
+        .ok_or(Error::NotInitialized)?;
+    if config.storage_version != PROXY_STORAGE_VERSION {
+        return Err(Error::UnsupportedStorageVersion);
+    }
+    Ok(config)
 }
 
 // ── Factory ──────────────────────────────────────────────────────────────────
@@ -501,16 +519,31 @@ pub fn create_vault(
         Ok(proxy)
     }
 
-/// The salt `create_vault` will use for a given triple.
-///
-/// Exposed so an integrator can compute the address off-chain before the vault
-exists, rather than only learning the salt afterwards. for a given triple.
+    /// The salt `create_vault` will use for a given triple.
     ///
     /// Exposed so an integrator can compute the address off-chain before the
     /// vault exists, rather than only learning the salt afterwards.
     pub fn vault_salt(env: Env, owner: Address, seed: BytesN<32>, implementation: Address) -> BytesN<32> {
         env.crypto()
             .sha256(&(owner, seed, implementation).to_xdr(&env))
+    }
+
+    /// The address `create_vault` will deploy to for `(owner, seed, implementation)`.
+    ///
+    /// Pure function of the factory address and the three arguments: it reads no
+    /// storage and does not depend on the caller, the ledger, the admin, the
+    /// default implementation or the approved-WASM list. `proxy_wasm` is
+    /// deliberately not an input — the salt does not bind it.
+    pub fn predict_vault_address(
+        env: Env,
+        owner: Address,
+        seed: BytesN<32>,
+        implementation: Address,
+    ) -> Address {
+        let salt = env
+            .crypto()
+            .sha256(&(owner, seed, implementation).to_xdr(&env));
+        env.deployer().with_current_contract(salt).deployed_address()
     }
 
     /// How many vaults the factory has created.

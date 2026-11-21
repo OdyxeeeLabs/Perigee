@@ -3,8 +3,11 @@
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+mod admin_overview;
 mod agent_fleet;
+mod api_keys;
 mod agent_health;
+mod agent_health_summary;
 mod agent_identity;
 mod audit_log;
 mod auth;
@@ -35,6 +38,9 @@ pub mod fee_store {
 }
 
 mod namespaced_errors;
+mod notification_preferences;
+mod notifications;
+mod outbox;
 pub mod fee_analytics;
 pub mod fee_collector;
 pub mod fee_store;
@@ -43,6 +49,7 @@ mod gas_golfing;
 mod middleware;
 pub mod insights;
 mod input_sanitization;
+mod job_queue;
 mod jobs;
 mod log_redaction;
 mod logging;
@@ -55,18 +62,30 @@ mod reputation;
 mod rounding;
 mod routing;
 mod rate_limiter;
+mod role_guard;
 pub mod rpc_provider;
 mod runner;
 mod secret_hash;
 mod simulation;
 mod simulation_service;
 mod signed_receipt;
+mod hysteresis;
 mod stellar_service;
+mod strategy_simulation;
+mod timestamps;
+mod transaction_outcome;
 mod two_phase_commit;
+pub mod vault_bulk_metadata;
 pub mod vault_store;
+mod manager_quota;
 mod manager_store;
+#[cfg(test)]
+mod tenant_isolation_tests;
+mod wasm_analysis_job;
 mod wasm_branch_analysis;
 mod ws;
+mod pagination;
+mod rest_api;
 
 use crate::cache::{ContractCache, SimulationCache};
 use crate::config::{FeatureFlag, FeatureFlagService};
@@ -1009,6 +1028,10 @@ impl Validate for AnalyzeRequest {
 
 #[derive(Serialize, ToSchema)]
 pub struct ResourceReport {
+    /// Always `simulated` (API-35): this report is a read-only preview and
+    /// never reflects a confirmed ledger change. See
+    /// `crate::transaction_outcome::TransactionStatus`.
+    pub status: crate::transaction_outcome::TransactionStatus,
     /// CPU instructions consumed
     #[schema(example = 1500)]
     pub cpu_instructions: u64,
@@ -1338,6 +1361,7 @@ fn to_report(
     let insights_report = insights_engine.analyze(&result.resources);
 
     ResourceReport {
+        status: crate::transaction_outcome::TransactionStatus::Simulated,
         cpu_instructions: result.resources.cpu_instructions,
         ram_bytes: result.resources.ram_bytes,
         ledger_read_bytes: result.resources.ledger_read_bytes,
@@ -1475,7 +1499,7 @@ async fn analyze(
     path = "/analyze/wasm",
     request_body = AnalyzeWasmRequest,
     responses(
-        (status = 200, description = "Resource analysis successful", body = ResourceReport),
+        (status = 200, description = "Resource analysis successful. `status` is always `simulated`: this is a read-only preview and never a confirmed ledger change.", body = ResourceReport),
         (status = 400, description = "Invalid base64 or WASM data"),
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Analysis failed")
@@ -2243,7 +2267,8 @@ async fn require_vault_v2(
     get,
     path = "/fees/history",
     params(
-        ("limit" = Option<i64>, Query, description = "Number of recent ledgers to retrieve"),
+        ("limit" = Option<i64>, Query, description = "Page size, 1-100 (default 25)"),
+        ("cursor" = Option<String>, Query, description = "Signed cursor from the previous page's next_cursor"),
         ("from_ledger" = Option<i64>, Query, description = "Starting ledger sequence"),
         ("to_ledger" = Option<i64>, Query, description = "Ending ledger sequence")
     ),
@@ -2255,27 +2280,29 @@ async fn require_vault_v2(
 )]
 async fn fee_history(
     State(state): State<Arc<AppState>>,
-    SanitizedQuery(req): SanitizedQuery<FeeHistoryRequest>,
     Extension(cancellation): Extension<RequestCancellation>,
-    Query(req): Query<FeeHistoryRequest>,
-) -> Result<Json<FeeHistoryResponse>, AppError> {
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<Json<serde_json::Value>, AppError> {
     tracing::info!("Fetching fee history");
 
-    let result = state
-        .fee_service
-        .history(fee::calculation::FeeHistoryQuery {
+    let codec = crate::pagination::cursor_codec();
+    let request = crate::pagination::PageRequest::parse(&crate::pagination::FEE_HISTORY, codec, &params)?;
+    let ledger_param = |name: &str| params.iter().find(|(k, _)| k == name).and_then(|(_, v)| v.parse().ok());
+
+    // Bounded window of the most recent ledgers; the cursor pages through it.
     let result = cancellation
         .wait(state.fee_service.history(billing_service::FeeHistoryQuery {
-            limit: req.limit,
-            from_ledger: req.from_ledger,
-            to_ledger: req.to_ledger,
+            limit: Some(1_000),
+            from_ledger: ledger_param("from_ledger"),
+            to_ledger: ledger_param("to_ledger"),
         }))
         .await
         .map_err(|_| AppError::Internal("Request cancelled".into()))??;
-    Ok(Json(FeeHistoryResponse {
-        samples: result.samples,
-        total_count: result.total_count,
-    }))
+    let page = crate::pagination::paginate_slice(&result.samples, &request, codec, |s| {
+        let ledger = format!("{:020}", s.ledger_sequence);
+        (ledger.clone(), ledger)
+    })?;
+    Ok(Json(serde_json::to_value(page).map_err(|e| AppError::Internal(e.to_string()))?))
 }
 
 #[utoipa::path(
@@ -2398,7 +2425,22 @@ impl utoipa::Modify for SecurityAddon {
         crate::audit_log::AuditEvent,
         reconciliation::ReconcileRequest, reconciliation::ReconcileResponse,
         reconciliation::ReconciliationReport, reconciliation::ListReportsQuery,
-        crate::jobs::Job, crate::jobs::JobStatus, crate::jobs::JobType
+        crate::jobs::Job, crate::jobs::JobStatus, crate::jobs::JobType,
+        // API-35: distinct simulation vs. submission/invocation outcome
+        // types, so a client can tell preview vs. confirmed state change
+        // apart without parsing free-form messages.
+        crate::transaction_outcome::TransactionStatus,
+        crate::transaction_outcome::SimulationOutcome,
+        crate::transaction_outcome::SubmissionAcknowledgement,
+        crate::transaction_outcome::PendingConfirmation,
+        crate::transaction_outcome::FinalizedOutcome,
+        // Registered so the public error-code catalog is visible in the
+        // served OpenAPI document, not just in `docs/ERROR_VARIANTS.md`.
+        // `error_catalog_sync_tests` (below) fails CI if this ever drifts
+        // from `ErrorCode`'s source or from the docs table. See
+        // CONTRIBUTING.md "Adding a new error code" before touching
+        // `ErrorCode`.
+        crate::error_codes::ErrorCode
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -2980,35 +3022,21 @@ async fn main() {
 
     // ── CLI: migrate subcommand ──────────────────────────────────────────
     if args.len() > 1 && args[1] == "migrate" {
-        tracing::info!("Running database migrations");
-        let pool_config = db::PoolConfig::new(
-            config.database_max_connections,
-            config.database_min_connections,
-            std::time::Duration::from_secs(config.database_acquire_timeout_secs),
-        )
-        .map_err(|error| error.to_string())
-        .unwrap_or_else(|error| panic!("Invalid database pool configuration: {error}"));
-        db::init_pool_with_config(&config.database_url, pool_config)
-            .await
-            .unwrap_or_else(|error| panic!("Failed to initialize database: {error}"));
-        println!("Database migrations applied successfully.");
-        tracing::info!(database_url = %config.database_url, "Running database migrations");
-        let pool_config = build_database_pool_config(&config);
-        db::init_pool_with_config(&config.database_url, &pool_config)
-            .await
-            .expect("Failed to connect to database and run migrations");
-        println!("Database migrations applied successfully.");
-        tracing::info!(
-            database_configured = !config.database_url.trim().is_empty(),
-            "Running database migrations"
-        );
         let db_pool = sqlx::SqlitePool::connect(&config.database_url)
             .await
             .expect("Failed to connect to database");
-        crate::db::migrations::run_migrations(&db_pool)
-            .await
-            .expect("Failed to run database migrations");
-        tracing::info!("Database migrations applied successfully.");
+        if args.get(2).map(String::as_str) == Some("rollback") {
+            let version = crate::db::MigrationRunner::new()
+                .rollback_one(&db_pool)
+                .await
+                .expect("Failed to roll back database migration");
+            println!("Rolled back migration: {version:?}");
+        } else {
+            crate::db::migrations::run_migrations(&db_pool)
+                .await
+                .expect("Failed to run database migrations");
+            println!("Database migrations applied successfully.");
+        }
         return;
     }
 
@@ -3170,7 +3198,7 @@ async fn main() {
     );
     let database_url = &config.database_url;
     let database_pool_config = build_database_pool_config(&config);
-    tracing::info!(database_url = %database_url, "Initializing database");
+    tracing::info!("Initializing database");
 
     let db_pool = db::init_pool_with_config(database_url, &database_pool_config)
         .await
@@ -3395,6 +3423,109 @@ async fn main() {
         database_pool_monitor,
     );
 
+    // API-31: read-only admin overview of queue and dependency health.
+    let admin_overview = {
+        let overview_pool = db_pool.clone();
+        let overview_registry = Arc::clone(&registry);
+        let overview_jobs = job_queue.clone();
+        Arc::new(
+            admin_overview::AdminOverviewService::default()
+                .with_probe(Arc::new(admin_overview::DependencyProbe::new(
+                    "database",
+                    move || {
+                        let pool = overview_pool.clone();
+                        async move {
+                            let mut connection =
+                                pool.acquire().await.map_err(|e| e.to_string())?;
+                            sqlx::query("SELECT 1")
+                                .execute(&mut *connection)
+                                .await
+                                .map(|_| ())
+                                .map_err(|e| e.to_string())
+                        }
+                    },
+                )))
+                .with_probe(Arc::new(admin_overview::DependencyProbe::new(
+                    "job_queue",
+                    move || {
+                        let jobs = overview_jobs.clone();
+                        async move {
+                            if jobs
+                                .health_check(admin_overview::DEFAULT_PROBE_TIMEOUT)
+                                .await
+                            {
+                                Ok(())
+                            } else {
+                                Err("job queue store is unhealthy".to_string())
+                            }
+                        }
+                    },
+                )))
+                .with_probe(Arc::new(admin_overview::DependencyProbe::new(
+                    "stellar_rpc",
+                    move || {
+                        let registry = Arc::clone(&overview_registry);
+                        async move {
+                            if registry.healthy_providers().await.is_empty() {
+                                Err("no healthy RPC providers".to_string())
+                            } else {
+                                Ok(())
+                            }
+                        }
+                    },
+                ))),
+        )
+    };
+
+    // API-37: per-manager quotas; defaults from PERIGEE_QUOTA_DEFAULT_*.
+    let manager_quotas = Arc::new(manager_quota::ManagerQuotaRegistry::from_env());
+
+    // API-38: scoped API keys for server-to-server integrations.
+    let api_key_store = Arc::new(api_keys::ApiKeyStore::new());
+
+    // API-27: atomic bulk vault metadata updates over the SQLite vault store.
+    let vault_bulk_metadata = Arc::new(
+        match sqlx::SqlitePool::connect_lazy(&config.database_url) {
+            Ok(pool) => vault_bulk_metadata::VaultBulkMetadataService::new(pool),
+            Err(error) => {
+                tracing::error!(
+                    error = %crate::log_redaction::redact_display(&error),
+                    "Bulk vault metadata store unavailable"
+                );
+                vault_bulk_metadata::VaultBulkMetadataService::unavailable()
+            }
+        },
+    );
+
+    // API-28: manager-facing agent health, attested by the fleet's health and
+    // identity services.
+    let agent_health_summary = {
+        let fleet = Arc::clone(&agent_fleet);
+        Arc::new(
+            agent_health_summary::AgentHealthRegistry::default()
+                .with_attestation(move |agent_id| Some(fleet.is_healthy(agent_id))),
+        )
+    };
+
+    // API-29: read-only strategy simulation over approved strategies.
+    let strategy_simulation = Arc::new(strategy_simulation::StrategySimulationService::new());
+
+    // API-30: notification service backing per-user preferences. The secret
+    // signs unsubscribe tokens; a random one is used when none is configured.
+    let notification_service = {
+        let secret = std::env::var("PERIGEE_NOTIFICATION_SECRET")
+            .map(String::into_bytes)
+            .unwrap_or_else(|_| {
+                let mut bytes = [0u8; 32];
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+                bytes.to_vec()
+            });
+        Arc::new(notifications::NotificationService::new(
+            &secret,
+            Arc::new(notifications::InMemoryQueue::default()),
+        ))
+    };
+
     let app_state = Arc::new(AppState {
         engine: SimulationEngine::with_registry_and_cache(
             Arc::clone(&registry),
@@ -3465,7 +3596,80 @@ async fn main() {
             "/admin/vaults/deleted",
             get(vault_store::list_deleted_vaults_handler),
         )
-        .route_layer(axum::middleware::from_fn(auth::auth_middleware));
+        // Read-only operational overview, administrators only (API-31)
+        .route(
+            "/admin/overview",
+            get(admin_overview::admin_overview_handler),
+        )
+        // Administrator-controlled per-manager quotas (API-37)
+        .route(
+            "/admin/quotas/:manager",
+            get(manager_quota::get_manager_quotas_handler)
+                .put(manager_quota::set_manager_quota_handler),
+        )
+        .route(
+            "/admin/quotas/:manager/:class",
+            axum::routing::delete(manager_quota::clear_manager_quota_handler),
+        )
+        // API-key lifecycle; managing keys requires a wallet session (API-38)
+        .route(
+            "/api-keys",
+            get(api_keys::list_api_keys_handler).post(api_keys::create_api_key_handler),
+        )
+        .route(
+            "/api-keys/:key_id/rotate",
+            post(api_keys::rotate_api_key_handler),
+        )
+        .route(
+            "/api-keys/:key_id",
+            axum::routing::delete(api_keys::revoke_api_key_handler),
+        )
+        // Atomic, bounded bulk metadata update; never touches policy (API-27)
+        .route(
+            "/vaults/bulk-metadata",
+            post(vault_bulk_metadata::bulk_update_vault_metadata_handler),
+        )
+        // Tenant-scoped agent health summaries (API-28)
+        .route(
+            "/vaults/:id/agent-health",
+            get(agent_health_summary::vault_agent_health_handler),
+        )
+        .route(
+            "/agents/health",
+            get(agent_health_summary::manager_agent_health_handler),
+        )
+        // Side-effect-free strategy preview (API-29)
+        .route(
+            "/strategies/:id/simulate",
+            post(strategy_simulation::simulate_strategy_handler),
+        )
+        // The caller's own notification preferences (API-30)
+        .route(
+            "/notifications/preferences",
+            get(notification_preferences::get_notification_preferences_handler)
+                .put(notification_preferences::update_notification_preferences_handler),
+        )
+        // Runs inside auth so the authenticated manager is known.
+        .route_layer(axum::middleware::from_fn(
+            manager_quota::manager_quota_middleware,
+        ))
+        .route_layer(axum::middleware::from_fn(auth::auth_middleware))
+        .layer(Extension(admin_overview))
+        .layer(Extension(manager_quotas))
+        .layer(Extension(Arc::clone(&api_key_store)))
+        .layer(Extension(vault_bulk_metadata))
+        .layer(Extension(agent_health_summary))
+        .layer(Extension(strategy_simulation))
+        .layer(Extension(notification_service));
+
+    // Routes authenticated with `X-API-Key` instead of a wallet session (API-38).
+    let integration_routes = Router::new()
+        .route(
+            "/integrations/api-key",
+            get(api_keys::introspect_api_key_handler),
+        )
+        .route_layer(axum::middleware::from_fn(api_keys::api_key_middleware))
+        .layer(Extension(api_key_store));
 
     let public_rate_limit_config = RateLimitConfig::from_env();
     tracing::info!(
@@ -3576,7 +3780,8 @@ async fn main() {
 
     let api_routes = Router::new()
         .merge(public_routes)
-        .merge(protected);
+        .merge(protected)
+        .merge(integration_routes);
 
     let app = Router::new()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
@@ -4341,6 +4546,209 @@ mod openapi_tests {
         assert!(json.contains("/fees/analytics"), "OpenAPI spec should contain /fees/analytics path");
         assert!(json.contains("/managers"), "OpenAPI spec should contain /managers path");
         assert!(json.contains("/reconcile"), "OpenAPI spec should contain /reconcile path");
+    }
+}
+
+/// Synchronization check for [API-32]: keeps the public `ErrorCode` catalog
+/// (`core/src/error_codes.rs`), its documentation (`docs/ERROR_VARIANTS.md`),
+/// and the generated OpenAPI schema from drifting apart.
+///
+/// `ErrorCode`'s doc comment calls it the "machine-readable error codes for
+/// API consumers", so every variant is treated as public here -- there is no
+/// internal-only subset to exclude (see `AppError` in `core/src/errors.rs`:
+/// every variant resolves to an `ErrorCode` that is serialized to clients).
+///
+/// See CONTRIBUTING.md's "Adding a new error code" section for the steps to
+/// take when this test fails after an intentional change.
+#[cfg(test)]
+mod error_catalog_sync_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// Resolves a path relative to the `core` crate root (`CARGO_MANIFEST_DIR`).
+    fn core_path(relative: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+    }
+
+    /// Resolves a path relative to the repository root (one level above `core`).
+    fn repo_root_path(relative: &str) -> PathBuf {
+        core_path("..").join(relative)
+    }
+
+    /// `true` for non-empty strings that look like a `SCREAMING_SNAKE_CASE`
+    /// error code identifier (upper-case letters, digits, underscores only,
+    /// starting with a letter).
+    fn is_screaming_snake_case(s: &str) -> bool {
+        let starts_with_letter = s.chars().next().is_some_and(|c| c.is_ascii_uppercase());
+        starts_with_letter
+            && s.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    }
+
+    /// Extracts the full public error-code catalog straight from
+    /// `ErrorCode::as_str`'s match arms.
+    ///
+    /// That match is exhaustive over every `ErrorCode` variant -- the
+    /// compiler rejects the crate if a variant is missing an arm -- so the
+    /// string literals found here are guaranteed to contain exactly one
+    /// entry per variant that currently exists in source. No hand-maintained
+    /// "list of all variants" is needed (and so there is nothing extra to
+    /// forget to update).
+    fn codes_from_source() -> BTreeSet<String> {
+        let text = fs::read_to_string(core_path("src/error_codes.rs"))
+            .expect("read core/src/error_codes.rs");
+
+        let fn_marker = "pub const fn as_str(&self) -> &'static str {";
+        let fn_start = text
+            .find(fn_marker)
+            .expect("locate `ErrorCode::as_str` in error_codes.rs -- did its signature change?");
+        let body = &text[fn_start..];
+        let fn_end = body
+            .find("\n    }\n")
+            .expect("locate the end of `ErrorCode::as_str`'s body");
+        let body = &body[..fn_end];
+
+        let mut codes = BTreeSet::new();
+        for line in body.lines() {
+            let line = line.trim();
+            let Some(arrow) = line.find("=>") else {
+                continue;
+            };
+            let rhs = line[arrow + 2..].trim();
+            let Some(open) = rhs.find('"') else {
+                continue;
+            };
+            let Some(close) = rhs[open + 1..].find('"') else {
+                continue;
+            };
+            codes.insert(rhs[open + 1..open + 1 + close].to_string());
+        }
+
+        assert!(
+            !codes.is_empty(),
+            "parsed zero codes out of ErrorCode::as_str -- the parser above no \
+             longer matches the source format"
+        );
+        codes
+    }
+
+    /// Extracts every `CODE_LIKE_THIS` token found in backtick-quoted table
+    /// cells in `docs/ERROR_VARIANTS.md`.
+    fn codes_from_docs() -> BTreeSet<String> {
+        let text = fs::read_to_string(repo_root_path("docs/ERROR_VARIANTS.md"))
+            .expect("read docs/ERROR_VARIANTS.md");
+
+        let mut codes = BTreeSet::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if !line.starts_with('|') {
+                continue;
+            }
+            let mut rest = line;
+            while let Some(start) = rest.find('`') {
+                let after = &rest[start + 1..];
+                let Some(end) = after.find('`') else {
+                    break;
+                };
+                let candidate = &after[..end];
+                if is_screaming_snake_case(candidate) {
+                    codes.insert(candidate.to_string());
+                }
+                rest = &after[end + 1..];
+            }
+        }
+        codes
+    }
+
+    /// Recursively collects every `SCREAMING_SNAKE_CASE` string leaf under a
+    /// JSON value. Used to read the codes back out of the generated OpenAPI
+    /// schema without depending on `utoipa`'s exact enum-schema shape.
+    fn collect_screaming_snake_strings(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+        match value {
+            serde_json::Value::String(s) if is_screaming_snake_case(s) => {
+                out.insert(s.clone());
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_screaming_snake_strings(item, out);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for v in map.values() {
+                    collect_screaming_snake_strings(v, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Extracts the codes advertised by the `ErrorCode` schema in the
+    /// generated OpenAPI document.
+    fn codes_from_openapi_schema() -> BTreeSet<String> {
+        let openapi = ApiDoc::openapi();
+        let json = serde_json::to_value(&openapi).expect("serialize OpenAPI document to JSON");
+        let schema = json.pointer("/components/schemas/ErrorCode").unwrap_or_else(|| {
+            panic!(
+                "`ErrorCode` schema is missing from the generated OpenAPI document -- \
+                 register `crate::error_codes::ErrorCode` in `ApiDoc`'s \
+                 `components(schemas(...))` list in core/src/main.rs"
+            )
+        });
+
+        let mut codes = BTreeSet::new();
+        collect_screaming_snake_strings(schema, &mut codes);
+        assert!(
+            !codes.is_empty(),
+            "the `ErrorCode` OpenAPI schema produced zero recognizable codes"
+        );
+        codes
+    }
+
+    /// Regression check for API-32 ("Keep the API error catalog synchronized
+    /// with code"): the public `ErrorCode` catalog (source),
+    /// `docs/ERROR_VARIANTS.md`, and the generated OpenAPI schema must all
+    /// list exactly the same set of codes.
+    ///
+    /// A failure here means an `ErrorCode` variant was added, renamed, or
+    /// removed without updating the documentation (or, less likely, without
+    /// registering `ErrorCode` in the OpenAPI schema) -- see CONTRIBUTING.md
+    /// "Adding a new error code".
+    #[test]
+    fn error_code_catalog_is_synchronized() {
+        let source = codes_from_source();
+        let docs = codes_from_docs();
+        let openapi = codes_from_openapi_schema();
+
+        let undocumented: Vec<_> = source.difference(&docs).collect();
+        let stale_docs: Vec<_> = docs.difference(&source).collect();
+        let missing_from_openapi: Vec<_> = source.difference(&openapi).collect();
+        let extra_in_openapi: Vec<_> = openapi.difference(&source).collect();
+
+        assert!(
+            undocumented.is_empty(),
+            "ErrorCode variant(s) exist in source but are undocumented in \
+             docs/ERROR_VARIANTS.md: {undocumented:?}. Add a row to the \
+             \"Named error codes\" table (see CONTRIBUTING.md \"Adding a new \
+             error code\")."
+        );
+        assert!(
+            stale_docs.is_empty(),
+            "docs/ERROR_VARIANTS.md documents code(s) that no longer exist on \
+             ErrorCode: {stale_docs:?}. Remove the stale row(s)."
+        );
+        assert!(
+            missing_from_openapi.is_empty(),
+            "ErrorCode variant(s) exist in source but are missing from the \
+             generated OpenAPI schema: {missing_from_openapi:?}. Check the \
+             `components(schemas(...))` registration in core/src/main.rs."
+        );
+        assert!(
+            extra_in_openapi.is_empty(),
+            "the OpenAPI schema advertises code(s) that do not exist on \
+             ErrorCode: {extra_in_openapi:?}."
+        );
     }
 }
 

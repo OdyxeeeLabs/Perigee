@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
+import { ConfirmDialog } from './ui/ConfirmDialog';
 import type { InvocationResult } from '../lib/sorobantypes';
 
 interface InvocationHistoryProps {
@@ -50,6 +51,7 @@ export function useInvocationHistory() {
 export function InvocationHistory({ onSelectResult }: InvocationHistoryProps) {
   const { history, clearHistory } = useInvocationHistory();
   const t = useTranslations();
+  const [confirmClear, setConfirmClear] = useState(false);
 
   if (history.length === 0) {
     return (
@@ -82,7 +84,7 @@ export function InvocationHistory({ onSelectResult }: InvocationHistoryProps) {
           {t("history.recent")}
         </h3>
         <button
-          onClick={clearHistory}
+          onClick={() => setConfirmClear(true)}
           style={{
             padding: '6px 12px',
             backgroundColor: '#161b22',
@@ -154,6 +156,18 @@ export function InvocationHistory({ onSelectResult }: InvocationHistoryProps) {
           </button>
         ))}
       </div>
+      <ConfirmDialog
+        open={confirmClear}
+        action={t('confirm.clearHistory')}
+        target={t('confirm.savedInvocations')}
+        consequence={t('confirm.clearHistoryConsequence')}
+        confirmLabel={t('history.clear')}
+        onConfirm={() => {
+          setConfirmClear(false);
+          clearHistory();
+        }}
+        onCancel={() => setConfirmClear(false)}
+      />
     </div>
   );
 }

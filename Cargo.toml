@@ -24,6 +24,14 @@ members = [
     "contracts/vault_strategy",
     # Lending strategy with health-factor guarded market operations.
     "contracts/lending_strategy",
+    # Concentrated-liquidity DEX LP with rebalancing and IL protection (#652).
+    "contracts/dex_lp_strategy",
+    # Liquid staking, reward claiming, and commission (#653).
+    "contracts/staking_strategy",
+    # Looping with liquidation protection and max LTV enforcement (#654).
+    "contracts/leverage_strategy",
+    # Covered calls, protective puts, and delta hedging (#655).
+    "contracts/options_strategy",
     # User-opted, versioned vault state migration with legacy compatibility.
     "contracts/vault_migration",
     # Queued contract calls with configurable minimum execution delay.
@@ -50,6 +58,10 @@ members = [
     "contracts/protocol_owned_liquidity",
     # Per-function permissions, wildcard selectors, batch ACL updates (#647).
     "contracts/access_control",
+    # Cross-chain governance: message passing, remote execution, state sync (#650).
+    "contracts/cross_chain_governance",
+    # Deterministic CPU/memory budget report for representative operations (#886).
+    "contracts/resource_budget",
 ]
 
 # CONTRACT-41 (#535): dedicated build profile used by `scripts/coverage.sh`

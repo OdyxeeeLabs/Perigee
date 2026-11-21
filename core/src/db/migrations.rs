@@ -8,6 +8,7 @@ pub struct Migration {
     pub version: i64,
     pub name: &'static str,
     pub sql: &'static str,
+    pub down_sql: &'static str,
 }
 
 impl Migration {
@@ -22,36 +23,67 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 1,
         name: "create_jobs_table",
         sql: include_str!("../../migrations/001_create_jobs_table.sql"),
+        down_sql: include_str!("../../migrations/001_create_jobs_table.down.sql"),
     },
     Migration {
         version: 2,
         name: "create_fee_tables",
         sql: include_str!("../../migrations/002_create_fee_tables.sql"),
+        down_sql: include_str!("../../migrations/002_create_fee_tables.down.sql"),
     },
     Migration {
         version: 3,
         name: "create_reconciliation_tables",
         sql: include_str!("../../migrations/003_create_reconciliation_tables.sql"),
+        down_sql: include_str!("../../migrations/003_create_reconciliation_tables.down.sql"),
     },
     Migration {
         version: 4,
         name: "create_vaults_table",
         sql: include_str!("../../migrations/004_create_vaults_table.sql"),
+        down_sql: include_str!("../../migrations/004_create_vaults_table.down.sql"),
     },
     Migration {
         version: 5,
         name: "add_vault_idempotency_key",
         sql: include_str!("../../migrations/005_add_vault_idempotency_key.sql"),
+        down_sql: include_str!("../../migrations/005_add_vault_idempotency_key.down.sql"),
     },
     Migration {
         version: 6,
         name: "create_managers_table",
         sql: include_str!("../../migrations/006_create_managers_table.sql"),
+        down_sql: include_str!("../../migrations/006_create_managers_table.down.sql"),
     },
     Migration {
         version: 7,
         name: "add_vault_soft_delete",
         sql: include_str!("../../migrations/007_add_vault_soft_delete.sql"),
+        down_sql: include_str!("../../migrations/007_add_vault_soft_delete.down.sql"),
+    },
+    Migration {
+        version: 8,
+        name: "create_outbox",
+        sql: include_str!("../../migrations/008_create_outbox.sql"),
+        down_sql: include_str!("../../migrations/008_create_outbox.down.sql"),
+    },
+    Migration {
+        version: 9,
+        name: "soft_delete_framework",
+        sql: include_str!("../../migrations/009_soft_delete_framework.sql"),
+        down_sql: include_str!("../../migrations/009_soft_delete_framework.down.sql"),
+    },
+    Migration {
+        version: 10,
+        name: "create_archival_tables",
+        sql: include_str!("../../migrations/010_create_archival_tables.sql"),
+        down_sql: include_str!("../../migrations/010_create_archival_tables.down.sql"),
+    },
+    Migration {
+        version: 11,
+        name: "create_vault_metadata_table",
+        sql: include_str!("../../migrations/011_create_vault_metadata_table.sql"),
+        down_sql: include_str!("../../migrations/011_create_vault_metadata_table.down.sql"),
     },
     Migration {
         version: 8,
@@ -73,6 +105,9 @@ pub fn validate_migrations(migrations: &[Migration]) -> Result<(), String> {
         }
         if migration.sql.trim().is_empty() {
             return Err(format!("migration {} has an empty SQL body", migration.name));
+        }
+        if migration.down_sql.trim().is_empty() {
+            return Err(format!("migration {} has no rollback SQL", migration.name));
         }
         let normalized_sql = migration.sql.to_ascii_lowercase();
         if normalized_sql
@@ -128,7 +163,7 @@ impl MigrationRunner {
         )
         .execute(&mut *transaction)
         .await?;
-        adopt_legacy_history(&mut *transaction, &self.migrations).await?;
+        adopt_legacy_history(&mut transaction, &self.migrations).await?;
         let known_versions: HashSet<i64> = self.migrations.iter().map(|m| m.version).collect();
         let applied_versions = sqlx::query_scalar::<_, i64>(
             "SELECT version FROM _perigee_migrations ORDER BY version",
@@ -180,10 +215,10 @@ impl MigrationRunner {
 
             let already_applied = match migration.name {
                 "add_vault_idempotency_key" => {
-                    column_exists(&mut *transaction, "vaults", "idempotency_key").await?
+                    column_exists(&mut transaction, "vaults", "idempotency_key").await?
                 }
                 "add_vault_soft_delete" => {
-                    column_exists(&mut *transaction, "vaults", "deleted_at").await?
+                    column_exists(&mut transaction, "vaults", "deleted_at").await?
                 }
                 _ => false,
             };
@@ -220,6 +255,36 @@ impl MigrationRunner {
         transaction.commit().await?;
         tracing::info!("Database migrations applied");
         Ok(())
+    }
+
+    /// Roll back exactly one applied migration. DDL and history update commit together.
+    pub async fn rollback_one(&self, pool: &SqlitePool) -> Result<Option<i64>, sqlx::Error> {
+        self.validate().map_err(protocol_error)?;
+        let mut transaction = pool.begin().await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS _perigee_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+        )
+        .execute(&mut *transaction)
+        .await?;
+        let latest = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT version, name, checksum FROM _perigee_migrations ORDER BY version DESC LIMIT 1",
+        )
+        .fetch_optional(&mut *transaction)
+        .await?;
+        let Some((version, name, checksum)) = latest else {
+            transaction.rollback().await?;
+            return Ok(None);
+        };
+        let migration = self.migrations.iter().find(|m| m.version == version)
+            .ok_or_else(|| protocol_error(format!("unknown migration version {version}")))?;
+        if migration.name != name || migration.checksum() != checksum {
+            return Err(protocol_error(format!("migration {version} history does not match this build")));
+        }
+        (&mut *transaction).execute(migration.down_sql).await?;
+        sqlx::query("DELETE FROM _perigee_migrations WHERE version = ?1")
+            .bind(version).execute(&mut *transaction).await?;
+        transaction.commit().await?;
+        Ok(Some(version))
     }
 }
 
@@ -275,6 +340,9 @@ async fn adopt_legacy_history(
     for version in legacy_versions {
         match version {
             1..=5 => {}
+            8..=10 => {
+                adopted_versions.insert(version);
+            }
             6 if managers_exists && deleted_at_exists => {
                 adopted_versions.insert(6);
                 adopted_versions.insert(7);
@@ -362,6 +430,7 @@ mod tests {
                 version: 1,
                 name: "duplicate",
                 sql: "SELECT 1",
+                down_sql: "SELECT 1",
             },
         ])
         .is_err());
@@ -369,6 +438,7 @@ mod tests {
             version: 1,
             name: "destructive",
             sql: "DROP TABLE vaults",
+            down_sql: "SELECT 1",
         }])
         .is_err());
     }
@@ -413,6 +483,7 @@ mod tests {
             "reconciliation_discrepancies",
             "vaults",
             "managers",
+            "vault_metadata",
         ] {
             assert!(tables.iter().any(|name| name == table), "missing {table}");
         }
@@ -423,7 +494,7 @@ mod tests {
         .fetch_all(&pool)
         .await
         .unwrap();
-        let expected_versions: Vec<i64> = (1..=7).collect();
+        let expected_versions: Vec<i64> = (1..=11).collect();
         assert_eq!(versions, expected_versions);
 
         let vault_columns = sqlx::query_scalar::<_, String>(
@@ -433,5 +504,15 @@ mod tests {
         .await
         .unwrap();
         assert!(vault_columns.iter().any(|column| column == "deleted_at"));
+    }
+
+    #[tokio::test]
+    async fn rollback_one_reverts_latest_migration_and_can_be_reapplied() {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        assert_eq!(MigrationRunner::new().rollback_one(&pool).await.unwrap(), Some(11));
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='vault_metadata'").fetch_one(&pool).await.unwrap(), 0);
+        run_migrations(&pool).await.unwrap();
+        assert_eq!(MigrationRunner::new().rollback_one(&pool).await.unwrap(), Some(11));
     }
 }

@@ -1,13 +1,13 @@
 /**
  * Privacy-first PII scrubbing and redaction engine for Perigee telemetry.
  *
- * Guarantees zero Personally Identifiable Information (PII) leakage:
+ * Reduces exposure to Personally Identifiable Information (PII) by:
  *  - Strips keys containing forbidden words (email, address, name, ip, phone, ssn, secret, etc.)
  *  - Redacts sensitive string values matching Stellar public keys (G...), Soroban contract IDs (C...),
  *    secret keys (S...), email patterns, IPv4/IPv6 addresses, and 64-character hex secrets.
  *  - Traverses nested objects and arrays recursively.
  *
- * Fully compliant with GDPR Article 25 (Privacy by Design) and CCPA.
+ * Deployment-specific compliance claims are intentionally not made here.
  */
 
 // Keys that must NEVER appear in telemetry payloads

@@ -4,9 +4,20 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
+    contract, contractimpl,
     testutils::{Address as _, BytesN as _, Ledger},
-    Address, BytesN, Env, String,
+    Address, BytesN, Env, String, Symbol, TryFromVal, Val, Vec,
 };
+
+#[contract]
+pub struct ModuleTarget;
+
+#[contractimpl]
+impl ModuleTarget {
+    pub fn ping(_env: Env) -> u32 {
+        42
+    }
+}
 
 fn setup(identity_required: bool) -> (Env, Address, Address, Address, Address) {
     let env = Env::default();
@@ -144,4 +155,136 @@ fn votes_cannot_exceed_registered_units() {
 
     let err = client.try_cast_vote(&proposal.id, &voter, &true, &11);
     assert_eq!(err, Err(Ok(Error::InsufficientVotingUnits)));
+}
+
+#[test]
+fn multisig_requires_distinct_authorized_signers_and_executes_modules() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GovernanceContract, ());
+    let signer_a = Address::generate(&env);
+    let signer_b = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let mut admins = Vec::new(&env);
+    admins.push_back(signer_a.clone());
+    admins.push_back(signer_b.clone());
+
+    let client = GovernanceContractClient::new(&env, &contract_id);
+    client.initialize_with_signers(&admins, &2, &1, &false);
+
+    let voter = Address::generate(&env);
+    let identity = make_identity(&env, 12);
+    let mut one_approval = Vec::new(&env);
+    one_approval.push_back(signer_a.clone());
+    assert_eq!(
+        client.try_register_voter_with_approvals(&voter, &5, &identity, &one_approval),
+        Err(Ok(Error::InsufficientSignatures))
+    );
+
+    let mut unauthorized_approvals = Vec::new(&env);
+    unauthorized_approvals.push_back(signer_a.clone());
+    unauthorized_approvals.push_back(outsider);
+    assert_eq!(
+        client.try_register_voter_with_approvals(&voter, &5, &identity, &unauthorized_approvals),
+        Err(Ok(Error::Unauthorized))
+    );
+    let mut duplicate_approvals = Vec::new(&env);
+    duplicate_approvals.push_back(signer_a.clone());
+    duplicate_approvals.push_back(signer_a.clone());
+    assert_eq!(
+        client.try_register_voter_with_approvals(&voter, &5, &identity, &duplicate_approvals),
+        Err(Ok(Error::InsufficientSignatures))
+    );
+
+    let mut approvals = Vec::new(&env);
+    approvals.push_back(signer_a);
+    approvals.push_back(signer_b);
+    client.register_voter_with_approvals(&voter, &5, &identity, &approvals);
+    assert_eq!(client.get_config().signature_threshold, 2);
+    assert_eq!(client.get_config().admins.len(), 2);
+
+    let target = env.register(ModuleTarget, ());
+    assert_eq!(
+        client.try_execute_transaction(
+            &one_approval,
+            &target,
+            &Symbol::new(&env, "ping"),
+            &Vec::<Val>::new(&env)
+        ),
+        Err(Ok(Error::InsufficientSignatures))
+    );
+    assert_eq!(
+        client.try_execute_transaction(
+            &unauthorized_approvals,
+            &target,
+            &Symbol::new(&env, "ping"),
+            &Vec::<Val>::new(&env)
+        ),
+        Err(Ok(Error::Unauthorized))
+    );
+    let execution_result = client.execute_transaction(
+        &approvals,
+        &target,
+        &Symbol::new(&env, "ping"),
+        &Vec::<Val>::new(&env),
+    );
+    assert_eq!(u32::try_from_val(&env, &execution_result).unwrap(), 42);
+
+    let module = Address::generate(&env);
+    client.enable_module(&approvals, &module);
+    assert!(client.is_module_enabled(&module));
+
+    let result = client.execute_module(
+        &module,
+        &target,
+        &Symbol::new(&env, "ping"),
+        &Vec::<Val>::new(&env),
+    );
+    assert_eq!(u32::try_from_val(&env, &result).unwrap(), 42);
+
+    client.disable_module(&approvals, &module);
+    assert!(!client.is_module_enabled(&module));
+    assert_eq!(
+        client.try_execute_module(
+            &module,
+            &target,
+            &Symbol::new(&env, "ping"),
+            &Vec::<Val>::new(&env)
+        ),
+        Err(Ok(Error::ModuleNotEnabled))
+    );
+}
+
+#[test]
+fn multisig_threshold_changes_require_current_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GovernanceContract, ());
+    let signer_a = Address::generate(&env);
+    let signer_b = Address::generate(&env);
+    let signer_c = Address::generate(&env);
+    let mut admins = Vec::new(&env);
+    admins.push_back(signer_a.clone());
+    admins.push_back(signer_b.clone());
+
+    let client = GovernanceContractClient::new(&env, &contract_id);
+    client.initialize_with_signers(&admins, &2, &1, &false);
+
+    let mut approvals = Vec::new(&env);
+    approvals.push_back(signer_a.clone());
+    approvals.push_back(signer_b.clone());
+    client.add_signer(&approvals, &signer_c);
+    client.set_signature_threshold(&approvals, &3);
+    assert_eq!(client.get_config().signature_threshold, 3);
+
+    let voter = Address::generate(&env);
+    assert_eq!(
+        client.try_register_voter_with_approvals(&voter, &5, &make_identity(&env, 13), &approvals),
+        Err(Ok(Error::InsufficientSignatures))
+    );
+
+    approvals.push_back(signer_c);
+    client.register_voter_with_approvals(&voter, &5, &make_identity(&env, 13), &approvals);
 }

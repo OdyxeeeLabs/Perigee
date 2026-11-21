@@ -27,6 +27,9 @@ import {
   Zap,
 } from "lucide-react";
 import { SEO } from "../../components/SEO";
+import { useLocale } from "@/components/LocaleSync";
+import { FormattedPercent } from "@/components/ui/FormattedAmount";
+import { formatNumber, formatTime, pluralize } from "@/lib/locale/format";
 import {
   trackTelemetryEvent,
   trackFunnelEvent,
@@ -36,10 +39,26 @@ import {
   isDoNotTrackEnabled,
 } from "../../lib/telemetry";
 import type { TelemetrySummary } from "../api/telemetry";
+import { useDataRefresh } from "../../hooks/useDataRefresh";
+import { useRouteChangePause } from "../../hooks/useRouteChangePause";
+
+async function loadTelemetry(timeframe: string): Promise<TelemetrySummary> {
+  const res = await fetch(`/api/telemetry?timeframe=${timeframe}`);
+  if (!res.ok) {
+    throw new Error(`Analytics request failed with status ${res.status}`);
+  }
+  return (await res.json()) as TelemetrySummary;
+}
 
 export default function AnalyticsDashboardPage() {
+  const locale = useLocale();
   const [summary, setSummary] = useState<TelemetrySummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const {
+    range: timeframe,
+    setRange: setTimeframe,
+    label: rangeLabel,
+  } = useDateRange();
   const [timeframe, setTimeframe] = useState<"24h" | "7d" | "30d" | "all">("24h");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [testEventSent, setTestEventSent] = useState(false);
@@ -50,7 +69,8 @@ export default function AnalyticsDashboardPage() {
   const fetchTelemetryData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/telemetry?timeframe=${timeframe}`);
+      const params = new URLSearchParams(dateRangeToApiParams(timeframe));
+      const res = await fetch(`/api/telemetry?${params.toString()}`);
       if (res.ok) {
         const data = (await res.json()) as TelemetrySummary;
         setSummary(data);
@@ -61,12 +81,46 @@ export default function AnalyticsDashboardPage() {
       setLoading(false);
     }
   }, [timeframe]);
+  const overview = useAnalyticsSection<TelemetrySummary>(
+    () => loadTelemetry(timeframe),
+    timeframe,
+  );
+  const features = useAnalyticsSection<TelemetrySummary["topFeatures"]>(
+    () => loadTelemetry(timeframe).then((data) => data.topFeatures),
+    timeframe,
+  );
+  const errors = useAnalyticsSection<TelemetrySummary["recentErrors"]>(
+    () => loadTelemetry(timeframe).then((data) => data.recentErrors),
+    timeframe,
+  );
+  const events = useAnalyticsSection<TelemetrySummary["recentEvents"]>(
+    () => loadTelemetry(timeframe).then((data) => data.recentEvents),
+    timeframe,
+  );
+
+  const retryAll = useCallback(() => {
+    overview.retry();
+    features.retry();
+    errors.retry();
+    events.retry();
+  }, [overview.retry, features.retry, errors.retry, events.retry]);
+
+  const isRefreshing = [
+    overview.state.status,
+    features.state.status,
+    errors.state.status,
+    events.state.status,
+  ].includes("loading");
+
+  const routeChanging = useRouteChangePause();
+  const { intervalMs: refreshIntervalMs } = useDataRefresh(fetchTelemetryData, {
+    enabled: !routeChanging,
+  });
 
   useEffect(() => {
-    fetchTelemetryData();
     setOptOutStatus(getTelemetryConsent());
     setIsDnt(isDoNotTrackEnabled());
-  }, [fetchTelemetryData]);
+  }, []);
 
   const handleTriggerTestEvent = () => {
     // Send a sample funnel flow to verify pipeline end-to-end
@@ -82,7 +136,7 @@ export default function AnalyticsDashboardPage() {
     setTestEventSent(true);
     setTimeout(() => {
       setTestEventSent(false);
-      fetchTelemetryData();
+      retryAll();
     }, 800);
   };
 
@@ -94,10 +148,11 @@ export default function AnalyticsDashboardPage() {
       optInTelemetry({ performance: true, errors: true, analytics: true });
       setOptOutStatus(true);
     }
-    fetchTelemetryData();
+    retryAll();
   };
 
   const handleExportData = () => {
+    const summary = overview.state.data;
     if (!summary) return;
     const jsonString = `data:text/json;charset=utf-8,${encodeURIComponent(
       JSON.stringify(summary, null, 2),
@@ -110,7 +165,7 @@ export default function AnalyticsDashboardPage() {
     downloadAnchor.remove();
   };
 
-  const funnel = summary?.funnel || {
+  const funnel = overview.state.data?.funnel || {
     walletConnect: 0,
     vaultView: 0,
     deposit: 0,
@@ -119,7 +174,7 @@ export default function AnalyticsDashboardPage() {
     overallConversionRate: 0,
   };
 
-  const filteredEvents = (summary?.recentEvents || []).filter((e) => {
+  const filteredEvents = (events.state.data || []).filter((e) => {
     if (selectedCategory === "all") return true;
     return (e.category || "feature") === selectedCategory;
   });
@@ -139,8 +194,8 @@ export default function AnalyticsDashboardPage() {
       <main className="min-h-screen bg-slate-950 text-slate-100 pb-16">
         {/* Top Header */}
         <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
-          <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
-            <div className="flex items-center gap-3">
+          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-4 sm:px-6 lg:px-8">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <Link href="/" className="text-xl font-bold tracking-tight text-cyan-400 hover:text-cyan-300">
                 Perigee
               </Link>
@@ -152,6 +207,9 @@ export default function AnalyticsDashboardPage() {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3">
+              <span className="hidden text-xs text-slate-500 lg:inline">
+                Auto-refresh: {refreshIntervalMs / 1000}s
+              </span>
               <button
                 type="button"
                 onClick={handleTriggerTestEvent}
@@ -173,10 +231,10 @@ export default function AnalyticsDashboardPage() {
 
               <button
                 type="button"
-                onClick={fetchTelemetryData}
+                onClick={retryAll}
                 className="flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800 transition-colors"
               >
-                <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin text-cyan-400" : ""}`} />
+                <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin text-cyan-400" : ""}`} />
                 <span className="hidden sm:inline">Refresh</span>
               </button>
             </div>
@@ -247,28 +305,47 @@ export default function AnalyticsDashboardPage() {
               })}
             </div>
 
-            {/* Timeframe Pills */}
-            <div className="flex items-center gap-1.5 self-start sm:self-auto">
-              {(["24h", "7d", "30d", "all"] as const).map((tf) => (
-                <button
-                  key={tf}
-                  type="button"
-                  onClick={() => setTimeframe(tf)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors ${
-                    timeframe === tf
-                      ? "bg-slate-800 text-white border border-slate-700"
-                      : "text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  {tf === "all" ? "All Time" : tf}
-                </button>
-              ))}
+            <div className="flex min-w-0 flex-col items-start gap-1.5 self-start sm:self-auto">
+              <div
+                role="group"
+                aria-label="Comparison date range"
+                className="flex flex-wrap items-center gap-1.5"
+              >
+                {DATE_RANGE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => setTimeframe(preset.id)}
+                    aria-pressed={timeframe === preset.id}
+                    data-testid={`range-${preset.id}`}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold uppercase tracking-wider transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
+                      timeframe === preset.id
+                        ? "bg-slate-800 text-white border border-slate-700"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500" data-testid="range-label">
+                {rangeLabel}
+              </p>
             </div>
           </div>
 
           {/* ── TAB 1: OVERVIEW ──────────────────────────────────────────────── */}
           {activeTab === "overview" && (
             <div className="space-y-6">
+              <AnalyticsSection
+                title="Overview"
+                state={overview.state}
+                onRetry={overview.retry}
+                emptyLabel="No telemetry recorded yet for this timeframe."
+                testId="overview"
+              >
+                {() => (
+                  <>
               {/* KPI Cards */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
                 <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 backdrop-blur">
@@ -277,7 +354,7 @@ export default function AnalyticsDashboardPage() {
                     <Activity className="h-4 w-4 text-cyan-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-white">
-                    {summary?.sampleCount?.toLocaleString() || 0}
+                    {summary ? formatNumber(summary.sampleCount, locale, { maximumFractionDigits: 0 }) : "0"}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">In-memory circular buffer</p>
                 </div>
@@ -288,7 +365,7 @@ export default function AnalyticsDashboardPage() {
                     <UserCheck className="h-4 w-4 text-emerald-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-emerald-400">
-                    {summary?.uniqueSessions?.toLocaleString() || 0}
+                    {summary ? formatNumber(summary.uniqueSessions, locale, { maximumFractionDigits: 0 }) : "0"}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">Zero cookies / rotating hash</p>
                 </div>
@@ -299,7 +376,7 @@ export default function AnalyticsDashboardPage() {
                     <TrendingUp className="h-4 w-4 text-cyan-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-white">
-                    {funnel.overallConversionRate}%
+                    <FormattedPercent value={funnel.overallConversionRate} locale={locale} digits={1} />
                   </p>
                   <p className="mt-1 text-[11px] text-cyan-400/80">Connect → Vault → Deposit</p>
                 </div>
@@ -310,7 +387,7 @@ export default function AnalyticsDashboardPage() {
                     <ShieldAlert className="h-4 w-4 text-amber-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-amber-400">
-                    {summary?.categoryCounts?.error || 0}
+                    {formatNumber(summary?.categoryCounts?.error ?? 0, locale, { maximumFractionDigits: 0 })}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">Sanitized error traces</p>
                 </div>
@@ -321,7 +398,7 @@ export default function AnalyticsDashboardPage() {
                     <Zap className="h-4 w-4 text-emerald-400" />
                   </div>
                   <p className="mt-2 text-3xl font-bold text-white">
-                    {summary?.categoryCounts?.performance || 0}
+                    {formatNumber(summary?.categoryCounts?.performance ?? 0, locale, { maximumFractionDigits: 0 })}
                   </p>
                   <p className="mt-1 text-[11px] text-slate-500">LCP, INP, CLS, TTFB, Hydration</p>
                 </div>
@@ -338,7 +415,7 @@ export default function AnalyticsDashboardPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="rounded-full bg-cyan-950 px-3 py-1 text-xs font-semibold text-cyan-400 border border-cyan-800">
-                      Overall: {funnel.overallConversionRate}%
+                      Overall: <FormattedPercent value={funnel.overallConversionRate} locale={locale} digits={1} />
                     </span>
                   </div>
                 </div>
@@ -356,11 +433,13 @@ export default function AnalyticsDashboardPage() {
                       </div>
                       <Wallet className="h-4 w-4 text-cyan-400" />
                     </div>
-                    <p className="text-2xl font-bold text-white">{funnel.walletConnect}</p>
+                    <p className="text-2xl font-bold text-white">{formatNumber(funnel.walletConnect, locale, { maximumFractionDigits: 0 })}</p>
                     <p className="text-xs text-slate-500 mt-1">Unique wallet connections</p>
                     <div className="mt-4 pt-3 border-t border-slate-900 flex items-center justify-between text-xs">
                       <span className="text-slate-400">Step 1 → 2 Rate</span>
-                      <span className="font-semibold text-cyan-300">{funnel.walletToVaultRate}%</span>
+                      <span className="font-semibold text-cyan-300">
+                        <FormattedPercent value={funnel.walletToVaultRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
 
@@ -375,11 +454,13 @@ export default function AnalyticsDashboardPage() {
                       </div>
                       <Eye className="h-4 w-4 text-cyan-400" />
                     </div>
-                    <p className="text-2xl font-bold text-white">{funnel.vaultView}</p>
+                    <p className="text-2xl font-bold text-white">{formatNumber(funnel.vaultView, locale, { maximumFractionDigits: 0 })}</p>
                     <p className="text-xs text-slate-500 mt-1">Vault details viewed</p>
                     <div className="mt-4 pt-3 border-t border-slate-900 flex items-center justify-between text-xs">
                       <span className="text-slate-400">Step 2 → 3 Rate</span>
-                      <span className="font-semibold text-cyan-300">{funnel.vaultToDepositRate}%</span>
+                      <span className="font-semibold text-cyan-300">
+                        <FormattedPercent value={funnel.vaultToDepositRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
 
@@ -394,24 +475,36 @@ export default function AnalyticsDashboardPage() {
                       </div>
                       <CheckCircle2 className="h-4 w-4 text-emerald-400" />
                     </div>
-                    <p className="text-2xl font-bold text-emerald-400">{funnel.deposit}</p>
+                    <p className="text-2xl font-bold text-emerald-400">{formatNumber(funnel.deposit, locale, { maximumFractionDigits: 0 })}</p>
                     <p className="text-xs text-slate-500 mt-1">Deposits completed</p>
                     <div className="mt-4 pt-3 border-t border-emerald-900/60 flex items-center justify-between text-xs">
                       <span className="text-slate-400">Total Funnel Success</span>
-                      <span className="font-semibold text-emerald-300">{funnel.overallConversionRate}%</span>
+                      <span className="font-semibold text-emerald-300">
+                        <FormattedPercent value={funnel.overallConversionRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
                 </div>
               </div>
+                  </>
+                )}
+              </AnalyticsSection>
 
               {/* Feature Usage & Error Log Grid */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Feature Usage */}
-                <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-bold text-white text-base">Top Feature Usage</h3>
-                    <span className="text-xs text-slate-500">Sorted by count</span>
-                  </div>
+                <AnalyticsSection
+                  title="Feature usage"
+                  state={features.state}
+                  onRetry={features.retry}
+                  emptyLabel="No feature usage recorded yet in this timeframe."
+                  testId="features"
+                >
+                  {(topFeatures) => (
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-bold text-white text-base">Top Feature Usage</h3>
+                        <span className="text-xs text-slate-500">Sorted by count</span>
+                      </div>
 
                   {(summary?.topFeatures || []).length === 0 ? (
                     <div className="py-8 text-center text-xs text-slate-500">
@@ -426,10 +519,11 @@ export default function AnalyticsDashboardPage() {
                           <div key={feat.name} className="space-y-1">
                             <div className="flex items-center justify-between text-xs">
                               <span className="font-mono text-cyan-300">{feat.name}</span>
-                              <span className="font-semibold text-white">{feat.count}</span>
+                              <span className="font-semibold text-white">{formatNumber(feat.count, locale, { maximumFractionDigits: 0 })}</span>
                             </div>
                             <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
                               <div
+                                data-mirror-rtl="true"
                                 className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-500"
                                 style={{ width: `${pct}%` }}
                               />
@@ -439,16 +533,23 @@ export default function AnalyticsDashboardPage() {
                       })}
                     </div>
                   )}
-                </div>
+                </AnalyticsSection>
 
-                {/* Sanitized Error Trace Monitor */}
-                <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-bold text-white text-base">Recent Errors (Sanitized)</h3>
-                    <span className="rounded-full bg-slate-800 px-2.5 py-0.5 text-[10px] text-slate-400">
-                      Zero PII
-                    </span>
-                  </div>
+                <AnalyticsSection
+                  title="Recent errors"
+                  state={errors.state}
+                  onRetry={errors.retry}
+                  emptyLabel="No errors recorded in this timeframe. System healthy."
+                  testId="errors"
+                >
+                  {(recentErrors) => (
+                    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 backdrop-blur">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-bold text-white text-base">Recent Errors (Sanitized)</h3>
+                        <span className="rounded-full bg-slate-800 px-2.5 py-0.5 text-[10px] text-slate-400">
+                          Zero PII
+                        </span>
+                      </div>
 
                   {(summary?.recentErrors || []).length === 0 ? (
                     <div className="py-8 text-center text-xs text-emerald-400">
@@ -466,15 +567,34 @@ export default function AnalyticsDashboardPage() {
                               {err.component || "Global error"}
                             </span>
                             <span className="rounded bg-red-900/60 px-2 py-0.5 text-[10px] text-red-200">
-                              {err.count} {err.count === 1 ? "occurrence" : "occurrences"}
+                              {formatNumber(err.count, locale, { maximumFractionDigits: 0 })} {pluralize(err.count, { one: "occurrence", other: "occurrences" }, locale)}
                             </span>
                           </div>
                           <p className="text-slate-300 font-mono text-[11px] break-all">{err.message}</p>
                         </div>
-                      ))}
+                      ) : (
+                        <div className="space-y-3">
+                          {recentErrors.map((err, idx) => (
+                            <div
+                              key={idx}
+                              className="rounded-xl border border-red-950/60 bg-red-950/20 p-3 text-xs"
+                            >
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="font-mono text-[11px] font-semibold text-red-300 truncate max-w-[200px]">
+                                  {err.component || "Global error"}
+                                </span>
+                                <span className="rounded bg-red-900/60 px-2 py-0.5 text-[10px] text-red-200">
+                                  {err.count} {err.count === 1 ? "occurrence" : "occurrences"}
+                                </span>
+                              </div>
+                              <p className="text-slate-300 font-mono text-[11px] break-all">{err.message}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
+                </AnalyticsSection>
               </div>
             </div>
           )}
@@ -503,18 +623,21 @@ export default function AnalyticsDashboardPage() {
                           </p>
                         </div>
                       </div>
-                      <span className="text-2xl font-bold text-white">{funnel.walletConnect}</span>
+                      <span className="text-2xl font-bold text-white">{formatNumber(funnel.walletConnect, locale, { maximumFractionDigits: 0 })}</span>
                     </div>
 
                     <div className="mt-4 flex items-center gap-4 text-xs text-slate-400">
                       <span>Conversion to Vault View:</span>
                       <div className="h-2 flex-1 rounded-full bg-slate-800 overflow-hidden">
                         <div
+                          data-mirror-rtl="true"
                           className="h-full bg-cyan-500 rounded-full"
                           style={{ width: `${Math.min(funnel.walletToVaultRate, 100)}%` }}
                         />
                       </div>
-                      <span className="font-bold text-cyan-300">{funnel.walletToVaultRate}%</span>
+                      <span className="font-bold text-cyan-300">
+                        <FormattedPercent value={funnel.walletToVaultRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
 
@@ -532,18 +655,21 @@ export default function AnalyticsDashboardPage() {
                           </p>
                         </div>
                       </div>
-                      <span className="text-2xl font-bold text-white">{funnel.vaultView}</span>
+                      <span className="text-2xl font-bold text-white">{formatNumber(funnel.vaultView, locale, { maximumFractionDigits: 0 })}</span>
                     </div>
 
                     <div className="mt-4 flex items-center gap-4 text-xs text-slate-400">
                       <span>Conversion to Deposit:</span>
                       <div className="h-2 flex-1 rounded-full bg-slate-800 overflow-hidden">
                         <div
+                          data-mirror-rtl="true"
                           className="h-full bg-emerald-500 rounded-full"
                           style={{ width: `${Math.min(funnel.vaultToDepositRate, 100)}%` }}
                         />
                       </div>
-                      <span className="font-bold text-emerald-300">{funnel.vaultToDepositRate}%</span>
+                      <span className="font-bold text-emerald-300">
+                        <FormattedPercent value={funnel.vaultToDepositRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
 
@@ -561,12 +687,14 @@ export default function AnalyticsDashboardPage() {
                           </p>
                         </div>
                       </div>
-                      <span className="text-2xl font-bold text-emerald-400">{funnel.deposit}</span>
+                      <span className="text-2xl font-bold text-emerald-400">{formatNumber(funnel.deposit, locale, { maximumFractionDigits: 0 })}</span>
                     </div>
 
                     <div className="mt-4 pt-4 border-t border-emerald-900/60 flex items-center justify-between text-xs">
                       <span className="text-slate-300 font-medium">End-to-End Funnel Conversion:</span>
-                      <span className="text-lg font-bold text-emerald-300">{funnel.overallConversionRate}%</span>
+                      <span className="text-lg font-bold text-emerald-300">
+                        <FormattedPercent value={funnel.overallConversionRate} locale={locale} digits={1} />
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -598,10 +726,17 @@ export default function AnalyticsDashboardPage() {
                 ))}
               </div>
 
-              {/* Event Stream Table */}
+              <AnalyticsSection
+                title="Event stream"
+                state={events.state}
+                onRetry={events.retry}
+                emptyLabel="No events recorded yet for this timeframe."
+                testId="events"
+              >
+                {() => (
               <div className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden backdrop-blur">
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
+                  <table className="w-full text-start text-xs">
                     <thead className="border-b border-slate-800 bg-slate-950/80 text-slate-400">
                       <tr>
                         <th className="px-4 py-3 font-semibold">Timestamp</th>
@@ -621,7 +756,7 @@ export default function AnalyticsDashboardPage() {
                         filteredEvents.map((ev, i) => (
                           <tr key={i} className="hover:bg-slate-800/30 transition-colors">
                             <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
-                              {ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : "Just now"}
+                              {ev.timestamp ? formatTime(ev.timestamp, locale) : "Just now"}
                             </td>
                             <td className="px-4 py-3">
                               <span
@@ -664,6 +799,8 @@ export default function AnalyticsDashboardPage() {
                   </table>
                 </div>
               </div>
+                )}
+              </AnalyticsSection>
             </div>
           )}
 

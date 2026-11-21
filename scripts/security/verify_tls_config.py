@@ -41,13 +41,13 @@ WEAK_MAC_SUFFIXES = ("_SHA", "_MD5", "_SHA1")
 
 
 def parse_yaml_subset(text: str) -> dict:
-    """Parse the strict YAML subset used by the policy files.
+    """Parse the YAML used by the policy files."""
+    try:
+        import yaml
+        return yaml.safe_load(text) or {}
+    except ImportError:
+        pass
 
-    Understands nested mappings, block sequences and inline flow sequences —
-    which is everything the policy files contain — and raises on anything else
-    rather than guessing. A full YAML library would be the better tool, but
-    adding a dependency to a gate that runs on every push is a worse trade.
-    """
     root: dict = {}
     # Stack of (indent, container). `container` is a dict or a list.
     stack: list[tuple[int, object]] = [(-1, root)]

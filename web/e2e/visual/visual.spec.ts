@@ -63,6 +63,16 @@ async function offline(page: Page) {
   );
 }
 
+async function arabic(page: Page) {
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("perigee:locale", "ar");
+    } catch {
+      return;
+    }
+  });
+}
+
 test.describe("focus visibility", () => {
   test("the first focusable control has a visible ring", async ({ page }) => {
     await stabilise(page);
@@ -133,5 +143,49 @@ test.describe("offline and degraded states", () => {
       // This state legitimately shows a cached timestamp.
       maxDiffPixelRatio: 0.02,
     });
+  });
+});
+
+test.describe("RTL workflow", () => {
+  test("vault list mirrors numeric columns", async ({ page }) => {
+    await arabic(page);
+    await stabilise(page);
+    await offline(page);
+    await page.goto("/vaults");
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    await expect(page.locator("html")).toHaveAttribute("lang", "ar");
+    await expect(page.getByText("Balance", { exact: true }).first()).toHaveCSS("text-align", "end");
+    await expect(page).toHaveScreenshot("rtl-vault-list.png");
+  });
+
+  test("vault detail keeps its chart and metrics in the RTL flow", async ({ page }) => {
+    await arabic(page);
+    await stabilise(page);
+    await offline(page);
+    await page.goto("/vaults/demo");
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    await expect(page).toHaveScreenshot("rtl-vault-detail.png");
+  });
+
+  test("manager onboarding keeps identifiers left-to-right", async ({ page }) => {
+    await arabic(page);
+    await stabilise(page);
+    await offline(page);
+    await page.goto("/managers/onboarding");
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    await expect(page).toHaveScreenshot("rtl-onboarding.png");
+  });
+
+  test("settings switches and numeric values follow the inline axis", async ({ page }) => {
+    await arabic(page);
+    await stabilise(page);
+    await offline(page);
+    await page.goto("/settings");
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    const slippage = page.locator("#slippage-value");
+    if (await slippage.count()) {
+      await expect(slippage).toHaveCSS("text-align", "end");
+    }
+    await expect(page).toHaveScreenshot("rtl-settings.png");
   });
 });

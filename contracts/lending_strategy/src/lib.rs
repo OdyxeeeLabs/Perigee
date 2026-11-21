@@ -60,6 +60,7 @@ pub struct LendingPosition {
 ///
 /// Adapters are responsible for protocol-specific token movement and for
 /// normalizing position values into `LendingPosition`.
+#[soroban_sdk::contractclient(name = "LendingMarketClient")]
 pub trait LendingMarket {
     fn supply(e: Env, asset: Address, amount: i128, account: Address);
     fn withdraw(e: Env, asset: Address, amount: i128, recipient: Address);
@@ -67,8 +68,6 @@ pub trait LendingMarket {
     fn repay(e: Env, asset: Address, amount: i128, account: Address) -> i128;
     fn position(e: Env, account: Address) -> LendingPosition;
 }
-
-soroban_sdk::contractclient!(name = "LendingMarketClient", trait = LendingMarket);
 
 #[contracttype]
 #[derive(Clone)]
