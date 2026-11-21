@@ -95,6 +95,9 @@ Contract tests live in `contracts/<crate>/src/test.rs` and use `Env::default()`,
 errors. Any change to persistent contract state must document its storage keys
 and upgrade-compatibility behaviour in the PR description.
 
+Deployment probes and their restart versus traffic-routing roles are described
+in [Health probes](./HEALTH_PROBES.md).
+
 ## Contribution workflow
 
 - Work from your fork; never push to `OdyxeeeLabs/Perigee:main`.
