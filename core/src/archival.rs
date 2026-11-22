@@ -39,6 +39,16 @@ pub enum ArchivalError {
     VerificationFailed(String, String),
     #[error("not allowed to read another tenant's archive")]
     TenantMismatch,
+    #[error("restoring an archived record requires an administrator role")]
+    NotAuthorized,
+    #[error("restoring an archived record requires a non-empty reason")]
+    MissingReason,
+    #[error("no archived object with key `{0}`")]
+    UnknownArchive(String),
+    #[error("archived record `{0}` has already been restored")]
+    AlreadyRestored(String),
+    #[error("active record `{0}` is newer than the archived state")]
+    ActiveRecordNewer(String),
 }
 
 fn ident(name: &str) -> Result<&str, ArchivalError> {
@@ -250,6 +260,11 @@ pub struct ManifestEntry {
     pub month: u32,
     pub row_count: u64,
     pub checksum: String,
+    /// Version of the record snapshot captured in the archive. Used to avoid
+    /// overwriting newer state during a restore. Defaults to `0` for manifests
+    /// written before restore support existed.
+    #[serde(default)]
+    pub version: i64,
     /// Data subjects present in the object, for GDPR erasure.
     pub subjects: BTreeSet<String>,
 }
@@ -277,6 +292,11 @@ impl ArchiveManifest {
         }
         self.entries.insert(entry.key.clone(), entry);
         Ok(())
+    }
+
+    /// One archived object by its storage key.
+    pub fn get(&self, key: &str) -> Option<&ManifestEntry> {
+        self.entries.get(key)
     }
 
     pub fn is_archived(&self, table: &str, year: i32, month: u32) -> bool {
@@ -443,6 +463,138 @@ impl RetrievalService {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Auditable restore
+// ---------------------------------------------------------------------------
+
+/// The principal asking to restore an archived record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreActor {
+    pub id: String,
+    pub is_admin: bool,
+}
+
+impl RestoreActor {
+    /// An administrator, the only role allowed to restore archived records.
+    pub fn admin(id: impl Into<String>) -> Self {
+        RestoreActor { id: id.into(), is_admin: true }
+    }
+
+    /// A non-administrator; restore attempts are rejected and audited.
+    pub fn standard(id: impl Into<String>) -> Self {
+        RestoreActor { id: id.into(), is_admin: false }
+    }
+}
+
+/// State currently held in the hot/warm store for one record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveRecord {
+    pub version: i64,
+    pub updated_at: u64,
+}
+
+/// Audit details written for every successful restore.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RestoreAuditRecord {
+    pub key: String,
+    pub table: String,
+    pub tenant: String,
+    pub vault: String,
+    pub year: i32,
+    pub month: u32,
+    pub actor: String,
+    pub reason: String,
+    pub version: i64,
+    pub restored_at: u64,
+}
+
+/// Restores cold records into the active store with a permission check, a
+/// reason, and an append-only audit trail.
+///
+/// Restore is deliberately conservative:
+///
+/// * only administrators may restore;
+/// * the archive key must exist and the reason must be non-empty;
+/// * a record already at the archived version (or newer) in the active store is
+///   never overwritten; only strictly older active state may be replaced.
+#[derive(Default)]
+pub struct RestoreService {
+    active: BTreeMap<String, ActiveRecord>,
+    audit: Vec<RestoreAuditRecord>,
+}
+
+impl RestoreService {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Seeds the active store; used by callers loading state from the database.
+    pub fn seed_active(&mut self, key: &str, version: i64, updated_at: u64) {
+        self.active.insert(key.to_string(), ActiveRecord { version, updated_at });
+    }
+
+    /// Current active state for a record, if any.
+    pub fn active(&self, key: &str) -> Option<&ActiveRecord> {
+        self.active.get(key)
+    }
+
+    /// Append-only audit trail, oldest first.
+    pub fn audit_log(&self) -> &[RestoreAuditRecord] {
+        &self.audit
+    }
+
+    /// Restores the archived object `key` into the active store.
+    ///
+    /// Authorization and input validation happen before any state changes, so
+    /// a denied or invalid request never mutates the active store or audit log.
+    pub fn restore(
+        &mut self,
+        manifest: &ArchiveManifest,
+        actor: &RestoreActor,
+        key: &str,
+        reason: &str,
+        now: u64,
+    ) -> Result<RestoreAuditRecord, ArchivalError> {
+        if !actor.is_admin {
+            return Err(ArchivalError::NotAuthorized);
+        }
+        if reason.trim().is_empty() {
+            return Err(ArchivalError::MissingReason);
+        }
+        let entry = manifest
+            .get(key)
+            .ok_or_else(|| ArchivalError::UnknownArchive(key.to_string()))?
+            .clone();
+
+        if let Some(active) = self.active.get(key) {
+            if active.version > entry.version {
+                return Err(ArchivalError::ActiveRecordNewer(key.to_string()));
+            }
+            if active.version >= entry.version {
+                return Err(ArchivalError::AlreadyRestored(key.to_string()));
+            }
+        }
+
+        let version = entry.version + 1;
+        self.active.insert(key.to_string(), ActiveRecord { version, updated_at: now });
+
+        let record = RestoreAuditRecord {
+            key: entry.key,
+            table: entry.table,
+            tenant: entry.tenant,
+            vault: entry.vault,
+            year: entry.year,
+            month: entry.month,
+            actor: actor.id.clone(),
+            reason: reason.to_string(),
+            version,
+            restored_at: now,
+        };
+        self.audit.push(record.clone());
+        Ok(record)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,6 +685,7 @@ mod tests {
             month,
             row_count: 10,
             checksum: "abc".into(),
+            version: 3,
             subjects: subjects.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -617,5 +770,85 @@ mod tests {
         assert_eq!(service.status(&id, "globex", 1).unwrap_err(), ArchivalError::TenantMismatch);
         assert_eq!(service.status("nope", "acme", 1).unwrap_err(), ArchivalError::UnknownRequest("nope".into()));
         assert!(service.request(query("bad table", "acme", None, (2025, 1), (2025, 1)), "a", 0).is_err());
+    }
+
+    fn archived_manifest() -> ArchiveManifest {
+        let mut manifest = ArchiveManifest::default();
+        manifest.record_verified(entry("k1", 7, &[]), 10, 10, "abc").unwrap();
+        manifest
+    }
+
+    #[test]
+    fn restore_requires_an_administrator_and_a_reason() {
+        let manifest = archived_manifest();
+        let mut service = RestoreService::new();
+
+        assert_eq!(
+            service.restore(&manifest, &RestoreActor::standard("alice"), "k1", "reconcile", 100),
+            Err(ArchivalError::NotAuthorized)
+        );
+        assert_eq!(
+            service.restore(&manifest, &RestoreActor::admin("admin"), "k1", "   ", 100),
+            Err(ArchivalError::MissingReason)
+        );
+        assert!(service.active("k1").is_none());
+        assert!(service.audit_log().is_empty());
+    }
+
+    #[test]
+    fn restore_rejects_unknown_archived_keys() {
+        let manifest = archived_manifest();
+        let mut service = RestoreService::new();
+
+        assert_eq!(
+            service.restore(&manifest, &RestoreActor::admin("admin"), "missing", "reconcile", 100),
+            Err(ArchivalError::UnknownArchive("missing".into()))
+        );
+        assert!(service.audit_log().is_empty());
+    }
+
+    #[test]
+    fn successful_restore_updates_active_state_and_writes_an_audit_record() {
+        let manifest = archived_manifest();
+        let mut service = RestoreService::new();
+
+        let record = service
+            .restore(&manifest, &RestoreActor::admin("admin-1"), "k1", "customer reconciliation", 1_000)
+            .unwrap();
+
+        assert_eq!(record.key, "k1");
+        assert_eq!((record.table.as_str(), record.tenant.as_str()), ("vault_events", "acme"));
+        assert_eq!((record.year, record.month), (2025, 7));
+        assert_eq!(record.actor, "admin-1");
+        assert_eq!(record.reason, "customer reconciliation");
+        assert_eq!(record.version, 4);
+        assert_eq!(record.restored_at, 1_000);
+        assert_eq!(service.active("k1"), Some(&ActiveRecord { version: 4, updated_at: 1_000 }));
+        assert_eq!(service.audit_log(), std::slice::from_ref(&record));
+
+        assert_eq!(
+            service.restore(&manifest, &RestoreActor::admin("admin-2"), "k1", "again", 1_100),
+            Err(ArchivalError::AlreadyRestored("k1".into()))
+        );
+        assert_eq!(service.audit_log().len(), 1, "duplicate restores are not audited as successes");
+    }
+
+    #[test]
+    fn restore_never_overwrites_newer_active_state_but_replaces_older_state() {
+        let manifest = archived_manifest();
+        let mut service = RestoreService::new();
+
+        service.seed_active("k1", 1, 10);
+        let record =
+            service.restore(&manifest, &RestoreActor::admin("a"), "k1", "rollback", 20).unwrap();
+        assert_eq!(record.version, 4, "older active state is replaced by the archived snapshot");
+
+        service.seed_active("k1", 9, 30);
+        assert_eq!(
+            service.restore(&manifest, &RestoreActor::admin("a"), "k1", "rollback", 40),
+            Err(ArchivalError::ActiveRecordNewer("k1".into()))
+        );
+        assert_eq!(service.active("k1"), Some(&ActiveRecord { version: 9, updated_at: 30 }));
+        assert_eq!(service.audit_log().len(), 1, "rejected restores are not audited as successes");
     }
 }
