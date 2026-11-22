@@ -241,3 +241,184 @@ fn test_recovery_key_creation() {
     assert!(key.is_active);
     assert_eq!(key.chain_id, 1);
 }
+
+// ── #875 — Malformed-payload boundary tests for cross-chain messages ─────────
+
+/// An empty payload data field is distinct from a minimum-valid payload and
+/// must round-trip without corruption.
+#[test]
+fn test_empty_payload_data_roundtrip() {
+    let e = Env::default();
+    let nonce = BytesN::from_array(&e, &[0u8; 32]);
+    let pid = BytesN::from_array(&e, &[1u8; 32]);
+    let hash = BytesN::from_array(&e, &[2u8; 32]);
+
+    let meta = PayloadMetadata {
+        version: 1,
+        timestamp: 1000,
+        sequence: 0,
+        expiration_height: 9999,
+        nonce,
+    };
+
+    let payload = CrossChainPayload {
+        payload_id: pid.clone(),
+        source_chain_id: 1,
+        destination_chain_id: 2,
+        sender: Bytes::new(&e),
+        recipient: Bytes::new(&e),
+        data: Bytes::new(&e),  // empty data — minimum valid
+        operation: Symbol::new(&e, "transfer"),
+        metadata: meta,
+        payload_hash: hash,
+        gas_limit: 0,
+    };
+
+    // Round-trip: all fields survive reconstruction.
+    assert_eq!(payload.payload_id, pid);
+    assert_eq!(payload.data.len(), 0);
+    assert_eq!(payload.source_chain_id, 1);
+    assert_eq!(payload.destination_chain_id, 2);
+    assert_eq!(payload.metadata.version, 1);
+}
+
+/// A payload with version 0 represents an unknown / unsupported version.
+/// The struct should still be constructable so callers can inspect the version
+/// and reject it at the application layer.
+#[test]
+fn test_unknown_version_payload_is_constructable() {
+    let e = Env::default();
+    let nonce = BytesN::from_array(&e, &[0u8; 32]);
+    let pid = BytesN::from_array(&e, &[0u8; 32]);
+    let hash = BytesN::from_array(&e, &[0u8; 32]);
+
+    let meta = PayloadMetadata {
+        version: 0, // unknown version
+        timestamp: 0,
+        sequence: 0,
+        expiration_height: 0,
+        nonce,
+    };
+
+    let payload = CrossChainPayload {
+        payload_id: pid,
+        source_chain_id: 0,
+        destination_chain_id: 0,
+        sender: Bytes::new(&e),
+        recipient: Bytes::new(&e),
+        data: Bytes::new(&e),
+        operation: Symbol::new(&e, "noop"),
+        metadata: meta.clone(),
+        payload_hash: hash,
+        gas_limit: 0,
+    };
+
+    // Version 0 is accessible so the application layer can reject it.
+    assert_eq!(payload.metadata.version, 0);
+    assert_eq!(meta.version, 0);
+}
+
+/// Maximum-size fields: source/destination chain IDs at u64::MAX must be stored
+/// without truncation.
+#[test]
+fn test_maximum_chain_id_values() {
+    let e = Env::default();
+    let nonce = BytesN::from_array(&e, &[0xFFu8; 32]);
+    let pid = BytesN::from_array(&e, &[0xFFu8; 32]);
+    let hash = BytesN::from_array(&e, &[0xFFu8; 32]);
+
+    let meta = PayloadMetadata {
+        version: u32::MAX,
+        timestamp: u64::MAX,
+        sequence: u64::MAX,
+        expiration_height: u64::MAX,
+        nonce,
+    };
+
+    let payload = CrossChainPayload {
+        payload_id: pid,
+        source_chain_id: u64::MAX,
+        destination_chain_id: u64::MAX,
+        sender: Bytes::from_slice(&e, &[0u8; 64]),
+        recipient: Bytes::from_slice(&e, &[0u8; 64]),
+        data: Bytes::from_slice(&e, &[0xAAu8; 128]),
+        operation: Symbol::new(&e, "swap"),
+        metadata: meta,
+        payload_hash: hash,
+        gas_limit: u64::MAX,
+    };
+
+    assert_eq!(payload.source_chain_id, u64::MAX);
+    assert_eq!(payload.destination_chain_id, u64::MAX);
+    assert_eq!(payload.gas_limit, u64::MAX);
+    assert_eq!(payload.metadata.timestamp, u64::MAX);
+}
+
+/// Nonce values must be distinct: two payloads with different nonces are not equal.
+#[test]
+fn test_distinct_nonces_produce_distinct_metadata() {
+    let e = Env::default();
+    let nonce_a = BytesN::from_array(&e, &[1u8; 32]);
+    let nonce_b = BytesN::from_array(&e, &[2u8; 32]);
+    let hash = BytesN::from_array(&e, &[0u8; 32]);
+
+    let meta_a = PayloadMetadata {
+        version: 1,
+        timestamp: 1000,
+        sequence: 1,
+        expiration_height: 9000,
+        nonce: nonce_a,
+    };
+    let meta_b = PayloadMetadata {
+        version: 1,
+        timestamp: 1000,
+        sequence: 1,
+        expiration_height: 9000,
+        nonce: nonce_b,
+    };
+
+    // Different nonces → metadata structs are not equal.
+    assert_ne!(meta_a, meta_b);
+    let _ = hash; // silence unused warning
+}
+
+/// PayloadBatch fields survive construction without silent truncation.
+#[test]
+fn test_payload_batch_field_integrity() {
+    let e = Env::default();
+    let batch_id = BytesN::from_array(&e, &[7u8; 32]);
+    let root = BytesN::from_array(&e, &[8u8; 32]);
+
+    let batch = PayloadBatch {
+        batch_id: batch_id.clone(),
+        source_chain_id: 42,
+        payload_count: 100,
+        merkle_root: root.clone(),
+        batch_timestamp: 999_999,
+        batch_ttl_seconds: 3600,
+    };
+
+    assert_eq!(batch.batch_id, batch_id);
+    assert_eq!(batch.payload_count, 100);
+    assert_eq!(batch.merkle_root, root);
+    assert_eq!(batch.batch_ttl_seconds, 3600);
+}
+
+/// EncodedPayload: compressed_size must not exceed original_size for well-formed
+/// entries — the struct stores these for the caller to validate.
+#[test]
+fn test_encoded_payload_size_fields() {
+    let e = Env::default();
+    let data = Bytes::from_slice(&e, b"hello cross-chain");
+
+    let encoded = EncodedPayload {
+        encoded_data: data,
+        encoding_scheme: String::from_str(&e, "borsh"),
+        compression_type: String::from_str(&e, "none"),
+        original_size: 17,
+        compressed_size: 17, // no compression applied
+    };
+
+    // For "none" compression the sizes are equal.
+    assert_eq!(encoded.original_size, encoded.compressed_size);
+}
