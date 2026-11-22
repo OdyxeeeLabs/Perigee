@@ -44,11 +44,11 @@ export const SITE_ORIGIN =
   process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "https://perigee.app";
 export const DEFAULT_OG_IMAGE = "/og-default.png";
 
-export function buildTitle(title: string): string {
-  if (/(Perigee)/i.test(title)) {
+export function buildTitle(title: string, siteName: string = "Perigee"): string {
+  if (new RegExp(siteName, "i").test(title) || /(Perigee)/i.test(title)) {
     return title;
   }
-  return `${title} | Perigee`;
+  return `${title} | ${siteName}`;
 }
 
 export function buildCanonical(path?: string): string | undefined {
@@ -68,21 +68,29 @@ export function SEO({
   twitterCard = "summary_large_image",
 }: SeoProps) {
   let siteName = "Perigee";
+  let defaultTitle = "Perigee - Soroban Smart Contract Resource Analyzer";
+  let defaultDescription =
+    "Explore, test, and analyze the CPU, RAM, and ledger footprint of Soroban smart contracts.";
+
   try {
     const t = useTranslations();
     siteName = t("seo.siteName") || siteName;
+    defaultTitle = t("seo.defaultTitle") || defaultTitle;
+    defaultDescription = t("seo.defaultDescription") || defaultDescription;
   } catch {
     // Fallback if not wrapped in NextIntlProvider
   }
 
-  const fullTitle = buildTitle(title);
+  const effectiveTitle = title || defaultTitle;
+  const effectiveDescription = description || defaultDescription;
+  const fullTitle = buildTitle(effectiveTitle, siteName);
   const canonical = buildCanonical(path);
   const image = ogImage ?? DEFAULT_OG_IMAGE;
 
   return (
     <Head>
       <title>{fullTitle}</title>
-      <meta name="description" content={description} />
+      <meta name="description" content={effectiveDescription} />
       {noIndex && <meta name="robots" content="noindex,nofollow" />}
       {canonical && <link rel="canonical" href={canonical} />}
 

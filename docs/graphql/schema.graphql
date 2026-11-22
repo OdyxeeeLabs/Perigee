@@ -1,0 +1,231 @@
+# Proposed Perigee public GraphQL schema.
+# Keep this file in sync with the composed gateway SDL.
+
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
+
+directive @auth(role: ManagerRole = VIEWER) on FIELD_DEFINITION | OBJECT
+directive @tag(name: String!) repeatable on FIELD_DEFINITION | OBJECT
+
+"RFC 3339 timestamp in UTC."
+scalar DateTime
+scalar Cursor
+scalar Decimal
+
+interface Node {
+  id: ID!
+}
+
+interface Auditable {
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+enum ManagerRole {
+  OWNER
+  ADMIN
+  VIEWER
+}
+
+enum VaultStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum TransactionStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+enum AnalyticsRange {
+  DAY
+  WEEK
+  MONTH
+  YEAR
+}
+
+union SearchResult = Vault | Manager | Transaction
+
+type User implements Node {
+  id: ID!
+  email: String!
+  displayName: String
+  manager: Manager
+}
+
+type Manager implements Node & Auditable {
+  id: ID!
+  email: String!
+  displayName: String
+  role: ManagerRole!
+  vaults(first: Int = 20, after: Cursor): VaultConnection!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type Vault implements Node & Auditable {
+  id: ID!
+  name: String!
+  owner: Manager!
+  status: VaultStatus!
+  balance: Decimal!
+  transactions(first: Int = 20, after: Cursor): TransactionConnection!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type Transaction implements Node & Auditable {
+  id: ID!
+  vault: Vault!
+  hash: String!
+  amount: Decimal!
+  status: TransactionStatus!
+  submittedAt: DateTime!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  endCursor: Cursor
+}
+
+type UserEdge {
+  cursor: Cursor!
+  node: User!
+}
+
+type UserConnection {
+  edges: [UserEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ManagerEdge {
+  cursor: Cursor!
+  node: Manager!
+}
+
+type ManagerConnection {
+  edges: [ManagerEdge!]!
+  pageInfo: PageInfo!
+}
+
+type VaultEdge {
+  cursor: Cursor!
+  node: Vault!
+}
+
+type VaultConnection {
+  edges: [VaultEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TransactionEdge {
+  cursor: Cursor!
+  node: Transaction!
+}
+
+type TransactionConnection {
+  edges: [TransactionEdge!]!
+  pageInfo: PageInfo!
+}
+
+type FeeRecord implements Node {
+  id: ID!
+  ledgerSequence: Int!
+  baseFee: Decimal!
+  chargedFee: Decimal!
+  collectedAt: DateTime!
+}
+
+type FeeHistoryEdge {
+  cursor: Cursor!
+  node: FeeRecord!
+}
+
+type FeeHistoryConnection {
+  edges: [FeeHistoryEdge!]!
+  pageInfo: PageInfo!
+}
+
+type FeeAnalytics {
+  totalCollected: Decimal!
+  averageFee: Decimal!
+  peakFee: Decimal!
+}
+
+type Analytics {
+  totalVaults: Int!
+  activeVaults: Int!
+  totalValueLocked: Decimal!
+  range: AnalyticsRange!
+}
+
+type MarketConditions {
+  baseFee: Decimal!
+  networkUtilization: Decimal!
+  observedAt: DateTime!
+}
+
+type VaultEvent {
+  sequence: Int!
+  vaultId: ID!
+  type: String!
+  occurredAt: DateTime!
+}
+
+input VaultFilter {
+  status: VaultStatus
+  ownerId: ID
+  createdAfter: DateTime
+}
+
+input CreateVaultInput {
+  name: String!
+  ownerId: ID!
+  initialDeposit: Decimal
+}
+
+input UpdateVaultInput {
+  name: String
+  status: VaultStatus
+}
+
+input SubmitTransactionInput {
+  vaultId: ID!
+  amount: Decimal!
+  destination: String!
+}
+
+type Query {
+  me: Manager! @auth(role: VIEWER)
+  user(id: ID!): User
+  users(first: Int = 20, after: Cursor): UserConnection!
+  manager(id: ID!): Manager
+  managers(first: Int = 20, after: Cursor): ManagerConnection!
+  vault(id: ID!): Vault
+  vaults(filter: VaultFilter, first: Int = 20, after: Cursor): VaultConnection!
+  transaction(id: ID!): Transaction
+  transactions(first: Int = 20, after: Cursor): TransactionConnection!
+  analytics(range: AnalyticsRange!): Analytics!
+  feeHistory(first: Int = 20, after: Cursor): FeeHistoryConnection!
+  feeAnalytics(range: AnalyticsRange!): FeeAnalytics!
+  marketConditions: MarketConditions!
+  search(term: String!, first: Int = 10): [SearchResult!]!
+}
+
+type Mutation {
+  createVault(input: CreateVaultInput!): Vault! @auth(role: OWNER)
+  updateVault(id: ID!, input: UpdateVaultInput!): Vault! @auth(role: ADMIN)
+  deleteVault(id: ID!): Boolean! @auth(role: OWNER)
+  submitTransaction(input: SubmitTransactionInput!): Transaction! @auth(role: ADMIN)
+}
+
+type Subscription {
+  vaultEvents(tenantId: ID!, after: Cursor): VaultEvent! @auth(role: VIEWER)
+}

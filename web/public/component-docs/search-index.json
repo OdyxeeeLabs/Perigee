@@ -1,0 +1,650 @@
+{
+  "version": "0.1.0",
+  "pages": [
+    {
+      "slug": "index",
+      "title": "Perigee Web Component Library",
+      "href": "index.html",
+      "headings": [
+        {
+          "id": "perigee-web-component-library",
+          "text": "Perigee Web Component Library",
+          "level": 1
+        },
+        {
+          "id": "components-by-group",
+          "text": "Components by group",
+          "level": 2
+        },
+        {
+          "id": "actions",
+          "text": "Actions",
+          "level": 3
+        },
+        {
+          "id": "data-display",
+          "text": "Data display",
+          "level": 3
+        },
+        {
+          "id": "feedback",
+          "text": "Feedback",
+          "level": 3
+        },
+        {
+          "id": "layout",
+          "text": "Layout",
+          "level": 3
+        },
+        {
+          "id": "accessibility",
+          "text": "Accessibility",
+          "level": 3
+        },
+        {
+          "id": "legacy",
+          "text": "Legacy",
+          "level": 3
+        },
+        {
+          "id": "composition-patterns",
+          "text": "Composition patterns",
+          "level": 2
+        },
+        {
+          "id": "loading-button",
+          "text": "Loading button",
+          "level": 3
+        },
+        {
+          "id": "table-inside-a-card",
+          "text": "Table inside a card",
+          "level": 3
+        },
+        {
+          "id": "status-pill-in-a-table-cell",
+          "text": "Status pill in a table cell",
+          "level": 3
+        },
+        {
+          "id": "announce-the-result-of-an-action",
+          "text": "Announce the result of an action",
+          "level": 3
+        },
+        {
+          "id": "accessibility-baseline",
+          "text": "Accessibility baseline",
+          "level": 2
+        },
+        {
+          "id": "versioning",
+          "text": "Versioning",
+          "level": 2
+        },
+        {
+          "id": "maintaining-these-docs",
+          "text": "Maintaining these docs",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "slug": "button",
+      "title": "Button",
+      "href": "button.html",
+      "headings": [
+        {
+          "id": "button",
+          "text": "Button",
+          "level": 1
+        },
+        {
+          "id": "import",
+          "text": "Import",
+          "level": 2
+        },
+        {
+          "id": "props",
+          "text": "Props",
+          "level": 2
+        },
+        {
+          "id": "inherited-attributes",
+          "text": "Inherited attributes",
+          "level": 3
+        },
+        {
+          "id": "usage",
+          "text": "Usage",
+          "level": 2
+        },
+        {
+          "id": "accessibility",
+          "text": "Accessibility",
+          "level": 2
+        },
+        {
+          "id": "related",
+          "text": "Related",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "slug": "badge",
+      "title": "Badge",
+      "href": "badge.html",
+      "headings": [
+        {
+          "id": "badge",
+          "text": "Badge",
+          "level": 1
+        },
+        {
+          "id": "import",
+          "text": "Import",
+          "level": 2
+        },
+        {
+          "id": "props",
+          "text": "Props",
+          "level": 2
+        },
+        {
+          "id": "usage",
+          "text": "Usage",
+          "level": 2
+        },
+        {
+          "id": "accessibility",
+          "text": "Accessibility",
+          "level": 2
+        },
+        {
+          "id": "types",
+          "text": "Types",
+          "level": 2
+        },
+        {
+          "id": "badge-variant",
+          "text": "BadgeVariant",
+          "level": 3
+        },
+        {
+          "id": "migration-notes",
+          "text": "Migration notes",
+          "level": 2
+        },
+        {
+          "id": "related",
+          "text": "Related",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "slug": "data-table",
+      "title": "DataTable",
+      "href": "data-table.html",
+      "headings": [
+        {
+          "id": "data-table",
+          "text": "DataTable",
+          "level": 1
+        },
+        {
+          "id": "import",
+          "text": "Import",
+          "level": 2
+        },
+        {
+          "id": "props",
+          "text": "Props",
+          "level": 2
+        },
+        {
+          "id": "usage",
+          "text": "Usage",
+          "level": 2
+        },
+        {
+          "id": "accessibility",
+          "text": "Accessibility",
+          "level": 2
+        },
+        {
+          "id": "types",
+          "text": "Types",
+          "level": 2
+        },
+        {
+          "id": "column-def",
+          "text": "ColumnDef",
+          "level": 3
+        },
+        {
+          "id": "related",
+          "text": "Related",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "slug": "spinner",
+      "title": "Spinner",
+      "href": "spinner.html",
+      "headings": [
+        {
+          "id": "spinner",
+          "text": "Spinner",
+          "level": 1
+        },
+        {
+          "id": "import",
+          "text": "Import",
+          "level": 2
+        },
+        {
+          "id": "props",
+          "text": "Props",
+          "level": 2
+        },
+        {
+          "id": "usage",
+          "text": "Usage",
+          "level": 2
+        },
+        {
+          "id": "accessibility",
+          "text": "Accessibility",
+          "level": 2
+        },
+        {
+          "id": "types",
+          "text": "Types",
+          "level": 2
+        },
+        {
+          "id": "spinner-color",
+          "text": "SpinnerColor",
+          "level": 3
+        },
+        {
+          "id": "spinner-size",
+          "text": "SpinnerSize",
+          "level": 3
+        },
+        {
+          "id": "related",
+          "text": "Related",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "slug": "card",
+      "title": "Card",
+      "href": "card.html",
+      "headings": [
+        {
+          "id": "card",
+          "text": "Card",
+          "level": 1
+        },
+        {
+          "id": "exports",
+          "text": "Exports",
+          "level": 2
+        },
+        {
+          "id": "card-2",
+          "text": "Card",
+          "level": 2
+        },
+        {
+          "id": "import",
+          "text": "Import",
+          "level": 3
+        },
+        {
+          "id": "props",
+          "text": "Props",
+          "level": 3
+        },
+        {
+          "id": "inherited-attributes",
+          "text": "Inherited attributes",
+          "level": 4
+        },
+        {
+          "id": "usage",
+          "text": "Usage",
+          "level": 3
+        },
+        {
+          "id": "composition",
+          "text": "Composition",
+          "level": 3
+        },
+        {
+          "id": "accessibility",
+          "text": "Accessibility",
+          "level": 3
+        },
+        {
+          "id": "card-header",
+          "text": "CardHeader",
+          "level": 2
+        },
+        {
+          "id": "import-2",
+          "text": "Import",
+          "level": 3
+        },
+        {
+          "id": "props-2",
+          "text": "Props",
+          "level": 3
+        },
+        {
+          "id": "inherited-attributes-2",
+          "text": "Inherited attributes",
+          "level": 4
+        },
+        {
+          "id": "card-title",
+          "text": "CardTitle",
+          "level": 2
+        },
+        {
+          "id": "import-3",
+          "text": "Import",
+          "level": 3
+        },
+        {
+          "id": "props-3",
+          "text": "Props",
+          "level": 3
+        },
+        {
+          "id": "inherited-attributes-3",
+          "text": "Inherited attributes",
+          "level": 4
+        },
+        {
+          "id": "card-description",
+          "text": "CardDescription",
+          "level": 2
+        },
+        {
+          "id": "import-4",
+          "text": "Import",
+          "level": 3
+        },
+        {
+          "id": "props-4",
+          "text": "Props",
+          "level": 3
+        },
+        {
+          "id": "inherited-attributes-4",
+          "text": "Inherited attributes",
+          "level": 4
+        },
+        {
+          "id": "card-content",
+          "text": "CardContent",
+          "level": 2
+        },
+        {
+          "id": "import-5",
+          "text": "Import",
+          "level": 3
+        },
+        {
+          "id": "props-5",
+          "text": "Props",
+          "level": 3
+        },
+        {
+          "id": "inherited-attributes-5",
+          "text": "Inherited attributes",
+          "level": 4
+        },
+        {
+          "id": "card-footer",
+          "text": "CardFooter",
+          "level": 2
+        },
+        {
+          "id": "import-6",
+          "text": "Import",
+          "level": 3
+        },
+        {
+          "id": "props-6",
+          "text": "Props",
+          "level": 3
+        },
+        {
+          "id": "inherited-attributes-6",
+          "text": "Inherited attributes",
+          "level": 4
+        },
+        {
+          "id": "related",
+          "text": "Related",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "slug": "live-region",
+      "title": "Live regions",
+      "href": "live-region.html",
+      "headings": [
+        {
+          "id": "live-regions",
+          "text": "Live regions",
+          "level": 1
+        },
+        {
+          "id": "exports",
+          "text": "Exports",
+          "level": 2
+        },
+        {
+          "id": "live-status",
+          "text": "LiveStatus",
+          "level": 2
+        },
+        {
+          "id": "import",
+          "text": "Import",
+          "level": 3
+        },
+        {
+          "id": "props",
+          "text": "Props",
+          "level": 3
+        },
+        {
+          "id": "usage",
+          "text": "Usage",
+          "level": 3
+        },
+        {
+          "id": "live-alert",
+          "text": "LiveAlert",
+          "level": 2
+        },
+        {
+          "id": "import-2",
+          "text": "Import",
+          "level": 3
+        },
+        {
+          "id": "props-2",
+          "text": "Props",
+          "level": 3
+        },
+        {
+          "id": "usage-2",
+          "text": "Usage",
+          "level": 3
+        },
+        {
+          "id": "accessibility",
+          "text": "Accessibility",
+          "level": 3
+        },
+        {
+          "id": "related",
+          "text": "Related",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "slug": "common-button",
+      "title": "CommonButton",
+      "href": "common-button.html",
+      "headings": [
+        {
+          "id": "common-button",
+          "text": "CommonButton",
+          "level": 1
+        },
+        {
+          "id": "import",
+          "text": "Import",
+          "level": 2
+        },
+        {
+          "id": "props",
+          "text": "Props",
+          "level": 2
+        },
+        {
+          "id": "inherited-attributes",
+          "text": "Inherited attributes",
+          "level": 3
+        },
+        {
+          "id": "usage",
+          "text": "Usage",
+          "level": 2
+        },
+        {
+          "id": "accessibility",
+          "text": "Accessibility",
+          "level": 2
+        },
+        {
+          "id": "migration-notes",
+          "text": "Migration notes",
+          "level": 2
+        },
+        {
+          "id": "related",
+          "text": "Related",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "slug": "migrations",
+      "title": "Migration guide",
+      "href": "migrations.html",
+      "headings": [
+        {
+          "id": "migration-guide",
+          "text": "Migration guide",
+          "level": 1
+        },
+        {
+          "id": "releases",
+          "text": "Releases",
+          "level": 2
+        },
+        {
+          "id": "v0-1-0",
+          "text": "v0.1.0",
+          "level": 2
+        },
+        {
+          "id": "button-replaced-common-button",
+          "text": "Button replaced CommonButton",
+          "level": 3
+        },
+        {
+          "id": "before-common-button",
+          "text": "Before — CommonButton",
+          "level": 4
+        },
+        {
+          "id": "after-button",
+          "text": "After — Button",
+          "level": 4
+        },
+        {
+          "id": "call-site-migration",
+          "text": "Call-site migration",
+          "level": 4
+        },
+        {
+          "id": "notes",
+          "text": "Notes",
+          "level": 4
+        },
+        {
+          "id": "codemod",
+          "text": "Codemod",
+          "level": 4
+        },
+        {
+          "id": "v0-0-1",
+          "text": "v0.0.1",
+          "level": 2
+        },
+        {
+          "id": "ad-hoc-status-pills-replaced-by-badge",
+          "text": "Ad-hoc status pills replaced by Badge",
+          "level": 3
+        },
+        {
+          "id": "after-badge",
+          "text": "After — Badge",
+          "level": 4
+        },
+        {
+          "id": "call-site-migration-2",
+          "text": "Call-site migration",
+          "level": 4
+        },
+        {
+          "id": "notes-2",
+          "text": "Notes",
+          "level": 4
+        },
+        {
+          "id": "handling-a-deprecation",
+          "text": "Handling a deprecation",
+          "level": 2
+        }
+      ]
+    },
+    {
+      "slug": "versions",
+      "title": "Versions",
+      "href": "versions.html",
+      "headings": [
+        {
+          "id": "versions",
+          "text": "Versions",
+          "level": 1
+        }
+      ]
+    }
+  ]
+}

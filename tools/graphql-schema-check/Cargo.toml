@@ -1,0 +1,12 @@
+[package]
+name = "graphql-schema-check"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "graphql_schema_check"
+path = "src/lib.rs"
+
+[[bin]]
+name = "graphql-schema-tools"
+path = "src/main.rs"

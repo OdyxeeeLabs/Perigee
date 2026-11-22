@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+# .husky/pre-commit
+# Runs quality gates before every commit.
+# Failures here abort the commit — fix the issues and retry.
+
+set -e
+
+# Resolve the repo root regardless of where git is invoked from
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+echo "▶ [pre-commit] Running ESLint on web/…"
+(cd "$REPO_ROOT/web" && yarn lint --max-warnings=0)
+
+echo "▶ [pre-commit] Running TypeScript type-check on web/…"
+(cd "$REPO_ROOT/web" && yarn typecheck)
+
+echo "✔ [pre-commit] All checks passed."

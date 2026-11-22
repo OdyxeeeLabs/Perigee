@@ -1,4 +1,7 @@
-/** @type {import('next').NextConfig} */
+/** @type {import("next").NextConfig} */
+const devProxy = require("./dev.proxy.config.js");
+const devProxyConfig = require("./dev.proxy.json");
+
 const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@creit.tech/stellar-wallets-kit"],
@@ -14,4 +17,4 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+module.exports = devProxy(nextConfig, devProxyConfig);

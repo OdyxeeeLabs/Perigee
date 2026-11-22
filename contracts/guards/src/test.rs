@@ -1,7 +1,7 @@
 #![cfg(test)]
 extern crate std;
 
-use crate::{Guard, GuardDataKey, GuardError, PauseType};
+use crate::{ReentrancyGuard, Guard, GuardDataKey, GuardError, PauseType};
 use soroban_sdk::{
     testutils::{Address as _, Events},
     vec, Address, Env, Vec as SorobanVec,
@@ -357,4 +357,16 @@ fn test_trait_surface_delegates_to_core() {
     assert_eq!(EmergencyGuardTrait::get_pause_state(&env), u32::MAX);
     EmergencyGuardTrait::resume_all(&env, approvers).unwrap();
     assert_eq!(EmergencyGuardTrait::get_pause_state(&env), 0);
+}
+
+#[test]
+fn reentrancy_guard_blocks_nested_enter() {
+    let env = Env::default();
+    assert!(ReentrancyGuard::enter(&env).is_ok());
+    assert!(ReentrancyGuard::is_entered(&env));
+    assert_eq!(ReentrancyGuard::enter(&env), Err(GuardError::Reentrancy));
+    ReentrancyGuard::exit(&env);
+    assert!(!ReentrancyGuard::is_entered(&env));
+    assert!(ReentrancyGuard::enter(&env).is_ok());
+    ReentrancyGuard::exit(&env);
 }

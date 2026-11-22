@@ -8,6 +8,7 @@
 //! layers so state survives restarts.
 
 pub mod disk;
+pub mod redis;
 
 use crate::simulation::SimulationResult;
 use moka::future::Cache;

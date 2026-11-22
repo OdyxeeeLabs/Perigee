@@ -1,4 +1,4 @@
-use crate::{MultiYieldVault, MultiYieldVaultClient};
+use crate::{Error, MultiYieldVault, MultiYieldVaultClient, MIN_DEPOSIT};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 // ── Mock AMM pool ─────────────────────────────────────────────────────────────
@@ -102,6 +102,28 @@ fn mint(e: &Env, admin: &Address, token: &Address, to: &Address, amount: i128) {
     soroban_sdk::token::StellarAssetClient::new(e, token).mint(to, &amount);
 }
 
+fn assert_invalid_deposit_unchanged(
+    e: &Env,
+    client: &MultiYieldVaultClient,
+    token: &Address,
+    user: &Address,
+    amount: i128,
+) {
+    let token_client = soroban_sdk::token::Client::new(e, token);
+    let balance_before = token_client.balance(user);
+    let vault_before = client.get_vault();
+    let pools_before = client.get_pools();
+
+    assert_eq!(
+        client.try_deposit(user, &amount),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(token_client.balance(user), balance_before);
+    assert_eq!(client.vault_balance(user), 0);
+    assert_eq!(client.get_vault(), vault_before);
+    assert_eq!(client.get_pools(), pools_before);
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -184,6 +206,67 @@ fn test_deposit_routes_to_best_pool() {
     let pools = client.get_pools();
     assert_eq!(pools.get(0).unwrap().lp_shares, 0);
     assert!(pools.get(1).unwrap().lp_shares > 0);
+}
+
+#[test]
+fn test_zero_deposit_is_rejected_without_state_change() {
+    let e = Env::default();
+    e.mock_all_auths();
+    let (client, admin, deposit_token) = setup(&e);
+    let pool = register_mock_pool(&e, &admin, 10_000, 30);
+    client.register_pool(&pool, &true);
+
+    let user = Address::generate(&e);
+    mint(&e, &admin, &deposit_token, &user, MIN_DEPOSIT);
+    assert_invalid_deposit_unchanged(&e, &client, &deposit_token, &user, 0);
+}
+
+#[test]
+fn test_below_minimum_deposit_is_rejected_without_state_change() {
+    let e = Env::default();
+    e.mock_all_auths();
+    let (client, admin, deposit_token) = setup(&e);
+    let pool = register_mock_pool(&e, &admin, 10_000, 30);
+    client.register_pool(&pool, &true);
+
+    let user = Address::generate(&e);
+    mint(&e, &admin, &deposit_token, &user, MIN_DEPOSIT - 1);
+    assert_invalid_deposit_unchanged(&e, &client, &deposit_token, &user, MIN_DEPOSIT - 1);
+}
+
+#[test]
+fn test_exact_minimum_deposit_mints_expected_shares() {
+    let e = Env::default();
+    e.mock_all_auths();
+    let (client, admin, deposit_token) = setup(&e);
+    let pool = register_mock_pool(&e, &admin, 10_000, 30);
+    client.register_pool(&pool, &true);
+
+    let user = Address::generate(&e);
+    mint(&e, &admin, &deposit_token, &user, MIN_DEPOSIT);
+
+    assert_eq!(client.deposit(&user, &MIN_DEPOSIT), MIN_DEPOSIT);
+    assert_eq!(client.vault_balance(&user), MIN_DEPOSIT);
+    assert_eq!(client.get_vault().total_shares, MIN_DEPOSIT);
+    assert_eq!(client.get_pools().get(0).unwrap().lp_shares, MIN_DEPOSIT);
+}
+
+#[test]
+fn test_one_unit_above_minimum_deposit_mints_expected_shares() {
+    let e = Env::default();
+    e.mock_all_auths();
+    let (client, admin, deposit_token) = setup(&e);
+    let pool = register_mock_pool(&e, &admin, 10_000, 30);
+    client.register_pool(&pool, &true);
+
+    let user = Address::generate(&e);
+    let amount = MIN_DEPOSIT + 1;
+    mint(&e, &admin, &deposit_token, &user, amount);
+
+    assert_eq!(client.deposit(&user, &amount), amount);
+    assert_eq!(client.vault_balance(&user), amount);
+    assert_eq!(client.get_vault().total_shares, amount);
+    assert_eq!(client.get_pools().get(0).unwrap().lp_shares, amount);
 }
 
 #[test]

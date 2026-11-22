@@ -1,0 +1,54 @@
+name: i18n message catalogues
+
+# WEB-31 (#832): a missing key in a rarely tested locale shows fallback text
+# with no visible warning. These jobs are dependency-free `node:test` scripts,
+# so no install step is needed.
+
+on:
+  pull_request:
+    paths:
+      - "web/messages/**"
+      - "web/scripts/i18n/**"
+      - "web/lib/locale/**"
+      - "web/lib/i18n/**"
+      - "web/app/managers/**"
+      - "web/app/admin/managers/**"
+      - "web/pages/managers/**"
+      - "web/pages/admin/managers.tsx"
+      - ".github/workflows/i18n-messages.yml"
+  push:
+    branches: [main]
+    paths:
+      - "web/messages/**"
+      - "web/scripts/i18n/**"
+      - "web/lib/locale/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: i18n-messages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Key completeness and localized manager copy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Compare message keys across locales
+        working-directory: web
+        run: node scripts/i18n/check-messages.cjs
+
+      - name: Detect untranslated manager route copy
+        working-directory: web
+        run: node scripts/i18n/check-manager-copy.cjs
+
+      - name: Run the i18n logic suites
+        working-directory: web
+        run: node --test ./lib/locale/messages.test.cjs ./lib/i18n/manager-copy.test.cjs

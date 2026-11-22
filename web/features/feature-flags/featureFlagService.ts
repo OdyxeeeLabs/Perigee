@@ -5,10 +5,14 @@ import {
 } from "./constants";
 
 import { featureFlags } from "./feature-flags";
+import { evaluateFeatureFlag, isValidFeatureFlagDefinition } from "./evaluator";
 
 import type {
   FeatureFlag,
   FeatureFlagApiSource,
+  FeatureFlagDefinition,
+  FeatureFlagEvaluation,
+  FeatureFlagEvaluationContext,
   FeatureFlagMap,
   FeatureFlagProviderConfig,
 } from "./types";
@@ -42,40 +46,73 @@ function readEnvFlags(
 
 class FeatureFlagService {
   private flags: FeatureFlagMap;
+  private definitions: Record<FeatureFlag, FeatureFlagDefinition>;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    this.flags = featureFlags.reduce(
-      (acc, flag) => {
-        acc[flag.key] = flag.enabled;
-        return acc;
-      },
-      {} as FeatureFlagMap,
-    );
+    this.flags = {} as FeatureFlagMap;
+    this.definitions = {} as Record<FeatureFlag, FeatureFlagDefinition>;
+    this.reset();
   }
 
   getAll(): FeatureFlagMap {
     return { ...this.flags };
   }
 
-  isEnabled(flag: FeatureFlag): boolean {
-    return this.flags[flag] ?? DEFAULT_FLAG_VALUE;
+  isEnabled(flag: FeatureFlag, context?: FeatureFlagEvaluationContext): boolean {
+    return this.evaluate(flag, context).enabled;
+  }
+
+  evaluate(
+    flag: FeatureFlag,
+    context: FeatureFlagEvaluationContext = {},
+  ): FeatureFlagEvaluation {
+    const definition = this.definitions[flag];
+    if (!definition) {
+      return {
+        key: flag,
+        enabled: DEFAULT_FLAG_VALUE,
+        value: DEFAULT_FLAG_VALUE,
+        variant: null,
+        reason: "fallback",
+      };
+    }
+    return evaluateFeatureFlag(definition, context);
+  }
+
+  getDefinition(flag: FeatureFlag): FeatureFlagDefinition | undefined {
+    const definition = this.definitions[flag];
+    return definition
+      ? {
+          ...definition,
+          variants: definition.variants
+            ? { ...definition.variants }
+            : undefined,
+          targeting: definition.targeting?.map((rule) => ({
+            ...rule,
+            values: rule.values ? [...rule.values] : undefined,
+          })),
+        }
+      : undefined;
   }
 
   enable(flag: FeatureFlag): void {
     this.flags[flag] = true;
+    if (this.definitions[flag]) this.definitions[flag].enabled = true;
   }
 
   disable(flag: FeatureFlag): void {
     this.flags[flag] = false;
+    if (this.definitions[flag]) this.definitions[flag].enabled = false;
   }
 
   toggle(flag: FeatureFlag): void {
-    this.flags[flag] = !this.isEnabled(flag);
+    this.set(flag, !this.flags[flag]);
   }
 
   set(flag: FeatureFlag, enabled: boolean): void {
     this.flags[flag] = enabled;
+    if (this.definitions[flag]) this.definitions[flag].enabled = enabled;
   }
 
   reset(): void {
@@ -86,12 +123,23 @@ class FeatureFlagService {
       },
       {} as FeatureFlagMap,
     );
+    this.definitions = featureFlags.reduce(
+      (acc, flag) => {
+        acc[flag.key] = {
+          ...flag,
+          variants: flag.variants ? { ...flag.variants } : undefined,
+          targeting: flag.targeting?.map((rule) => ({ ...rule })),
+        };
+        return acc;
+      },
+      {} as Record<FeatureFlag, FeatureFlagDefinition>,
+    );
   }
 
   applyEnvOverrides(prefix: string = ENV_PREFIX): void {
     const envFlags = readEnvFlags(prefix);
     for (const [key, value] of Object.entries(envFlags)) {
-      this.flags[key as FeatureFlag] = value as boolean;
+      this.set(key as FeatureFlag, value as boolean);
     }
   }
 
@@ -122,11 +170,20 @@ class FeatureFlagService {
         for (const [key, value] of Object.entries(
           data as Record<string, unknown>,
         )) {
-          if (
-            key in this.flags &&
-            typeof value === "boolean"
-          ) {
-            this.flags[key as FeatureFlag] = value;
+          if (!(key in this.flags)) continue;
+          if (typeof value === "boolean") {
+            this.set(key as FeatureFlag, value);
+            continue;
+          }
+          if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+          const candidate = {
+            ...this.definitions[key as FeatureFlag],
+            ...(value as Partial<FeatureFlagDefinition>),
+            key: key as FeatureFlag,
+          };
+          if (isValidFeatureFlagDefinition(candidate)) {
+            this.definitions[key as FeatureFlag] = candidate;
+            this.flags[key as FeatureFlag] = candidate.enabled;
           }
         }
       }

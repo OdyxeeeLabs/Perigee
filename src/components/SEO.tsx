@@ -1,0 +1,1 @@
+export const SEO = ({ title }: { title: string }) => <title>{title}</title>;

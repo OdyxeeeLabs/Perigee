@@ -1,0 +1,34 @@
+{
+  "enabled": true,
+  "port": 8787,
+  "target": "http://localhost:8080",
+  "logging": {
+    "enabled": true,
+    "body": true,
+    "maxBodyBytes": 32768,
+    "file": ".dev-proxy/requests.log.jsonl"
+  },
+  "network": {
+    "latencyMs": 0,
+    "jitterMs": 0,
+    "packetLoss": 0,
+    "throttleKbps": 0,
+    "failureRate": 0,
+    "failureStatus": 503
+  },
+  "mocks": [],
+  "scenarios": [],
+  "replay": {
+    "enabled": false,
+    "file": ".dev-proxy/scenarios.jsonl"
+  },
+  "fork": {
+    "enabled": false,
+    "tool": "anvil",
+    "chain": "ethereum",
+    "rpc": "http://127.0.0.1:8545",
+    "forkUrl": "",
+    "accounts": 10,
+    "blockTimeMs": 0
+  }
+}

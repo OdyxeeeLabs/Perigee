@@ -1,0 +1,44 @@
+name: OpenAPI contract
+
+on:
+  pull_request:
+    paths:
+      - "core/**"
+      - "docs/openapi/**"
+      - "scripts/openapi/**"
+      - ".github/workflows/openapi-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "core/**"
+      - "docs/openapi/**"
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tooling tests (RFC 7807, 3.1 upgrade, Postman, contract checks)
+        run: cargo test -p Perigee-core --lib rest_api
+
+      - name: Build openapi-tools
+        run: cargo build -p Perigee-core --bin openapi-tools
+
+      # `docs/openapi/openapi.json` is the committed snapshot of /api-docs/openapi.json.
+      # Refresh it with: curl localhost:3000/api-docs/openapi.json > docs/openapi/openapi.json
+      - name: Prepare the snapshot as OpenAPI 3.1
+        if: hashFiles('docs/openapi/openapi.json') != ''
+        run: ./target/debug/openapi-tools prepare docs/openapi/openapi.json "$RUNNER_TEMP/openapi.json" --version v1
+
+      - name: Contract checks
+        if: hashFiles('docs/openapi/openapi.json') != ''
+        run: ./target/debug/openapi-tools check "$RUNNER_TEMP/openapi.json"
+
+      - name: Postman collection builds
+        if: hashFiles('docs/openapi/openapi.json') != ''
+        run: ./target/debug/openapi-tools postman "$RUNNER_TEMP/openapi.json" "$RUNNER_TEMP/postman.json"

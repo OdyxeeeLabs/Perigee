@@ -1,69 +1,55 @@
-.button {
-  transition:
-    background-color var(--transition-fast),
-    color var(--transition-fast),
-    transform var(--transition-fast),
-    box-shadow var(--transition-fast);
+import React from "react";
+import styles from "./Button.module.css";
 
-  border: none;
-
-  cursor: pointer;
-
-  user-select: none;
+export interface CommonButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: "primary" | "secondary" | "outline";
+  loading?: boolean;
 }
 
-.button:hover {
-  transform: translateY(-1px);
+/**
+ * Legacy button from the pre-`ui/` component set — **prefer
+ * [`Button`](./button.md)**, which adds `size`, the full variant set, and
+ * native prop forwarding.
+ *
+ * @deprecated Superseded by `components/ui/Button`. The variant names changed
+ * (`primary` → `default`) and `loading` folded into the native `disabled`
+ * attribute. See the [migration guide](./migrations.md).
+ *
+ * @example
+ * // Deprecated
+ * <CommonButton variant="primary" loading>Save</CommonButton>
+ *
+ * @example
+ * // Replacement
+ * <Button disabled={loading}>Save</Button>
+ *
+ * @accessibility
+ * - Adding `loading` also sets `disabled`, so the control is removed from the
+ *   tab order while work is in flight and screen readers announce it as
+ *   unavailable rather than busy.
+ *
+ * @since 0.0.1
+ */
+export const CommonButton: React.FC<CommonButtonProps> = ({
+  children,
+  variant = "primary",
+  loading = false,
+  className = "",
+  disabled,
+  ...props
+}) => {
+  return (
+    <button
+      className={`${styles.button} ${styles[variant]} ${
+        loading ? styles.loading : ""
+      } ${className}`}
+      disabled={disabled || loading}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+};
 
-  box-shadow: var(--shadow-md);
-}
-
-.button:active {
-  transform: scale(.98);
-}
-
-.button:disabled {
-  cursor: not-allowed;
-
-  opacity: .6;
-
-  box-shadow: none;
-
-  transform: none;
-}
-
-.primary {
-  background: var(--color-primary);
-
-  color: white;
-}
-
-.primary:hover {
-  background: var(--color-primary-hover);
-}
-
-.secondary {
-  background: var(--color-secondary);
-
-  color: white;
-}
-
-.secondary:hover {
-  background: var(--color-secondary-hover);
-}
-
-.outline {
-  background: transparent;
-
-  border: 1px solid var(--color-border);
-
-  color: var(--color-text);
-}
-
-.outline:hover {
-  background: var(--color-surface);
-}
-
-.loading {
-  pointer-events: none;
-}
+export default CommonButton;

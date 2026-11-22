@@ -1,0 +1,70 @@
+/**
+ * Global focus indicator — WCAG 2.1 SC 2.4.7 (Focus Visible) and 2.4.11
+ * (Focus Not Obscured), issue #696.
+ *
+ * Before this the app had no focus styling anywhere, so a keyboard user had
+ * no idea where they were. The rule deliberately targets `:focus-visible`
+ * so pointer interaction stays clean while keyboard and assistive-technology
+ * navigation get a 2px ring with a 2px offset, drawn with `outline` so it
+ * follows the element's border radius and cannot be clipped by a container's
+ * `overflow: hidden`.
+ *
+ * High-contrast mode (#701) re-declares these against the system palette.
+ */
+
+@import "./variables.css";
+
+/* Single global ring for everything that is not opted out below. */
+:focus-visible {
+  outline: var(--focus-ring-width, 2px) solid var(--focus-ring-color, #1d4ed8);
+  outline-offset: var(--focus-ring-offset, 2px);
+  /* The UA default outline is replaced, never suppressed. */
+  outline-style: solid;
+}
+
+[data-theme="dark"] :focus-visible,
+.dark :focus-visible {
+  outline-color: var(--focus-ring-color-dark, #93c5fd);
+}
+
+/*
+ * Form controls and links that draw their own focus state keep it, provided
+ * the replacement is at least as visible. `a:focus-visible` gets an
+ * underline as a second, non-colour cue.
+ */
+a:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/*
+ * Windows High Contrast / forced-colors: the system palette overrides our
+ * colours, so the ring must not rely on a colour we set (#701).
+ */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
+/* Skip link — hidden until it takes focus. Defined here so it works even
+   when the component's CSS module is not loaded. */
+.skip-link {
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 0;
+  z-index: 100;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem;
+  border-radius: var(--radius-md, 10px);
+  background: var(--color-primary, #2563eb);
+  color: var(--color-primary-foreground, #ffffff);
+  font-weight: 600;
+  transform: translateY(-200%);
+  transition: transform var(--transition-fast, 0.15s) ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}

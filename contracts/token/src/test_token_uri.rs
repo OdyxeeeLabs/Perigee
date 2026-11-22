@@ -7,6 +7,8 @@ use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env, String,
 };
+use crate::metadata::{MAX_NAME_BYTES, MAX_SYMBOL_BYTES};
+use crate::uri::MAX_URI_BYTES;
 
 fn setup(env: &Env) -> (TokenClient<'_>, Address) {
     let contract_id = env.register(Token, ());
@@ -31,6 +33,90 @@ fn test_set_and_read_token_uri() {
     let uri = String::from_str(&env, "https://metadata.perigee.dev/tokens/1.json");
     client.set_token_uri(&uri);
     assert_eq!(client.token_uri(), uri);
+}
+
+/// Metadata name and symbol accept their exact byte limits.
+#[test]
+fn test_metadata_boundary_lengths_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Token, ());
+    let client = TokenClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let name = String::from_str(&env, &"n".repeat(MAX_NAME_BYTES as usize));
+    let symbol = String::from_str(&env, &"s".repeat(MAX_SYMBOL_BYTES as usize));
+
+    client.initialize(&admin, &18, &name, &symbol);
+    assert_eq!(client.name(), name);
+    assert_eq!(client.symbol(), symbol);
+}
+
+/// Metadata name and symbol reject values over their field-specific limits.
+#[test]
+fn test_metadata_oversized_fields_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Token, ());
+    let client = TokenClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let oversized_name =
+        String::from_str(&env, &"n".repeat(MAX_NAME_BYTES as usize + 1));
+    let valid_symbol = String::from_str(&env, "TKN");
+
+    assert!(client
+        .try_initialize(&admin, &18, &oversized_name, &valid_symbol)
+        .is_err());
+}
+
+/// Control characters are not accepted as token metadata text.
+#[test]
+fn test_metadata_control_character_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Token, ());
+    let client = TokenClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    assert!(client
+        .try_initialize(
+            &admin,
+            &18,
+            &String::from_str(&env, "Bad\nName"),
+            &String::from_str(&env, "TKN"),
+        )
+        .is_err());
+}
+
+/// A URI at the exact byte limit is accepted.
+#[test]
+fn test_uri_exact_limit_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin) = setup(&env);
+    let suffix_len = MAX_URI_BYTES as usize - "https://".len();
+    let uri = String::from_str(&env, &format!("https://{}", "a".repeat(suffix_len)));
+
+    client.set_token_uri(&uri);
+    assert_eq!(client.token_uri(), uri);
+}
+
+/// An oversized URI is rejected without replacing the previously cached URI.
+#[test]
+fn test_oversized_uri_does_not_replace_existing_cache() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin) = setup(&env);
+    let old_uri = String::from_str(&env, "https://metadata.perigee.dev/old.json");
+    client.set_token_uri(&old_uri);
+
+    let suffix_len = MAX_URI_BYTES as usize - "https://".len() + 1;
+    let oversized = String::from_str(&env, &format!("https://{}", "a".repeat(suffix_len)));
+    assert!(client.try_set_token_uri(&oversized).is_err());
+    assert_eq!(client.token_uri(), old_uri);
 }
 
 /// URIs must use a supported scheme; others are rejected.

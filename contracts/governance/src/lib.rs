@@ -2,8 +2,11 @@
 
 use emergency_guard::EmergencyGuard;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, String,
+    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, String, Symbol, Val,
+    Vec,
 };
+
+mod snapshot;
 
 #[cfg(test)]
 mod test;
@@ -24,6 +27,10 @@ pub enum Error {
     IdentityRequired = 10,
     IdentityAlreadyClaimed = 11,
     VoteSideMismatch = 12,
+    InvalidThreshold = 13,
+    InsufficientSignatures = 14,
+    ModuleAlreadyEnabled = 15,
+    ModuleNotEnabled = 16,
 }
 
 #[contracttype]
@@ -32,6 +39,8 @@ pub struct GovernanceConfig {
     pub admin: Address,
     pub min_voting_units: i128,
     pub identity_required: bool,
+    pub admins: Vec<Address>,
+    pub signature_threshold: u32,
 }
 
 #[contracttype]
@@ -74,6 +83,7 @@ pub enum DataKey {
     IdentityOwner(BytesN<32>),
     Proposal(u32),
     Receipt(u32, Address),
+    Module(Address),
 }
 
 fn sqrt(x: i128) -> i128 {
@@ -94,7 +104,15 @@ fn zero_identity(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[0; 32])
 }
 
-fn require_admin(env: &Env) -> Result<Address, Error> {
+fn map_guard_error(error: emergency_guard::GuardError) -> Error {
+    match error {
+        emergency_guard::GuardError::InsufficientSignatures => Error::InsufficientSignatures,
+        emergency_guard::GuardError::InvalidThreshold => Error::InvalidThreshold,
+        _ => Error::Unauthorized,
+    }
+}
+
+fn default_approvers(env: &Env) -> Result<Vec<Address>, Error> {
     let admin: Address = env
         .storage()
         .instance()
@@ -103,9 +121,62 @@ fn require_admin(env: &Env) -> Result<Address, Error> {
 
     let mut approvers: Vec<Address> = Vec::new(env);
     approvers.push_back(admin.clone());
-    EmergencyGuard::check_multi_sig(env, &approvers).map_err(|_| Error::Unauthorized)?;
+    Ok(approvers)
+}
+
+fn require_admin(env: &Env, approvers: &Vec<Address>) -> Result<Address, Error> {
+    let admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(Error::NotInitialized)?;
+
+    EmergencyGuard::validate_multi_sig(env.clone(), approvers.clone()).map_err(map_guard_error)?;
 
     Ok(admin)
+}
+
+fn initialize_governance(
+    env: &Env,
+    admins: Vec<Address>,
+    signature_threshold: u32,
+    min_voting_units: i128,
+    identity_required: bool,
+) -> Result<(), Error> {
+    if env.storage().instance().has(&DataKey::Admin) {
+        return Err(Error::AlreadyInitialized);
+    }
+    if min_voting_units <= 0 {
+        return Err(Error::InsufficientVotingUnits);
+    }
+    if signature_threshold == 0 || signature_threshold > admins.len() {
+        return Err(Error::InvalidThreshold);
+    }
+
+    let mut unique_admins: Vec<Address> = Vec::new(env);
+    for admin in admins.iter() {
+        if unique_admins.iter().any(|existing| existing == admin) {
+            return Err(Error::InvalidThreshold);
+        }
+        admin.require_auth();
+        unique_admins.push_back(admin);
+    }
+    let admin = admins.get(0).ok_or(Error::InvalidThreshold)?;
+
+    EmergencyGuard::initialize(env.clone(), admins, signature_threshold)
+        .map_err(map_guard_error)?;
+    env.storage().instance().set(&DataKey::Admin, &admin);
+    env.storage()
+        .instance()
+        .set(&DataKey::MinVotingUnits, &min_voting_units);
+    env.storage()
+        .instance()
+        .set(&DataKey::IdentityRequired, &identity_required);
+    env.storage()
+        .instance()
+        .set(&DataKey::NextProposalId, &0u32);
+
+    Ok(())
 }
 
 fn get_config(env: &Env) -> Result<GovernanceConfig, Error> {
@@ -129,7 +200,110 @@ fn get_config(env: &Env) -> Result<GovernanceConfig, Error> {
         admin,
         min_voting_units,
         identity_required,
+        admins: EmergencyGuard::get_admins(env.clone()),
+        signature_threshold: EmergencyGuard::get_threshold(env.clone()),
     })
+}
+
+fn register_voter(
+    env: &Env,
+    voter: Address,
+    voting_units: i128,
+    identity_commitment: BytesN<32>,
+    approvers: &Vec<Address>,
+) -> Result<VoterProfile, Error> {
+    require_admin(env, approvers)?;
+    let config = get_config(env)?;
+    if voting_units < config.min_voting_units {
+        return Err(Error::InsufficientVotingUnits);
+    }
+
+    let zero = zero_identity(env);
+    let has_identity = identity_commitment != zero;
+    if config.identity_required && !has_identity {
+        return Err(Error::IdentityRequired);
+    }
+
+    let voter_key = DataKey::Voter(voter.clone());
+    let previous_profile: Option<VoterProfile> = env.storage().persistent().get(&voter_key);
+    if let Some(existing) = previous_profile {
+        if existing.identity_commitment != zero
+            && existing.identity_commitment != identity_commitment
+        {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::IdentityOwner(existing.identity_commitment));
+        }
+    }
+
+    if has_identity {
+        let identity_key = DataKey::IdentityOwner(identity_commitment.clone());
+        if let Some(owner) = env.storage().persistent().get::<_, Address>(&identity_key) {
+            if owner != voter {
+                return Err(Error::IdentityAlreadyClaimed);
+            }
+        }
+        env.storage().persistent().set(&identity_key, &voter);
+    }
+
+    let profile = VoterProfile {
+        voting_units,
+        identity_commitment,
+    };
+    env.storage().persistent().set(&voter_key, &profile);
+    Ok(profile)
+}
+
+fn create_proposal(
+    env: &Env,
+    title: String,
+    description: String,
+    voting_ends_at: u32,
+    approvers: &Vec<Address>,
+) -> Result<Proposal, Error> {
+    let admin = require_admin(env, approvers)?;
+    if voting_ends_at <= env.ledger().sequence() {
+        return Err(Error::InvalidVotingWindow);
+    }
+
+    let proposal_id: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::NextProposalId)
+        .unwrap_or(0);
+
+    let snapshot_id = snapshot::get_next_snapshot_id(env);
+    snapshot::set_proposal_snapshot(env, proposal_id, snapshot_id);
+
+    let proposal = Proposal {
+        id: proposal_id,
+        creator: admin,
+        title,
+        description,
+        voting_ends_at,
+        for_votes: 0,
+        against_votes: 0,
+        open: true,
+    };
+
+    write_proposal(env, &proposal);
+    env.storage()
+        .instance()
+        .set(&DataKey::NextProposalId, &proposal_id.saturating_add(1));
+
+    Ok(proposal)
+}
+
+fn close_proposal(
+    env: &Env,
+    proposal_id: u32,
+    approvers: &Vec<Address>,
+) -> Result<Proposal, Error> {
+    require_admin(env, approvers)?;
+    let mut proposal = get_proposal(env, proposal_id)?;
+    proposal.open = false;
+    write_proposal(env, &proposal);
+    Ok(proposal)
 }
 
 fn get_proposal(env: &Env, proposal_id: u32) -> Result<Proposal, Error> {
@@ -156,28 +330,25 @@ impl GovernanceContract {
         min_voting_units: i128,
         identity_required: bool,
     ) -> Result<(), Error> {
-        if env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::AlreadyInitialized);
-        }
-        if min_voting_units <= 0 {
-            return Err(Error::InsufficientVotingUnits);
-        }
-
-        env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage()
-            .instance()
-            .set(&DataKey::MinVotingUnits, &min_voting_units);
-        env.storage()
-            .instance()
-            .set(&DataKey::IdentityRequired, &identity_required);
-        env.storage().instance().set(&DataKey::NextProposalId, &0u32);
-
         let mut admins: Vec<Address> = Vec::new(&env);
-        admins.push_back(admin.clone());
-        EmergencyGuard::initialize(env.clone(), admins, 1)
-            .map_err(|_| Error::Unauthorized)?;
+        admins.push_back(admin);
+        initialize_governance(&env, admins, 1, min_voting_units, identity_required)
+    }
 
-        Ok(())
+    pub fn initialize_with_signers(
+        env: Env,
+        admins: Vec<Address>,
+        signature_threshold: u32,
+        min_voting_units: i128,
+        identity_required: bool,
+    ) -> Result<(), Error> {
+        initialize_governance(
+            &env,
+            admins,
+            signature_threshold,
+            min_voting_units,
+            identity_required,
+        )
     }
 
     pub fn get_config(env: Env) -> Result<GovernanceConfig, Error> {
@@ -190,45 +361,18 @@ impl GovernanceContract {
         voting_units: i128,
         identity_commitment: BytesN<32>,
     ) -> Result<VoterProfile, Error> {
-        require_admin(&env)?;
-        let config = get_config(&env)?;
-        if voting_units < config.min_voting_units {
-            return Err(Error::InsufficientVotingUnits);
-        }
+        let approvers = default_approvers(&env)?;
+        register_voter(&env, voter, voting_units, identity_commitment, &approvers)
+    }
 
-        let zero = zero_identity(&env);
-        let has_identity = identity_commitment != zero;
-        if config.identity_required && !has_identity {
-            return Err(Error::IdentityRequired);
-        }
-
-        let voter_key = DataKey::Voter(voter.clone());
-        let previous_profile: Option<VoterProfile> = env.storage().persistent().get(&voter_key);
-        if let Some(existing) = previous_profile.clone() {
-            if existing.identity_commitment != zero && existing.identity_commitment != identity_commitment
-            {
-                env.storage()
-                    .persistent()
-                    .remove(&DataKey::IdentityOwner(existing.identity_commitment));
-            }
-        }
-
-        if has_identity {
-            let identity_key = DataKey::IdentityOwner(identity_commitment.clone());
-            if let Some(owner) = env.storage().persistent().get::<_, Address>(&identity_key) {
-                if owner != voter {
-                    return Err(Error::IdentityAlreadyClaimed);
-                }
-            }
-            env.storage().persistent().set(&identity_key, &voter);
-        }
-
-        let profile = VoterProfile {
-            voting_units,
-            identity_commitment,
-        };
-        env.storage().persistent().set(&voter_key, &profile);
-        Ok(profile)
+    pub fn register_voter_with_approvals(
+        env: Env,
+        voter: Address,
+        voting_units: i128,
+        identity_commitment: BytesN<32>,
+        approvers: Vec<Address>,
+    ) -> Result<VoterProfile, Error> {
+        register_voter(&env, voter, voting_units, identity_commitment, &approvers)
     }
 
     pub fn get_voter(env: Env, voter: Address) -> Result<VoterProfile, Error> {
@@ -244,33 +388,18 @@ impl GovernanceContract {
         description: String,
         voting_ends_at: u32,
     ) -> Result<Proposal, Error> {
-        let admin = require_admin(&env)?;
-        if voting_ends_at <= env.ledger().sequence() {
-            return Err(Error::InvalidVotingWindow);
-        }
+        let approvers = default_approvers(&env)?;
+        create_proposal(&env, title, description, voting_ends_at, &approvers)
+    }
 
-        let proposal_id: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::NextProposalId)
-            .unwrap_or(0);
-        let proposal = Proposal {
-            id: proposal_id,
-            creator: admin,
-            title,
-            description,
-            voting_ends_at,
-            for_votes: 0,
-            against_votes: 0,
-            open: true,
-        };
-
-        write_proposal(&env, &proposal);
-        env.storage()
-            .instance()
-            .set(&DataKey::NextProposalId, &proposal_id.saturating_add(1));
-
-        Ok(proposal)
+    pub fn create_proposal_with_approvals(
+        env: Env,
+        title: String,
+        description: String,
+        voting_ends_at: u32,
+        approvers: Vec<Address>,
+    ) -> Result<Proposal, Error> {
+        create_proposal(&env, title, description, voting_ends_at, &approvers)
     }
 
     pub fn get_proposal(env: Env, proposal_id: u32) -> Result<Proposal, Error> {
@@ -278,11 +407,110 @@ impl GovernanceContract {
     }
 
     pub fn close_proposal(env: Env, proposal_id: u32) -> Result<Proposal, Error> {
-        require_admin(&env)?;
-        let mut proposal = get_proposal(&env, proposal_id)?;
-        proposal.open = false;
-        write_proposal(&env, &proposal);
-        Ok(proposal)
+        let approvers = default_approvers(&env)?;
+        close_proposal(&env, proposal_id, &approvers)
+    }
+
+    pub fn close_proposal_with_approvals(
+        env: Env,
+        proposal_id: u32,
+        approvers: Vec<Address>,
+    ) -> Result<Proposal, Error> {
+        close_proposal(&env, proposal_id, &approvers)
+    }
+
+    pub fn add_signer(env: Env, approvers: Vec<Address>, new_signer: Address) -> Result<(), Error> {
+        require_admin(&env, &approvers)?;
+        EmergencyGuard::add_admin(env, approvers, new_signer).map_err(map_guard_error)
+    }
+
+    pub fn remove_signer(env: Env, approvers: Vec<Address>, signer: Address) -> Result<(), Error> {
+        let current_admin = require_admin(&env, &approvers)?;
+        EmergencyGuard::remove_admin(env.clone(), approvers, signer.clone())
+            .map_err(map_guard_error)?;
+        if signer == current_admin {
+            let next_admin = EmergencyGuard::get_admins(env.clone())
+                .get(0)
+                .ok_or(Error::InvalidThreshold)?;
+            env.storage().instance().set(&DataKey::Admin, &next_admin);
+        }
+        Ok(())
+    }
+
+    pub fn set_signature_threshold(
+        env: Env,
+        approvers: Vec<Address>,
+        signature_threshold: u32,
+    ) -> Result<(), Error> {
+        require_admin(&env, &approvers)?;
+        let admins = EmergencyGuard::get_admins(env.clone());
+        if signature_threshold == 0 || signature_threshold > admins.len() {
+            return Err(Error::InvalidThreshold);
+        }
+        env.storage().instance().set(
+            &emergency_guard::GuardDataKey::SignatureThreshold,
+            &signature_threshold,
+        );
+        Ok(())
+    }
+
+    pub fn enable_module(env: Env, approvers: Vec<Address>, module: Address) -> Result<(), Error> {
+        require_admin(&env, &approvers)?;
+        let key = DataKey::Module(module);
+        if env.storage().instance().has(&key) {
+            return Err(Error::ModuleAlreadyEnabled);
+        }
+        env.storage().instance().set(&key, &true);
+        Ok(())
+    }
+
+    pub fn disable_module(env: Env, approvers: Vec<Address>, module: Address) -> Result<(), Error> {
+        require_admin(&env, &approvers)?;
+        let key = DataKey::Module(module);
+        if !env.storage().instance().has(&key) {
+            return Err(Error::ModuleNotEnabled);
+        }
+        env.storage().instance().remove(&key);
+        Ok(())
+    }
+
+    pub fn is_module_enabled(env: Env, module: Address) -> bool {
+        env.storage().instance().has(&DataKey::Module(module))
+    }
+
+    pub fn execute_transaction(
+        env: Env,
+        approvers: Vec<Address>,
+        target: Address,
+        function: Symbol,
+        args: Vec<Val>,
+    ) -> Result<Val, Error> {
+        require_admin(&env, &approvers)?;
+        let result = env.invoke_contract(&target, &function, args);
+        env.events()
+            .publish(("governance_transaction_executed",), (target, function));
+        Ok(result)
+    }
+
+    pub fn execute_module(
+        env: Env,
+        module: Address,
+        target: Address,
+        function: Symbol,
+        args: Vec<Val>,
+    ) -> Result<Val, Error> {
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::Module(module.clone()))
+        {
+            return Err(Error::ModuleNotEnabled);
+        }
+        module.require_auth();
+        let result = env.invoke_contract(&target, &function, args);
+        env.events()
+            .publish(("governance_module_executed", module), (target, function));
+        Ok(result)
     }
 
     pub fn quote_votes_for_credits(_env: Env, credits: i128) -> Result<i128, Error> {
@@ -299,11 +527,7 @@ impl GovernanceContract {
         Ok(votes.checked_mul(votes).ok_or(Error::InvalidCredits)?)
     }
 
-    pub fn get_vote_receipt(
-        env: Env,
-        proposal_id: u32,
-        voter: Address,
-    ) -> Option<VoteReceipt> {
+    pub fn get_vote_receipt(env: Env, proposal_id: u32, voter: Address) -> Option<VoteReceipt> {
         env.storage()
             .persistent()
             .get(&DataKey::Receipt(proposal_id, voter))
@@ -319,6 +543,7 @@ impl GovernanceContract {
     /// - Direction consistency: A voter cannot accumulate votes on both sides of the same proposal.
     ///   Once a voter casts their initial vote (either `support = true` or `support = false`), any subsequent
     ///   vote on that proposal must specify the same `support` side, otherwise `Error::VoteSideMismatch` is returned.
+    /// - Voting power is determined from snapshot taken at proposal creation time to prevent manipulation.
     pub fn cast_vote(
         env: Env,
         proposal_id: u32,
@@ -347,11 +572,15 @@ impl GovernanceContract {
             .storage()
             .persistent()
             .get::<_, VoteReceipt>(&receipt_key)
-            .unwrap_or(VoteReceipt {
-                support,
-                credits_spent: 0,
-                votes_cast: 0,
-                voting_units_snapshot: profile.voting_units,
+            .unwrap_or_else(|| {
+                // On first vote, create snapshot of voter's voting units
+                let voting_units_snapshot = profile.voting_units;
+                VoteReceipt {
+                    support,
+                    credits_spent: 0,
+                    votes_cast: 0,
+                    voting_units_snapshot,
+                }
             });
 
         if receipt.credits_spent > 0 && receipt.support != support {
@@ -393,5 +622,28 @@ impl GovernanceContract {
         env.storage().persistent().set(&receipt_key, &receipt);
 
         Ok(receipt)
+    }
+
+    /// Create a snapshot of voting power for a specific address
+    /// This can be called manually to create snapshots before proposal creation
+    pub fn create_voting_snapshot(
+        env: Env,
+        voter: Address,
+    ) -> Result<snapshot::VotingSnapshot, Error> {
+        let profile: VoterProfile = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Voter(voter.clone()))
+            .ok_or(Error::VoterNotRegistered)?;
+
+        let snapshot_id = snapshot::get_next_snapshot_id(&env);
+        let snapshot = snapshot::create_voting_snapshot(&env, voter, snapshot_id);
+
+        Ok(snapshot)
+    }
+
+    /// Get voting power from a snapshot
+    pub fn get_snapshot_voting_power(env: Env, voter: Address, snapshot_id: u64) -> Option<i128> {
+        snapshot::read_snapshot_voting_power(&env, voter, snapshot_id)
     }
 }

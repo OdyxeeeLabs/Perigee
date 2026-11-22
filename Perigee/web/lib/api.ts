@@ -1,13 +1,20 @@
 /**
  * Perigee API Client
- Production-grade, lightweight, type-safe api client configuration using native Fetch API.
- Integrates Next.js frontend to the Rust Axum backend.
+ * Production-grade, lightweight, type-safe api client configuration using native Fetch API.
+ * Integrates Next.js frontend to the Rust Axum backend.
 */
+
+/**
+ * Perigee API Client
+ * Production-grade, lightweight, type-safe api client configuration using native Fetch API.
+ * Integrates Next.js frontend to the Rust Axum backend.
+ */
 
 export interface ApiRequestOptions extends RequestInit {
   params?: Record<string, string>;
   token?: string;
 }
+
 
 export class ApiError extends Error {
   status: number;
@@ -55,6 +62,99 @@ export function getAccessToken(): string | null {
   return accessToken;
 }
 
+// ------------------------------------------------------------------------------
+// Development proxy (see dev.proxy.json)
+//
+// When NEXT_PUBLIC_DEV_PROXY is enabled, requests are routed through a local
+// development proxy that can mock API responses (MSW), simulate contracts
+// (Anvil/Hardhat forks), inject network conditions (latency, packet loss,
+// throttling), log traffic, and replay scenarios. It is zero-config for new
+// developers: if dev.proxy.json is absent or the flag is off, the client
+// behaves exactly as before.
+// ------------------------------------------------------------------------------
+
+export interface DevProxyConfig {
+  enabled: boolean;
+  url: string;
+  latencyMs?: number;
+  packetLoss?: number;
+  throttleKbps?: number;
+  logRequests?: boolean;
+  scenario?: string;
+}
+
+const DEV_PROXY_DEFAULTS: DevProxyConfig = {
+  enabled: false,
+  url: 'http://localhost:8787',
+  logRequests: true,
+};
+
+let devProxyConfig: DevProxyConfig | null = null;
+
+/**
+ * Resolve the development proxy configuration.
+ *
+ * Priority:
+ *   1. Explicit runtime config set via `configureDevProxy`.
+ *   2. `NEXT_PUBLIC_DEV_PROXY_URL` env var (proxy URL, implies enabled).
+ *   3. Built-in defaults (disabled).
+ */
+export function getDevProxyConfig(): DevProxyConfig {
+  if (devProxyConfig) return devProxyConfig;
+
+  const envUrl = process.env.NEXT_PUBLIC_DEV_PROXY_URL;
+  devProxyConfig = envUrl
+    ? { ...DEV_PROXY_DEFAULTS, enabled: true, url: envUrl }
+    : { ...DEV_PROXY_DEFAULTS };
+
+  return devProxyConfig;
+}
+
+/**
+ * Override the development proxy configuration at runtime. Intended for
+ * tests and for wiring values loaded from dev.proxy.json.
+ */
+export function configureDevProxy(config: Partial<DevProxyConfig>): void {
+  devProxyConfig = { ...getDevProxyConfig(), ...config };
+}
+
+/**
+ * Reset the development proxy configuration to its resolved defaults.
+ */
+export function resetDevProxyConfig(): void {
+  devProxyConfig = null;
+}
+
+/**
+ * Apply network condition simulation headers so the proxy can emulate
+ * latency, packet loss, and bandwidth throttling.
+ */
+function applyDevProxyHeaders(
+  headers: Record<string, string>,
+  config: DevProxyConfig,
+): void {
+  if (config.latencyMs !== undefined) {
+    headers['X-Dev-Proxy-Latency'] = String(config.latencyMs);
+  }
+  if (config.packetLoss !== undefined) {
+    headers['X-Dev-Proxy-Packet-Loss'] = String(config.packetLoss);
+  }
+  if (config.throttleKbps !== undefined) {
+    headers['X-Dev-Proxy-Throttle-Kbps'] = String(config.throttleKbps);
+  }
+  if (config.scenario) {
+    headers['X-Dev-Proxy-Scenario'] = config.scenario;
+  }
+}
+
+/**
+ * Resolve the effective base URL, routing through the dev proxy when enabled.
+ */
+function resolveBaseUrl(): string {
+  const config = getDevProxyConfig();
+  return config.enabled ? config.url : BASE_URL;
+}
+
 interface RefreshResponse {
   access_token: string;
   refresh_token?: string;
@@ -71,7 +171,7 @@ async function refreshAccessToken(): Promise<string | null> {
 
   refreshPromise = (async () => {
     try {
-      const response = await fetch(`${BASE_URL}/auth/refresh`, {
+      const response = await fetch(`${resolveBaseUrl()}/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: refreshToken }),
@@ -106,7 +206,7 @@ export async function revokeToken(): Promise<void> {
   const currentRefreshToken = refreshToken;
   try {
     if (currentRefreshToken) {
-      await fetch(`${BASE_URL}/auth/revoke`, {
+      await fetch(`${resolveBaseUrl()}/auth/revoke`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh_token: currentRefreshToken }),
@@ -122,7 +222,7 @@ export async function revokeToken(): Promise<void> {
 // ------------------------------------------------------------------------------
 async function request<T>(endpoint: string, options: ApiRequestOptions = {}): Promise<T> {
   const { params, token, headers, ...customConfig } = options;
-  
+
   // Build full query string if params are provided
   let queryString = '';
   if (params) {
@@ -135,7 +235,8 @@ async function request<T>(endpoint: string, options: ApiRequestOptions = {}): Pr
     queryString = `?${searchParams.toString()}`;
   }
 
-  const fullUrl = `${BASE_URL}${endpoint}${queryString}`;
+  const proxyConfig = getDevProxyConfig();
+  const fullUrl = `${resolveBaseUrl()}${endpoint}${queryString}`;
 
   const authToken = token || accessToken;
   const defaultHeaders: Record<string, string> = {
@@ -147,7 +248,15 @@ async function request<T>(endpoint: string, options: ApiRequestOptions = {}): Pr
     defaultHeaders['Authorization'] = `Bearer ${authToken}`;
   }
 
-  const buildConfig = (authTokenOverride?: string): RequestInit =>({
+  if (proxyConfig.enabled) {
+    applyDevProxyHeaders(defaultHeaders, proxyConfig);
+    if (proxyConfig.logRequests) {
+      // eslint-disable-next-line no-console
+      console.debug(`[dev-proxy] ${options.method || 'GET'} ${fullUrl}`);
+    }
+  }
+
+  const buildConfig = (authTokenOverride?: string): RequestInit => ({
     method: options.method || 'GET',
     headers: {
       ...defaultHeaders,
@@ -251,7 +360,7 @@ export const analyzeService = {
 /**
  * Base URL of the Perigee analyzer backend.
  *
- * Reads from NEXT_PUBLIC_API_URL (baked in at build time) and falls z to
+ * Reads from NEXT_PUBLIC_API_URL (baked in at build time) and falls back to
  * localhost for local development, so no env file is needed to run locally.
  * In production, set NEXT_PUBLIC_API_URL to the deployed backend's URL.
  */
@@ -260,5 +369,5 @@ export const API_URL =
 
 /** Build a full backend URL from a path, e.g. apiUrl('/analyze'). */
 export function apiUrl(path: string): string {
-  return `${API_URL}${path.startsWith('/') ? path : `/${path}`};
+  return `${API_URL}${path.startsWith('/') ? path : `/${path}`}`;
 }

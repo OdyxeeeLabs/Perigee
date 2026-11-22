@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Badge · Perigee Web Component Library</title>
+<meta name="description" content="Status pills, severity tags, resource budget indicators." />
+<meta name="generator" content="scripts/docs/generate.mjs" />
+<link rel="stylesheet" href="../../assets/docs.css" />
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+<p class="site-title"><a href="../../index.html">Perigee Web Component Library</a></p>
+<p class="meta">Component library docs · generated from source</p>
+<div class="grow"></div>
+<div class="control">
+<label for="version-select">Version</label>
+<select id="version-select" data-navigate><option value="../../index.html" selected>v0.1.0 (current)</option></select>
+</div>
+<div class="control">
+<label for="docs-search">Search docs</label>
+<input id="docs-search" type="search" autocomplete="off" placeholder="Button, accessibility…" aria-describedby="search-status" />
+</div>
+</header>
+<div class="layout">
+<nav class="site-nav" aria-label="Component library">
+<h2>Overview</h2>
+<ul>
+<li><a href="../../index.html">All components</a></li>
+<li><a href="../../migrations.html">Migration guide</a></li>
+<li><a href="../../versions.html">Versions</a></li>
+</ul>
+<h2>Actions</h2><ul><li><a href="../../button.html">Button</a></li></ul><h2>Data display</h2><ul><li><a href="../../badge.html" aria-current="page">Badge</a></li><li><a href="../../data-table.html">DataTable</a></li></ul><h2>Feedback</h2><ul><li><a href="../../spinner.html">Spinner</a></li></ul><h2>Layout</h2><ul><li><a href="../../card.html">Card</a></li></ul><h2>Accessibility</h2><ul><li><a href="../../live-region.html">Live regions</a></li></ul><h2>Legacy</h2><ul><li><a href="../../common-button.html">CommonButton</a></li></ul>
+</nav>
+<main id="content" tabindex="-1">
+<div id="search-results" hidden data-base="">
+<strong>Search results</strong>
+<p id="search-status" role="status" aria-live="polite"></p>
+<ul id="search-results-list"></ul>
+</div>
+<nav class="toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#import">Import</a></li><li><a href="#props">Props</a></li><li><a href="#usage">Usage</a></li><li><a href="#accessibility">Accessibility</a></li><li><a href="#types">Types</a></li><li><a href="#badge-variant">BadgeVariant</a></li><li><a href="#migration-notes">Migration notes</a></li><li><a href="#related">Related</a></li></ul></nav>
+<h1 id="badge">Badge</h1>
+<p><em>Data display · Status pills, severity tags, resource budget indicators.</em></p>
+<p><strong>Page status:</strong> stable · Tracks WEB-27 (#113), WEB-38 (#492)</p>
+<p><strong>Status:</strong> stable · <strong>Since:</strong> 0.1.0 · <strong>Source:</strong> <code>components/ui/Badge.tsx:49</code></p>
+<p>Standardized Badge / pill component.</p>
+<p>Resolves WEB-27 (#113): component library not standardized. Use for status labels, resource budget indicators, and severity tags.</p>
+<h2 id="import">Import</h2>
+<pre tabindex="0"><code class="language-tsx">import { Badge } from &#39;@/components/ui/Badge&#39;;</code></pre>
+<h2 id="props">Props</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col">Prop</th><th scope="col">Type</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">Description</th></tr></thead><tbody><tr><td><code>variant</code></td><td><code>BadgeVariant</code></td><td><code>&quot;default&quot;</code></td><td>No</td><td>Semantic colour pairing. Every variant is contrast-audited (see below).</td></tr><tr><td><code>children</code></td><td><code>React.ReactNode</code></td><td>—</td><td>Yes</td><td>Short label text — keep it to one or two words so the pill stays compact.</td></tr><tr><td><code>className</code></td><td><code>string</code></td><td>—</td><td>No</td><td>Extra Tailwind classes merged after the variant classes.</td></tr></tbody></table></div>
+<h2 id="usage">Usage</h2>
+<pre tabindex="0"><code class="language-tsx">&lt;Badge variant=&quot;success&quot;&gt;Passed&lt;/Badge&gt;
+&lt;Badge variant=&quot;danger&quot;&gt;Over Budget&lt;/Badge&gt;</code></pre>
+<h2 id="accessibility">Accessibility</h2>
+<ul><li>Colour is never the only signal: the text label carries the meaning, and every variant pairing is audited for ≥ 4.5:1 contrast on its tinted background (WEB-38 / #492).</li><li>The label is plain text inside a <code>&lt;span&gt;</code>, so it is read as part of the surrounding sentence — do not use it as the sole status announcement for dynamic updates; pair with <code>LiveStatus</code> / <code>LiveAlert</code>.</li></ul>
+<h2 id="types">Types</h2>
+<h3 id="badge-variant"><code>BadgeVariant</code></h3>
+<p>Allowed values:</p>
+<ul><li><code>default</code></li><li><code>success</code></li><li><code>warning</code></li><li><code>danger</code></li><li><code>info</code></li></ul>
+<h2 id="migration-notes">Migration notes</h2>
+<ul><li><a href="../../migrations.html#ad-hoc-status-pills-replaced-by-badge">Ad-hoc status pills replaced by Badge</a> — shipped in v0.0.1.<ul><li><code>Badge</code> has no <code>size</code> prop — density is inherited from the surrounding text.</li><li>Colour is never the only signal: keep a text label inside the pill (WEB-38 / #492).</li></ul></li></ul>
+<h2 id="related">Related</h2>
+<ul><li><a href="../../data-table.html">DataTable</a></li></ul>
+<hr />
+<p><a href="../../index.html">← All components</a> · <a href="../../migrations.html">Migration guide</a> · Documented at v0.1.0</p>
+<p class="page-footer">Generated from v0.1.0 by <code>npm run docs:build</code>. Edit the component source or <code>scripts/docs/registry.mjs</code>, never this file.</p>
+</main>
+</div>
+<script src="../../assets/docs.js" defer></script>
+</body>
+</html>

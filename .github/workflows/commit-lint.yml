@@ -1,0 +1,52 @@
+name: Commit lint
+
+# Verifies that every commit on a PR conforms to Conventional Commits.
+# Runs on pull_request so the full commit range is available.
+# Also runs on push to main so merge commits are validated.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches:
+      - main
+
+jobs:
+  commitlint:
+    name: Lint commit messages
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so commitlint can walk the range
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: Install root dependencies
+        run: yarn install --immutable
+
+      # On a PR: lint every commit in the range base..head
+      # On a push to main: lint only the pushed commit(s)
+      - name: Lint commits (PR range)
+        if: github.event_name == 'pull_request'
+        run: |
+          yarn commitlint \
+            --from "${{ github.event.pull_request.base.sha }}" \
+            --to   "${{ github.event.pull_request.head.sha }}" \
+            --verbose
+
+      - name: Lint commits (push)
+        if: github.event_name == 'push'
+        run: |
+          yarn commitlint \
+            --from "${{ github.event.before }}" \
+            --to   "${{ github.event.after }}" \
+            --verbose

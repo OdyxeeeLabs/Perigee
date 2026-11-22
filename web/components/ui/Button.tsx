@@ -1,110 +1,88 @@
-import React from "react";
-import { clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
+import * as React from "react";
+import { cn } from "../../lib/utils";
 
-// ---------------------------------------------------------------------------
-// Shared utility — mirrors shadcn/ui convention (WEB-27, #113)
-// ---------------------------------------------------------------------------
-function cn(...inputs: Parameters<typeof clsx>) {
-  return twMerge(clsx(inputs));
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  /**
+   * Visual treatment. `"default"` is the cyan brand action; `"destructive"` is
+   * reserved for irreversible actions; `"link"` renders text-only styling.
+   */
+  variant?: "default" | "destructive" | "outline" | "secondary" | "ghost" | "link";
+  /** Control height and padding. `"icon"` is a square control for a single glyph. */
+  size?: "default" | "sm" | "lg" | "icon";
+  /**
+   * Accepted for Radix-style API parity but **not implemented** yet: the
+   * component always renders a `<button>`. Kept optional so callers migrating
+   * from shadcn-based snippets do not fail type checking.
+   */
+  asChild?: boolean;
 }
 
-type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
-type ButtonSize = "sm" | "md" | "lg";
-
-interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-  isLoading?: boolean;
-  leftIcon?: React.ReactNode;
-  rightIcon?: React.ReactNode;
-}
-
-const variantClasses: Record<ButtonVariant, string> = {
-  primary:
-    "bg-sky-600 text-white hover:bg-sky-500 focus-visible:ring-sky-500 disabled:bg-sky-900 disabled:text-sky-400",
-  secondary:
-    "bg-slate-700 text-slate-100 hover:bg-slate-600 focus-visible:ring-slate-500 disabled:bg-slate-800 disabled:text-slate-500",
-  ghost:
-    "bg-transparent text-slate-300 hover:bg-slate-800 hover:text-slate-100 focus-visible:ring-slate-500 disabled:text-slate-600",
-  danger:
-    "bg-rose-700 text-white hover:bg-rose-600 focus-visible:ring-rose-500 disabled:bg-rose-900 disabled:text-rose-400",
+const variantStyles: Record<string, string> = {
+  default: "bg-cyan-500 text-white hover:bg-cyan-600",
+  destructive: "bg-red-600 text-white hover:bg-red-700",
+  outline: "border border-slate-700 bg-transparent hover:bg-slate-800 text-slate-200",
+  secondary: "bg-slate-800 text-slate-200 hover:bg-slate-700",
+  ghost: "hover:bg-slate-800 text-slate-200",
+  link: "text-cyan-400 underline-offset-4 hover:underline",
 };
 
-const sizeClasses: Record<ButtonSize, string> = {
-  sm: "h-7 px-2.5 text-xs gap-1.5",
-  md: "h-9 px-4 text-sm gap-2",
-  lg: "h-11 px-6 text-base gap-2.5",
+const sizeStyles: Record<string, string> = {
+  default: "h-10 px-4 py-2",
+  sm: "h-9 rounded-md px-3 text-xs",
+  lg: "h-11 rounded-md px-8",
+  icon: "h-10 w-10",
 };
 
 /**
- * Standardized Button component for the Perigee component library.
+ * Primary action control for the Perigee component library.
  *
- * Resolves WEB-27 (#113): component library not standardized.
- * All interactive buttons in the app should use this component
- * instead of ad-hoc <button> elements to ensure consistent styling,
- * focus management, and loading/disabled states.
+ * Renders a native `<button>` and forwards every unhandled prop to it, so
+ * `type`, `disabled`, `aria-*`, and event handlers behave exactly as they would
+ * on a plain HTML button. Use `variant` to express emphasis and `size` for
+ * density; keep a single `default` button per view for a clear primary action.
+ *
+ * Replaces the legacy `components/common/Button` (`CommonButton`), whose
+ * `primary` variant maps onto `variant="default"`. See the
+ * [migration guide](./migrations.md) for the full mapping.
  *
  * @example
- * <Button variant="primary" onClick={handleClick}>Connect Wallet</Button>
- * <Button variant="secondary" size="sm" isLoading>Analyzing...</Button>
+ * // Primary call to action
+ * <Button onClick={confirmRotation}>Confirm rotation</Button>
+ *
+ * @example
+ * // Lower-emphasis destructive action
+ * <Button variant="destructive" size="sm">Remove vault</Button>
+ *
+ * @accessibility
+ * - Renders a real `<button>` whose default `type` is `button`, so keyboard
+ *   activation (Enter / Space) works without extra handlers.
+ * - Icon-only controls (`size="icon"`) have no text content: always pass an
+ *   accessible name (`aria-label` / `aria-labelledby`) and mark the glyph
+ *   `aria-hidden`.
+ * - Focus is visible via `focus-visible:ring-2`; the ring must not be removed.
+ * - `disabled` uses the native attribute, so the control leaves the tab order
+ *   and is announced as unavailable. For a loading state that must stay
+ *   focusable, combine `aria-busy` with `components/ui/Spinner` instead.
+ *
+ * @since 0.1.0
  */
-export function Button({
-  variant = "primary",
-  size = "md",
-  isLoading = false,
-  leftIcon,
-  rightIcon,
-  children,
-  className,
-  disabled,
-  ...rest
-}: ButtonProps) {
-  const isDisabled = disabled || isLoading;
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant = "default", size = "default", asChild: _asChild = false, ...props }, ref) => {
+    return (
+      <button
+        className={cn(
+          "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 disabled:pointer-events-none disabled:opacity-50",
+          variantStyles[variant] || variantStyles.default,
+          sizeStyles[size] || sizeStyles.default,
+          className
+        )}
+        ref={ref}
+        {...props}
+      />
+    );
+  }
+);
+Button.displayName = "Button";
 
-  return (
-    <button
-      {...rest}
-      disabled={isDisabled}
-      aria-busy={isLoading}
-      className={cn(
-        // Base
-        "inline-flex items-center justify-center font-medium rounded-md transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-950",
-        "disabled:pointer-events-none disabled:cursor-not-allowed",
-        // Variant & size
-        variantClasses[variant],
-        sizeClasses[size],
-        className,
-      )}
-    >
-      {isLoading ? (
-        <svg
-          className="animate-spin h-4 w-4 shrink-0"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-          />
-        </svg>
-      ) : (
-        leftIcon && <span className="shrink-0">{leftIcon}</span>
-      )}
-      <span>{children}</span>
-      {!isLoading && rightIcon && <span className="shrink-0">{rightIcon}</span>}
-    </button>
-  );
-}
+export { Button };

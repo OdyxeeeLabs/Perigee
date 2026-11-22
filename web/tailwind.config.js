@@ -3,6 +3,7 @@ const colors = require("tailwindcss/colors");
 const defaultTheme = require("tailwindcss/defaultTheme");
 
 module.exports = {
+  darkMode: 'class',
   content: [
     "./pages/**/*.{js,ts,jsx,tsx}",
     "./components/**/*.{js,ts,jsx,tsx}",
@@ -43,35 +44,55 @@ module.exports = {
         primary: {
           DEFAULT: "var(--color-primary, #2563eb)",
           hover: "var(--color-primary-hover, #1d4ed8)",
+          foreground: "var(--color-primary-foreground, #ffffff)",
+          // On dark surfaces (slate-950): blue-400 ≈ 7.93:1 (WEB-38)
+          onDark: "var(--color-primary-on-dark, #60a5fa)",
           rgb: "37 99 235",
         },
         secondary: {
-          DEFAULT: "var(--color-secondary, #64748b)",
-          hover: "var(--color-secondary-hover, #475569)",
+          DEFAULT: "var(--color-secondary, #475569)",
+          hover: "var(--color-secondary-hover, #334155)",
         },
-        success: "var(--color-success, #16a34a)",
-        warning: "var(--color-warning, #f59e0b)",
-        danger:  "var(--color-danger,  #dc2626)",
+        success: {
+          DEFAULT: "var(--color-success, #15803d)", // 5.02:1 on white
+          onDark: "var(--color-success-on-dark, #4ade80)",
+        },
+        warning: {
+          DEFAULT: "var(--color-warning, #b45309)", // 5.02:1 on white
+          onDark: "var(--color-warning-on-dark, #fbbf24)",
+        },
+        danger: {
+          DEFAULT: "var(--color-danger, #b91c1c)", // 6.47:1 on white
+          onDark: "var(--color-danger-on-dark, #f87171)",
+        },
         canvas:  "var(--color-background, #ffffff)",
         surface: "var(--color-surface,    #f8fafc)",
+        // shadcn-style card tokens used by `ui/card.tsx`
+        card: {
+          DEFAULT: "var(--color-card, #0f172a)",
+          foreground: "var(--color-card-foreground, #f1f5f9)",
+        },
         line: {
-          DEFAULT: "var(--color-border, #e2e8f0)",
-          subtle:  "var(--color-border-subtle, #e2e8f0)",
+          DEFAULT: "var(--color-border, #64748b)", // ≥ 3:1 UI on white
+          subtle:  "var(--color-border-subtle, #94a3b8)",
         },
         body: {
           DEFAULT: "var(--color-text,       #0f172a)",
-          muted:   "var(--color-text-muted, #64748b)",
+          muted:   "var(--color-text-muted, #475569)",
         },
 
-        // ── Existing WCAG-AA contrast overrides — preserved from WEB-59 (#192).
+        // ── WCAG-AA contrast overrides — WEB-59 (#192) + WEB-38 (#492).
         // All values below target dark backgrounds (slate-950 / slate-900).
         // Minimum required contrast ratio: 4.5:1 normal text, 3:1 large text.
         slate: {
           ...colors.slate,
+          // WEB-38 (#492) + WEB-59: lighten mid-slates for dark UI (slate-950).
           // slate-300 on slate-950 → ~10.7:1 (AAA)  ✓
           // slate-400 on slate-950 →  ~6.8:1 (AA)   ✓
+          // slate-600 default #475569 → ~2.66:1 on slate-950 ✗ → map to slate-400
           400: colors.slate[300], // #cbd5e1
           500: colors.slate[400], // #94a3b8
+          600: colors.slate[400], // #94a3b8 — was 2.66:1 on slate-950
         },
         gray: {
           ...colors.gray,

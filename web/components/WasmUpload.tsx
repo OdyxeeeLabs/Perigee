@@ -25,7 +25,7 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-//types 
+//types
 
 interface WasmFile {
   file: File;
@@ -72,7 +72,10 @@ const generateHash = async (file: File): Promise<string> => {
 };
 
 // Version WASM filenames by appending content hash to invalidate stale caches
-export const getVersionedWasmFilename = (filename: string, hash: string): string => {
+export const getVersionedWasmFilename = (
+  filename: string,
+  hash: string,
+): string => {
   const version = hash.slice(0, 8);
   const base = filename.replace(/\.wasm$/i, "");
   return `${base}.v-${version}.wasm`;
@@ -93,93 +96,103 @@ export default function WasmUpload({
   const shouldReduceMotion = useReducedMotion();
 
   //validate WASM file
-  const validateWasm = useCallback((file: File): string | null => {
-    if (!file.name.toLowerCase().endsWith(".wasm")) {
-      return "Validation Error: File must be a .wasm file";
-    }
-    if (file.size > maxFileSize) {
-      return `File too large (max ${(maxFileSize / 1024 / 1024).toFixed(1)}MB)`;
-    }
-    if (file.size === 0) {
-      return "File is empty";
-    }
-    return null;
-  }, [maxFileSize]);
+  const validateWasm = useCallback(
+    (file: File): string | null => {
+      if (!file.name.toLowerCase().endsWith(".wasm")) {
+        return "Validation Error: File must be a .wasm file";
+      }
+      if (file.size > maxFileSize) {
+        return `File too large (max ${(maxFileSize / 1024 / 1024).toFixed(1)}MB)`;
+      }
+      if (file.size === 0) {
+        return "File is empty";
+      }
+      return null;
+    },
+    [maxFileSize],
+  );
 
   const setUploadProgress = useCallback((id: string, progress: number) => {
-    setFiles((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, progress } : f))
-    );
+    setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, progress } : f)));
   }, []);
 
   // Submit WASM to backend simulation engine.
-  const uploadFile = useCallback(async (wasmFile: WasmFile) => {
-    setFiles((prev) =>
-      prev.map((f) =>
-        f.id === wasmFile.id ? { ...f, status: "uploading" } : f
-      )
-    );
-
-    try {
-      setUploadProgress(wasmFile.id, 20);
-      const buffer = await wasmFile.file.arrayBuffer();
-      setUploadProgress(wasmFile.id, 50);
-
-      const wasmBytesBase64 = arrayBufferToBase64(buffer);
-      setUploadProgress(wasmFile.id, 80);
-
-      const simulationResult = await analyzeService.analyzeWasm({
-        wasm_bytes: wasmBytesBase64,
-        function_name: "main",
-        args: [],
-      });
-
-      const hash = await generateHash(wasmFile.file);
-      setUploadProgress(wasmFile.id, 100);
-
+  const uploadFile = useCallback(
+    async (wasmFile: WasmFile) => {
       setFiles((prev) =>
         prev.map((f) =>
-          f.id === wasmFile.id
-            ? { ...f, status: "success", progress: 100, hash, simulationResult }
-            : f
-        )
+          f.id === wasmFile.id ? { ...f, status: "uploading" } : f,
+        ),
       );
-    } catch (err) {
-      let errorMessage = "Upload failed. Please try again.";
 
-      if (err instanceof ApiError) {
-        const body =
-          typeof err.body === "object" && err.body !== null
-            ? (err.body as { error?: unknown; message?: unknown })
-            : undefined;
-        const backendError = {
-          error:
-            typeof body?.error === "string"
-              ? body.error
-              : statusToErrorType(err.status),
-          message:
-            typeof body?.message === "string" ? body.message : err.message,
-          statusCode: err.status,
-        };
-        errorMessage = createUserFriendlyMessage(backendError);
-      } else {
-        const formatted = formatError(err);
-        errorMessage = formatted.message;
+      try {
+        setUploadProgress(wasmFile.id, 20);
+        const buffer = await wasmFile.file.arrayBuffer();
+        setUploadProgress(wasmFile.id, 50);
+
+        const wasmBytesBase64 = arrayBufferToBase64(buffer);
+        setUploadProgress(wasmFile.id, 80);
+
+        const simulationResult = await analyzeService.analyzeWasm({
+          wasm_bytes: wasmBytesBase64,
+          function_name: "main",
+          args: [],
+        });
+
+        const hash = await generateHash(wasmFile.file);
+        setUploadProgress(wasmFile.id, 100);
+
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === wasmFile.id
+              ? {
+                  ...f,
+                  status: "success",
+                  progress: 100,
+                  hash,
+                  simulationResult,
+                }
+              : f,
+          ),
+        );
+      } catch (err) {
+        let errorMessage = "Upload failed. Please try again.";
+
+        if (err instanceof ApiError) {
+          const body =
+            typeof err.body === "object" && err.body !== null
+              ? (err.body as { error?: unknown; message?: unknown })
+              : undefined;
+          const backendError = {
+            error:
+              typeof body?.error === "string"
+                ? body.error
+                : statusToErrorType(err.status),
+            message:
+              typeof body?.message === "string" ? body.message : err.message,
+            statusCode: err.status,
+          };
+          errorMessage = createUserFriendlyMessage(backendError);
+        } else {
+          const formatted = formatError(err);
+          errorMessage = formatted.message;
+        }
+
+        setFiles((prev) =>
+          prev.map((f) =>
+            f.id === wasmFile.id
+              ? {
+                  ...f,
+                  status: "error",
+                  error: errorMessage,
+                }
+              : f,
+          ),
+        );
       }
-
-      setFiles((prev) =>
-        prev.map((f) =>
-          f.id === wasmFile.id
-            ? {
-                ...f,
-                status: "error",
-                error: errorMessage,
-              }
-            : f
-        )
-      );
-    }
-  }, [setUploadProgress]);
+    },
+    [setUploadProgress],
+  );
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
@@ -204,7 +217,10 @@ export default function WasmUpload({
       });
 
       if (invalidFiles.length > 0) {
-        alert(invalidFiles[0].error || "Validation Error: Invalid non-WASM file uploaded.");
+        alert(
+          invalidFiles[0].error ||
+            "Validation Error: Invalid non-WASM file uploaded.",
+        );
       }
 
       const totalFiles = [...files, ...validFiles, ...invalidFiles];
@@ -219,7 +235,7 @@ export default function WasmUpload({
       //auto-upload valid files
       validFiles.forEach((f) => uploadFile(f));
     },
-    [files, maxFiles, onFileSelect, uploadFile, validateWasm]
+    [files, maxFiles, onFileSelect, uploadFile, validateWasm],
   );
 
   const { getRootProps, getInputProps, isDragReject } = useDropzone({
@@ -248,8 +264,10 @@ export default function WasmUpload({
     if (file && file.status === "error") {
       setFiles((prev) =>
         prev.map((f) =>
-          f.id === id ? { ...f, status: "pending", error: undefined, progress: 0 } : f
-        )
+          f.id === id
+            ? { ...f, status: "pending", error: undefined, progress: 0 }
+            : f,
+        ),
       );
       uploadFile({ ...file, status: "pending", error: undefined, progress: 0 });
     }
@@ -258,37 +276,62 @@ export default function WasmUpload({
   const pendingCount = files.filter((f) => f.status === "pending").length;
   const uploadingCount = files.filter((f) => f.status === "uploading").length;
   const successCount = files.filter((f) => f.status === "success").length;
+  const errorCount = files.filter((f) => f.status === "error").length;
+
+  // WEB-16 (#470): per-file upload status is conveyed visually by badges and
+  // colours; mirror the headline counts into a live region so screen readers
+  // hear the transition ("1 uploading" → "2 ready").
+  const uploadStatusMessage = [
+    uploadingCount > 0
+      ? `${uploadingCount} ${t("wasmUpload.uploading")}`
+      : "",
+    successCount > 0 ? `${successCount} ${t("wasmUpload.ready")}` : "",
+    errorCount > 0 ? `${errorCount} ${t("wasmUpload.retry")}` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return (
     <div className={cn("w-full max-w-2xl mx-auto", className)}>
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="wasm-upload-live-status"
+        className="sr-only"
+      >
+        {uploadStatusMessage}
+      </div>
       {/*drop Zone*/}
       <div
         {...getRootProps()}
         className={cn(
           "relative border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-colors duration-200",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white",
           isDragActive
             ? "border-indigo-500 bg-indigo-50/50"
             : isDragReject
-            ? "border-red-400 bg-red-50/50"
-            : "border-slate-300 hover:border-slate-400 bg-slate-50/50 hover:bg-slate-50"
+              ? "border-red-400 bg-red-50/50"
+              : "border-slate-300 hover:border-slate-400 bg-slate-50/50 hover:bg-slate-50",
         )}
       >
         <input {...getInputProps()} />
 
         <motion.div
           animate={
-            shouldReduceMotion || !isDragActive
-              ? { y: 0 }
-              : { y: [0, -8, 0] }
+            shouldReduceMotion || !isDragActive ? { y: 0 } : { y: [0, -8, 0] }
           }
-          transition={{ repeat: shouldReduceMotion || !isDragActive ? 0 : Infinity, duration: shouldReduceMotion ? 0 : 1.5 }}
+          transition={{
+            repeat: shouldReduceMotion || !isDragActive ? 0 : Infinity,
+            duration: shouldReduceMotion ? 0 : 1.5,
+          }}
         >
           <div
             className={cn(
               "mx-auto w-16 h-16 rounded-2xl flex items-center justify-center mb-4",
               isDragActive
                 ? "bg-indigo-100 text-indigo-600"
-                : "bg-slate-100 text-slate-400"
+                : "bg-slate-100 text-slate-400",
             )}
           >
             <Upload className="w-8 h-8" />
@@ -305,7 +348,11 @@ export default function WasmUpload({
         </p>
         <div className="flex items-center justify-center gap-2 text-xs text-slate-400">
           <FileCode className="w-4 h-4" />
-          <span>{t("wasmUpload.maxPerFile", { size: (maxFileSize / 1024 / 1024).toFixed(0) })}</span>
+          <span>
+            {t("wasmUpload.maxPerFile", {
+              size: (maxFileSize / 1024 / 1024).toFixed(0),
+            })}
+          </span>
           <span className="text-slate-300">•</span>
           <span>{t("wasmUpload.upTo", { count: maxFiles })}</span>
         </div>
@@ -315,9 +362,15 @@ export default function WasmUpload({
       <AnimatePresence>
         {files.length > 0 && (
           <motion.div
-            initial={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
-            animate={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 1, y: 0 }}
-            exit={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: -20 }}
+            initial={
+              shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }
+            }
+            animate={
+              shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 1, y: 0 }
+            }
+            exit={
+              shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: -20 }
+            }
             className="mt-6 space-y-3"
           >
             {/* header */}
@@ -339,7 +392,7 @@ export default function WasmUpload({
               </div>
               <button
                 onClick={clearAll}
-                className="text-xs text-slate-400 hover:text-red-500 transition-colors"
+                className="text-xs text-slate-400 hover:text-red-500 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
               >
                 {t("wasmUpload.clearAll")}
               </button>
@@ -350,16 +403,28 @@ export default function WasmUpload({
               <motion.div
                 key={wasmFile.id}
                 layout={!shouldReduceMotion}
-                initial={shouldReduceMotion ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.95 }}
-                animate={shouldReduceMotion ? { opacity: 1, scale: 1 } : { opacity: 1, scale: 1 }}
-                exit={shouldReduceMotion ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.95 }}
+                initial={
+                  shouldReduceMotion
+                    ? { opacity: 1, scale: 1 }
+                    : { opacity: 0, scale: 0.95 }
+                }
+                animate={
+                  shouldReduceMotion
+                    ? { opacity: 1, scale: 1 }
+                    : { opacity: 1, scale: 1 }
+                }
+                exit={
+                  shouldReduceMotion
+                    ? { opacity: 1, scale: 1 }
+                    : { opacity: 0, scale: 0.95 }
+                }
                 className={cn(
                   "relative bg-white border rounded-xl p-4 shadow-sm",
                   wasmFile.status === "error"
                     ? "border-red-200 bg-red-50/30"
                     : wasmFile.status === "success"
-                    ? "border-emerald-200 bg-emerald-50/30"
-                    : "border-slate-200"
+                      ? "border-emerald-200 bg-emerald-50/30"
+                      : "border-slate-200",
                 )}
               >
                 <div className="flex items-start gap-3">
@@ -370,10 +435,10 @@ export default function WasmUpload({
                       wasmFile.status === "success"
                         ? "bg-emerald-100 text-emerald-600"
                         : wasmFile.status === "error"
-                        ? "bg-red-100 text-red-600"
-                        : wasmFile.status === "uploading"
-                        ? "bg-indigo-100 text-indigo-600"
-                        : "bg-slate-100 text-slate-500"
+                          ? "bg-red-100 text-red-600"
+                          : wasmFile.status === "uploading"
+                            ? "bg-indigo-100 text-indigo-600"
+                            : "bg-slate-100 text-slate-500",
                     )}
                   >
                     {wasmFile.status === "uploading" ? (
@@ -406,7 +471,9 @@ export default function WasmUpload({
                             className="h-full bg-indigo-500 rounded-full"
                             initial={{ width: 0 }}
                             animate={{ width: `${wasmFile.progress}%` }}
-                            transition={{ duration: shouldReduceMotion ? 0 : 0.3 }}
+                            transition={{
+                              duration: shouldReduceMotion ? 0 : 0.3,
+                            }}
                           />
                         </div>
                         <p className="text-xs text-slate-400 mt-1">
@@ -435,7 +502,7 @@ export default function WasmUpload({
                         </span>
                         <button
                           onClick={() => retryUpload(wasmFile.id)}
-                          className="text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+                          className="text-xs text-indigo-600 hover:text-indigo-700 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                         >
                           {t("wasmUpload.retry")}
                         </button>
@@ -451,7 +518,7 @@ export default function WasmUpload({
                           // navigate to analysis or trigger analysis
                           console.log("Analyze WASM:", wasmFile.hash);
                         }}
-                        className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                        className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
                         title="Analyze contract"
                       >
                         <ChevronRight className="w-4 h-4" />
@@ -459,7 +526,7 @@ export default function WasmUpload({
                     )}
                     <button
                       onClick={() => removeFile(wasmFile.id)}
-                      className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
                       title="Remove file"
                     >
                       <X className="w-4 h-4" />
@@ -478,7 +545,7 @@ export default function WasmUpload({
                   const completed = files.filter((f) => f.status === "success");
                   onUploadComplete?.(completed);
                 }}
-                className="w-full mt-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2"
+                className="w-full mt-4 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500"
               >
                 <FileCode className="w-5 h-5" />
                 {t("wasmUpload.analyzeContracts", { count: successCount })}

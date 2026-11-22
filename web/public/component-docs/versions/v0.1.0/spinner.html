@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Spinner · Perigee Web Component Library</title>
+<meta name="description" content="Inline and block loading states." />
+<meta name="generator" content="scripts/docs/generate.mjs" />
+<link rel="stylesheet" href="../../assets/docs.css" />
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+<p class="site-title"><a href="../../index.html">Perigee Web Component Library</a></p>
+<p class="meta">Component library docs · generated from source</p>
+<div class="grow"></div>
+<div class="control">
+<label for="version-select">Version</label>
+<select id="version-select" data-navigate><option value="../../index.html" selected>v0.1.0 (current)</option></select>
+</div>
+<div class="control">
+<label for="docs-search">Search docs</label>
+<input id="docs-search" type="search" autocomplete="off" placeholder="Button, accessibility…" aria-describedby="search-status" />
+</div>
+</header>
+<div class="layout">
+<nav class="site-nav" aria-label="Component library">
+<h2>Overview</h2>
+<ul>
+<li><a href="../../index.html">All components</a></li>
+<li><a href="../../migrations.html">Migration guide</a></li>
+<li><a href="../../versions.html">Versions</a></li>
+</ul>
+<h2>Actions</h2><ul><li><a href="../../button.html">Button</a></li></ul><h2>Data display</h2><ul><li><a href="../../badge.html">Badge</a></li><li><a href="../../data-table.html">DataTable</a></li></ul><h2>Feedback</h2><ul><li><a href="../../spinner.html" aria-current="page">Spinner</a></li></ul><h2>Layout</h2><ul><li><a href="../../card.html">Card</a></li></ul><h2>Accessibility</h2><ul><li><a href="../../live-region.html">Live regions</a></li></ul><h2>Legacy</h2><ul><li><a href="../../common-button.html">CommonButton</a></li></ul>
+</nav>
+<main id="content" tabindex="-1">
+<div id="search-results" hidden data-base="">
+<strong>Search results</strong>
+<p id="search-status" role="status" aria-live="polite"></p>
+<ul id="search-results-list"></ul>
+</div>
+<nav class="toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#import">Import</a></li><li><a href="#props">Props</a></li><li><a href="#usage">Usage</a></li><li><a href="#accessibility">Accessibility</a></li><li><a href="#types">Types</a></li><li><a href="#spinner-color">SpinnerColor</a></li><li><a href="#spinner-size">SpinnerSize</a></li><li><a href="#related">Related</a></li></ul></nav>
+<h1 id="spinner">Spinner</h1>
+<p><em>Feedback · Inline and block loading states.</em></p>
+<p><strong>Page status:</strong> stable</p>
+<p><strong>Status:</strong> stable · <strong>Since:</strong> 0.1.0 · <strong>Source:</strong> <code>components/ui/Spinner.tsx:91</code></p>
+<p>Standardised loading spinner for the Perigee component library.</p>
+<p>Resolves the ad-hoc loading indicator inconsistency noted across multiple components. Use this instead of inline SVGs or Lucide&#39;s Loader2 so that size, color, and motion behaviour are uniform app-wide.</p>
+<h2 id="import">Import</h2>
+<pre tabindex="0"><code class="language-tsx">import { Spinner } from &#39;@/components/ui/Spinner&#39;;</code></pre>
+<h2 id="props">Props</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col">Prop</th><th scope="col">Type</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">Description</th></tr></thead><tbody><tr><td><code>size</code></td><td><code>SpinnerSize</code></td><td><code>&quot;md&quot;</code></td><td>No</td><td>Controls the outer diameter of the spinner ring. Defaults to &quot;md&quot;.</td></tr><tr><td><code>color</code></td><td><code>SpinnerColor</code></td><td><code>&quot;primary&quot;</code></td><td>No</td><td>Color token for the spinning arc. &quot;primary&quot; matches the Perigee brand cyan (#33C5E0). Defaults to &quot;primary&quot;.</td></tr><tr><td><code>label</code></td><td><code>string</code></td><td>—</td><td>No</td><td>Optional accessible label announced by screen readers. When omitted the spinner is purely decorative (aria-hidden=&quot;true&quot;).</td></tr><tr><td><code>className</code></td><td><code>string</code></td><td>—</td><td>No</td><td>Extra Tailwind classes forwarded to the root element.</td></tr></tbody></table></div>
+<h2 id="usage">Usage</h2>
+<pre tabindex="0"><code class="language-tsx">// Decorative (no announcement)
+&lt;Spinner size=&quot;sm&quot; color=&quot;primary&quot; /&gt;
+
+// Accessible (announces to screen readers)
+&lt;Spinner size=&quot;md&quot; label=&quot;Loading vault data…&quot; /&gt;
+*   // Custom color with label below the ring
+  &lt;Spinner size=&quot;lg&quot; color=&quot;white&quot; label=&quot;Connecting…&quot; /&gt;</code></pre>
+<h2 id="accessibility">Accessibility</h2>
+<ul><li>Without <code>label</code> the ring is <code>aria-hidden=&quot;true&quot;</code>, which is correct inside a button that already has a name (&quot;Saving…&quot;).</li><li>With <code>label</code> the ring becomes <code>role=&quot;status&quot;</code>, which announces politely; for failures that must interrupt, use <code>LiveAlert</code> instead.</li><li>The CSS animation is disabled by the global <code>prefers-reduced-motion</code> rule, so the ring must never be the only progress signal — pair it with text.</li></ul>
+<h2 id="types">Types</h2>
+<h3 id="spinner-color"><code>SpinnerColor</code></h3>
+<p>Allowed values:</p>
+<ul><li><code>primary</code></li><li><code>white</code></li><li><code>muted</code></li><li><code>danger</code></li><li><code>success</code></li></ul>
+<h3 id="spinner-size"><code>SpinnerSize</code></h3>
+<p>Allowed values:</p>
+<ul><li><code>xs</code></li><li><code>sm</code></li><li><code>md</code></li><li><code>lg</code></li><li><code>xl</code></li></ul>
+<h2 id="related">Related</h2>
+<ul><li><a href="../../button.html">Button</a></li><li><a href="../../live-region.html">Live regions</a></li></ul>
+<hr />
+<p><a href="../../index.html">← All components</a> · <a href="../../migrations.html">Migration guide</a> · Documented at v0.1.0</p>
+<p class="page-footer">Generated from v0.1.0 by <code>npm run docs:build</code>. Edit the component source or <code>scripts/docs/registry.mjs</code>, never this file.</p>
+</main>
+</div>
+<script src="../../assets/docs.js" defer></script>
+</body>
+</html>

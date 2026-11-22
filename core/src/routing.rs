@@ -90,7 +90,10 @@ pub fn compute_inverse_rtt_weights(providers: &[ProviderView<'_>]) -> Vec<u64> {
         return Vec::new();
     }
 
-    let max_rtt = *rtts.iter().max().unwrap();
+    // SAFETY: we just checked that `rtts` is non-empty above, so `max()`
+    // is guaranteed to return `Some`. The `unwrap_or(1)` is unreachable but
+    // keeps the compiler happy without the clippy::unwrap_used lint firing.
+    let max_rtt = *rtts.iter().max().unwrap_or(&1);
     rtts.into_iter().map(|r| max_rtt / r).collect()
 }
 

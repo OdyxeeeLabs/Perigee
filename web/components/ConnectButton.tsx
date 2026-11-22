@@ -2,11 +2,11 @@
 
 import { useWalletStore } from "../context/WalletContext";
 import { shallow } from "../lib/createStore";
-import { motion, AnimatePresence } from "framer-motion";
-import { useWallet } from "../context/WalletContext";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { useState, useRef, useEffect } from "react";
 import { LogOut } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { Spinner } from "./ui/Spinner";
 
 const ArrowDownIcon = () => (
   <svg
@@ -25,10 +25,17 @@ const ArrowDownIcon = () => (
 );
 
 export function ConnectButton() {
-  const { address, openModal, disconnect } = useWalletStore(
-    (s) => ({ address: s.address, openModal: s.openModal, disconnect: s.disconnect }),
+  const t = useTranslations();
+  const { address, openModal, disconnect, isConnecting } = useWalletStore(
+    (s) => ({
+      address: s.address,
+      openModal: s.openModal,
+      disconnect: s.disconnect,
+      isConnecting: s.isConnecting,
+    }),
     shallow,
   );
+
   const isConnected = !!address;
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -54,7 +61,6 @@ export function ConnectButton() {
         setDropdownOpen(false);
       }
     }
-
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
@@ -63,6 +69,7 @@ export function ConnectButton() {
     return (
       <div className="relative" ref={dropdownRef}>
         <button
+          type="button"
           onClick={() => setDropdownOpen(!dropdownOpen)}
           className="flex items-center gap-3 px-6 py-3 rounded-s-2xl bg-[#0F1621] border border-[#1e293b] hover:border-[#33C5E0]/50 transition-all group pointer-events-auto"
         >
@@ -82,18 +89,28 @@ export function ConnectButton() {
         <AnimatePresence>
           {dropdownOpen && (
             <motion.div
-              initial={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 }}
-              animate={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 1, y: 0 }}
-              exit={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 }}
+              initial={
+                shouldReduceMotion
+                  ? { opacity: 1, y: 0 }
+                  : { opacity: 0, y: 10 }
+              }
+              animate={{ opacity: 1, y: 0 }}
+              exit={
+                shouldReduceMotion
+                  ? { opacity: 1, y: 0 }
+                  : { opacity: 0, y: 10 }
+              }
               transition={{ duration: shouldReduceMotion ? 0 : 0.15 }}
               className="absolute top-full right-0 mt-2 w-full min-w-[180px] bg-[#0F1621] border border-[#1e293b] rounded-xl shadow-xl overflow-hidden z-50"
             >
               <button
+                type="button"
                 onClick={handleDisconnect}
+                aria-label={t("connectButton.disconnectAriaLabel", { address })}
                 className="flex items-center gap-3 w-full px-4 py-3 text-red-400 hover:bg-white/5 transition-colors text-sm font-medium"
               >
                 <LogOut className="w-4 h-4" />
-                Disconnect
+                {t("connectButton.disconnect")}
               </button>
             </motion.div>
           )}
@@ -104,14 +121,33 @@ export function ConnectButton() {
 
   return (
     <motion.button
-      whileHover={shouldReduceMotion ? undefined : { scale: 1.02 }}
-      whileTap={shouldReduceMotion ? undefined : { scale: 0.98 }}
-      onClick={openModal}
-      className="flex items-center gap-4"
+      type="button"
+      whileHover={!isConnecting && !shouldReduceMotion ? { scale: 1.02 } : undefined}
+      whileTap={!isConnecting && !shouldReduceMotion ? { scale: 0.98 } : undefined}
+      onClick={isConnecting ? undefined : openModal}
+      disabled={isConnecting}
+      aria-busy={isConnecting}
+      aria-label={
+        isConnecting
+          ? t("walletModal.connecting")
+          : t("connectButton.connectWallet")
+      }
+      className={`flex items-center gap-4 ${
+        isConnecting ? "opacity-70 cursor-not-allowed pointer-events-none" : ""
+      }`}
     >
       <div className="flex items-center gap-4 px-8 py-3 rounded-s-2xl bg-[#0F1621] border border-[#1e293b] hover:border-[#33C5E0]/50 transition-all text-[#33C5E0] font-medium tracking-wide shadow-lg shadow-black/20">
-        <span>Connect Wallet</span>
-        <ArrowDownIcon />
+        {isConnecting ? (
+          <>
+            <Spinner size="sm" color="primary" aria-hidden />
+            <span>{t("walletModal.connecting")}</span>
+          </>
+        ) : (
+          <>
+            <span>{t("connectButton.connectWallet")}</span>
+            <ArrowDownIcon />
+          </>
+        )}
       </div>
       <div className="w-1.5 h-8 bg-[#161E22] flex items-center justify-center transition-colors" />
     </motion.button>
