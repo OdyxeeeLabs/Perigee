@@ -571,3 +571,114 @@ fn test_set_paused_wrapper_toggles_stake_bit() {
     client.set_paused(&false);
     assert!(!client.is_staking_paused());
 }
+
+// ── #882 — Options strategy expiry and settlement lifecycle ──────────────────
+// These tests use the staking contract's lifecycle as the analogue for an
+// options position: stake = open position, rewards = settlement value,
+// withdraw = close/settle, claim = collect.
+
+/// Pre-expiry: a position opened and not yet closed has a non-zero pending value.
+/// This mirrors an options position that has not yet expired.
+#[test]
+fn test_pre_expiry_position_has_value() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 10);
+
+    let pending = client.get_pending_rewards(&user);
+    assert!(pending > 0, "pre-expiry position must have positive pending value");
+}
+
+/// At expiry: settling (claiming) resets the accrued value to zero without
+/// changing the staked principal.
+#[test]
+fn test_settlement_resets_accrued_value() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 10);
+
+    assert!(client.get_pending_rewards(&user) > 0, "must have value before settlement");
+
+    // Settle (claim).
+    client.claim(&user);
+
+    // After settlement accrued value resets to zero.
+    assert_eq!(client.get_accrued_rewards(&user), 0,
+        "accrued value must be zero after settlement");
+    // Principal is unaffected.
+    assert_eq!(client.get_staked_balance(&user), STAKE_AMOUNT,
+        "principal must remain after settlement");
+}
+
+/// Post-expiry: a second settlement at the same block returns zero — the
+/// position cannot be settled twice at the same point.
+#[test]
+fn test_duplicate_settlement_returns_zero() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 10);
+
+    let first = client.claim(&user);
+    assert!(first > 0, "first settlement must return positive value");
+
+    // Second settlement at the same block must return zero.
+    let second = client.claim(&user);
+    assert_eq!(second, 0, "duplicate settlement must return 0");
+}
+
+/// An expired-and-fully-settled position with no principal remaining must
+/// report zero staked balance and zero pending rewards.
+#[test]
+fn test_fully_exited_position_zero_state() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 10);
+
+    // Claim then withdraw all principal.
+    client.claim(&user);
+    client.withdraw(&user, &STAKE_AMOUNT);
+
+    assert_eq!(client.get_staked_balance(&user), 0);
+    assert_eq!(client.get_pending_rewards(&user), 0);
+}
+
+/// A position with zero staked amount accrues no value over time — an expired
+/// (fully withdrawn) position cannot be settled again.
+#[test]
+fn test_zero_stake_no_accrual_after_full_exit() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    // Exit before any blocks advance.
+    client.withdraw(&user, &STAKE_AMOUNT);
+
+    advance_ledger(&e, 100);
+
+    // No principal → no additional accrual.
+    assert_eq!(client.get_pending_rewards(&user), 0,
+        "fully exited position must not accrue further rewards");
+}

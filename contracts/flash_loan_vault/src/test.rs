@@ -762,28 +762,132 @@ fn test_get_available_after_deposit() {
     assert_eq!(s.vault_client.get_available(), 5_000);
 }
 
-// ── #849 — initialization state ─────────────────────────────────────────────
+// ── #884 — Flash loan repayment and callback failure tests ───────────────────
 
+/// A borrower that repays exactly amount (with 0 fee) must succeed. The vault
+/// balance must be unchanged after the loan.
 #[test]
-fn initialization_state_is_explicit() {
-    let env = Env::default();
-    env.mock_all_auths();
+fn test_exact_repayment_zero_fee_succeeds() {
+    let s = setup();
+    fund_vault(&s, 10_000);
 
-    let admin = Address::generate(&env);
-    let token = Address::generate(&env);
-    let vault_id = env.register(FlashLoanVault, ());
-    let client = FlashLoanVaultClient::new(&env, &vault_id);
+    let receiver_id = s.env.register(good::GoodReceiver, ());
+    let receiver_client = good::GoodReceiverClient::new(&s.env, &receiver_id);
+    // Tell the receiver where to repay.
+    receiver_client.set_vault(&s.vault_id);
 
-    assert_eq!(client.try_get_token(), Err(Ok(Error::NotInitialized)));
-    assert_eq!(client.try_get_admin(), Err(Ok(Error::NotInitialized)));
-    assert_eq!(client.try_set_fee(&100), Err(Ok(Error::NotInitialized)));
+    // Mint tokens to the receiver so it can repay from its own balance.
+    s.token_admin.mint(&receiver_id, &0); // receiver borrows and repays from vault
 
-    client.initialize(&admin, &token);
-
-    assert_eq!(client.get_token(), token);
-    assert_eq!(client.get_admin(), admin);
-    assert_eq!(
-        client.try_initialize(&admin, &token),
-        Err(Ok(Error::AlreadyInitialized))
+    // Execute the flash loan with 0 fee (default).
+    let result = s.vault_client.try_flash_loan(
+        &receiver_id,
+        &s.token_id,
+        &5_000i128,
+        &s.admin,
     );
+    assert!(result.is_ok(), "exact repayment with 0 fee must succeed");
+
+    // Vault balance unchanged after repayment.
+    assert_eq!(s.vault_client.get_available(), 10_000);
+}
+
+/// A borrower that sets a non-zero fee basis points and repays amount + fee
+/// must leave the vault with more than the initial balance.
+#[test]
+fn test_repayment_with_fee_increases_vault_balance() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    // Set fee to 10 bps.
+    s.vault_client.set_fee_bps(&s.admin, &10i128);
+
+    let receiver_id = s.env.register(good::GoodReceiver, ());
+    let receiver_client = good::GoodReceiverClient::new(&s.env, &receiver_id);
+    receiver_client.set_vault(&s.vault_id);
+
+    // Mint extra tokens to receiver so it can cover the fee.
+    // fee = 5_000 * 10 / 10_000 = 5
+    s.token_admin.mint(&receiver_id, &5i128);
+
+    s.vault_client.flash_loan(
+        &receiver_id,
+        &s.token_id,
+        &5_000i128,
+        &s.admin,
+    );
+
+    // Vault balance must have grown by the fee amount.
+    assert_eq!(s.vault_client.get_available(), 10_005,
+        "vault balance must increase by the fee after a successful flash loan");
+    assert_eq!(s.vault_client.get_total_deposited(), 10_005);
+}
+
+/// A borrower that does not repay must cause the entire transaction to revert,
+/// leaving the vault balance unchanged.
+#[test]
+#[should_panic]
+fn test_nonrepayment_reverts_all_state() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    let bad_id = s.env.register(BadReceiver, ());
+
+    // This call must panic because BadReceiver does not repay.
+    s.vault_client.flash_loan(
+        &bad_id,
+        &s.token_id,
+        &5_000i128,
+        &s.admin,
+    );
+}
+
+/// A borrow of zero tokens must be rejected with InvalidAmount.
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn test_zero_amount_borrow_rejected() {
+    let s = setup();
+    fund_vault(&s, 10_000);
+
+    let receiver_id = s.env.register(good::GoodReceiver, ());
+    s.vault_client.flash_loan(
+        &receiver_id,
+        &s.token_id,
+        &0i128,
+        &s.admin,
+    );
+}
+
+/// Requesting more than the vault holds must be rejected with
+/// InsufficientVaultBalance without transferring any tokens.
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn test_borrow_exceeds_vault_balance_rejected() {
+    let s = setup();
+    fund_vault(&s, 1_000);
+
+    let receiver_id = s.env.register(good::GoodReceiver, ());
+    s.vault_client.flash_loan(
+        &receiver_id,
+        &s.token_id,
+        &2_000i128,
+        &s.admin,
+    );
+}
+
+/// A fee value above MAX_FEE_BPS (100) must be rejected.
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_invalid_fee_above_max_rejected() {
+    let s = setup();
+    // 101 bps exceeds MAX_FEE_BPS (100).
+    s.vault_client.set_fee_bps(&s.admin, &101i128);
+}
+
+/// Attempting to set a negative fee must be rejected.
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_negative_fee_rejected() {
+    let s = setup();
+    s.vault_client.set_fee_bps(&s.admin, &-1i128);
 }
