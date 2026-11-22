@@ -16,6 +16,7 @@ mod benchmarks;
 mod cache;
 mod comparison;
 mod config;
+mod csv_export;
 mod db;
 mod error_codes;
 mod errors;
@@ -58,6 +59,7 @@ mod metrics;
 mod parser;
 mod policy_expiry;
 pub mod reconciliation;
+mod report_export_handler;
 mod reputation;
 mod rounding;
 mod routing;
@@ -856,6 +858,8 @@ pub struct AppState {
     reconciler: Arc<reconciliation::FeeReconciler>,
     /// Typed DB store for reconciliation queries
     reconciliation_repo: db::reconciliation::ReconciliationRepo,
+    /// Append-only, tenant-scoped store used by CSV report exports (API-21).
+    pub(crate) report_export_repo: fee::reconciliation::FeeReconciliationRepository,
     database_health_timeout: std::time::Duration,
     database_health: db::DatabaseHealth,
     worker_job_database_health: db::DatabaseHealth,
@@ -2392,6 +2396,7 @@ impl utoipa::Modify for SecurityAddon {
         manager_store::check_manager_status_handler,
         reconciliation::reconcile_handler, reconciliation::get_reconcile_job_handler,
         reconciliation::list_reports_handler,
+        report_export_handler::export_reports_csv_handler,
         ws::ws_handler
     ),
     components(schemas(
@@ -2425,6 +2430,7 @@ impl utoipa::Modify for SecurityAddon {
         crate::audit_log::AuditEvent,
         reconciliation::ReconcileRequest, reconciliation::ReconcileResponse,
         reconciliation::ReconciliationReport, reconciliation::ListReportsQuery,
+        report_export_handler::CsvExportQuery,
         crate::jobs::Job, crate::jobs::JobStatus, crate::jobs::JobType,
         // API-35: distinct simulation vs. submission/invocation outcome
         // types, so a client can tell preview vs. confirmed state change
@@ -3226,6 +3232,10 @@ async fn main() {
         Arc::clone(&fee_store),
         reconciliation_repo.clone(),
     ));
+    // API-21: append-only fee-reconciliation audit reports, scoped by the
+    // authenticated manager's Stellar address at export time.
+    let report_export_repo =
+        fee::reconciliation::FeeReconciliationRepository::new(db_pool.inner().clone());
     // API-28: business-logic service owns fee / billing math; wired into
     // AppState so the HTTP handlers stay thin.
     let fee_service = fee::service::FeeService::new(
@@ -3534,6 +3544,7 @@ async fn main() {
         simulation_bus,
         reconciler,
         reconciliation_repo,
+        report_export_repo,
         database_health_timeout: database_pool_config.health_check_timeout,
         database_health,
         worker_job_database_health,
@@ -3633,6 +3644,11 @@ async fn main() {
             "/notifications/preferences",
             get(notification_preferences::get_notification_preferences_handler)
                 .put(notification_preferences::update_notification_preferences_handler),
+        )
+        // Tenant-scoped CSV export for manager reconciliation (API-21).
+        .route(
+            "/reports/fee-reconciliation.csv",
+            get(report_export_handler::export_reports_csv_handler),
         )
         // Runs inside auth so the authenticated manager is known.
         .route_layer(axum::middleware::from_fn(

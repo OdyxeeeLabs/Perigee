@@ -11,6 +11,7 @@ pub mod backpressure;
 pub mod billing_service;
 pub mod config;
 pub mod config_manager;
+pub mod csv_export;
 pub mod cache;
 pub mod comparison;
 pub mod error_codes;

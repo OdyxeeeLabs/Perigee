@@ -72,6 +72,7 @@
 ### 4. API Reference
 
 - **[ERROR_VARIANTS.md](ERROR_VARIANTS.md)** - Stable error codes and HTTP conversion guide
+- **[CSV_EXPORTS.md](CSV_EXPORTS.md)** - Tenant-scoped CSV export fields, escaping rules, sample file, and size limits
 - **[contracts/emergency_guard/README.md](contracts/emergency_guard/README.md)** - Complete API docs
   - All trait methods documented
   - PauseType explanation
