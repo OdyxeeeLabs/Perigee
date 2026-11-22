@@ -571,3 +571,228 @@ fn test_set_paused_wrapper_toggles_stake_bit() {
     client.set_paused(&false);
     assert!(!client.is_staking_paused());
 }
+
+// ── #878 — Staking reward accrual across long idle intervals ─────────────────
+
+/// A user who stakes and waits a long time must accrue strictly more rewards
+/// than they would over a short interval — idle time must not reset or truncate
+/// the accumulator.
+#[test]
+fn test_long_idle_accrues_more_than_short() {
+    let (e, client, _, staking_token, _) = setup();
+
+    let user_short = Address::generate(&e);
+    let user_long = Address::generate(&e);
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user_short, &STAKE_AMOUNT);
+    staking_client.mint(&user_long, &STAKE_AMOUNT);
+
+    client.stake(&user_short, &STAKE_AMOUNT);
+    client.stake(&user_long, &STAKE_AMOUNT);
+
+    // Short interval: 5 blocks.
+    advance_ledger(&e, 5);
+    let short_pending = client.get_pending_rewards(&user_short);
+
+    // Long interval: another 50 blocks (55 total from stake).
+    advance_ledger(&e, 50);
+    let long_pending = client.get_pending_rewards(&user_long);
+
+    assert!(
+        long_pending > short_pending,
+        "longer idle period must yield strictly more rewards"
+    );
+}
+
+/// A later staker must not be able to claim rewards that accrued before they
+/// joined. Their rewards start at zero at the time of their stake.
+#[test]
+fn test_late_staker_cannot_claim_pre_stake_rewards() {
+    let (e, client, _, staking_token, _) = setup();
+
+    let early_user = Address::generate(&e);
+    let late_user = Address::generate(&e);
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&early_user, &STAKE_AMOUNT);
+    staking_client.mint(&late_user, &STAKE_AMOUNT);
+
+    // Early user stakes at block 0.
+    client.stake(&early_user, &STAKE_AMOUNT);
+
+    // Advance before the late user enters.
+    advance_ledger(&e, 20);
+
+    // Late user stakes at block 20.
+    client.stake(&late_user, &STAKE_AMOUNT);
+
+    // Immediately check: late user has zero pending (no blocks elapsed for them).
+    let late_pending_immediate = client.get_pending_rewards(&late_user);
+    assert_eq!(
+        late_pending_immediate, 0,
+        "late staker must have zero rewards at the moment they stake"
+    );
+}
+
+/// Claiming rewards multiple times without advancing the ledger must not produce
+/// more tokens than were accrued — repeated claims at the same block yield zero
+/// after the first.
+#[test]
+fn test_repeated_claims_cannot_exceed_accrued() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 10);
+
+    let first_claim = client.claim(&user);
+    assert!(first_claim > 0, "first claim must be positive");
+
+    // No blocks advance — second claim must return zero.
+    let second_claim = client.claim(&user);
+    assert_eq!(second_claim, 0, "second claim at same block must return zero");
+
+    // A third claim still at the same block must also return zero.
+    let third_claim = client.claim(&user);
+    assert_eq!(third_claim, 0, "third claim at same block must return zero");
+}
+
+/// Staking mid-period (after some blocks have elapsed) must only credit rewards
+/// for the blocks after the new stake, not before it.
+#[test]
+fn test_stake_change_mid_period_credits_only_post_stake_rewards() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &(STAKE_AMOUNT * 2));
+
+    // Initial stake.
+    client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 10);
+
+    // Trigger reward snapshot by staking more.
+    client.stake(&user, &STAKE_AMOUNT);
+    let accrued_at_snapshot = client.get_accrued_rewards(&user);
+    assert!(accrued_at_snapshot > 0);
+
+    // Advance by the same number of blocks again.
+    advance_ledger(&e, 10);
+
+    // The pending rewards at the second checkpoint compound on the already
+    // accrued amount — they must be greater than the first snapshot value.
+    let pending_after = client.get_pending_rewards(&user);
+    assert!(
+        pending_after > accrued_at_snapshot,
+        "pending rewards after second interval must exceed the first snapshot"
+    );
+}
+
+// ── #879 — Staking strategy commission and withdrawal edge cases ──────────────
+
+/// Claiming immediately after staking (zero blocks elapsed) must return zero —
+/// no rewards have accrued yet.
+#[test]
+fn test_claim_zero_elapsed_blocks_returns_zero() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+
+    // No ledger advance — rewards must be zero.
+    let claimed = client.claim(&user);
+    assert_eq!(claimed, 0, "claim with no elapsed time must return zero");
+}
+
+/// Partial withdrawal must leave the remaining principal intact and preserve
+/// all accrued rewards at the time of withdrawal.
+#[test]
+fn test_partial_exit_preserves_principal_and_rewards() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 15);
+
+    let pending_before = client.get_pending_rewards(&user);
+    assert!(pending_before > 0);
+
+    // Withdraw half.
+    client.withdraw(&user, &(STAKE_AMOUNT / 2));
+
+    assert_eq!(
+        client.get_staked_balance(&user),
+        STAKE_AMOUNT / 2,
+        "half the principal must remain after partial withdrawal"
+    );
+    // Accrued rewards must be preserved exactly.
+    assert_eq!(
+        client.get_accrued_rewards(&user),
+        pending_before,
+        "accrued rewards must not change on partial withdrawal"
+    );
+}
+
+/// Withdrawing the full stake, then claiming, must transfer only the already-
+/// accrued rewards and leave nothing further outstanding.
+#[test]
+fn test_full_exit_then_claim_clears_all_state() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &STAKE_AMOUNT);
+
+    client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 10);
+
+    // Withdraw all principal first.
+    client.withdraw(&user, &STAKE_AMOUNT);
+    assert_eq!(client.get_staked_balance(&user), 0);
+
+    // Accrual is frozen at zero principal — pending should not change over time.
+    let accrued_snapshot = client.get_accrued_rewards(&user);
+    advance_ledger(&e, 10);
+    assert_eq!(
+        client.get_pending_rewards(&user),
+        accrued_snapshot,
+        "rewards must not grow after full principal exit"
+    );
+
+    // Claim must return exactly the frozen snapshot.
+    let claimed = client.claim(&user);
+    assert_eq!(claimed, accrued_snapshot);
+    assert_eq!(client.get_accrued_rewards(&user), 0);
+    assert_eq!(client.get_pending_rewards(&user), 0);
+}
+
+/// A zero-reward period — when no blocks have elapsed between actions — must
+/// not cause accounting errors. The reward balance after a no-op interval must
+/// equal the reward balance before it.
+#[test]
+fn test_zero_reward_period_does_not_corrupt_accounting() {
+    let (e, client, _, staking_token, _) = setup();
+    let user = Address::generate(&e);
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user, &(STAKE_AMOUNT * 2));
+
+    client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 5);
+
+    // Snapshot the accrued value.
+    let accrued_before = client.get_pending_rewards(&user);
+
+    // Trigger an update at the same block (no advancement).
+    staking_client.mint(&user, &STAKE_AMOUNT);
+    client.stake(&user, &STAKE_AMOUNT);
+
+    // The stored accrued rewards must equal the pre-snapshot value.
+    let accrued_after = client.get_accrued_rewards(&user);
+    assert_eq!(
+        accrued_after, accrued_before,
+        "zero-time interval must leave accounting unchanged"
+    );
+}

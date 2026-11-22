@@ -411,3 +411,89 @@ fn test_abs_diff() {
     assert_eq!(OracleAggregator::abs_diff(90, 100), 10);
     assert_eq!(OracleAggregator::abs_diff(100, 100), 0);
 }
+
+// ── #877 — Overflow and zero-denominator coverage for oracle aggregation ─────
+
+/// Submitting i128::MAX as a price must succeed — the contract stores it
+/// without overflow.
+#[test]
+fn test_submit_max_price_stored_without_overflow() {
+    let env = Env::default();
+    let (client, ok_100, _, _, _, _) = setup_aggregator(&env, 0);
+
+    client.submit_price(&ok_100, &i128::MAX);
+
+    let entry = client.get_price_entry(&ok_100).unwrap();
+    assert_eq!(entry.price, i128::MAX);
+}
+
+/// Submitting i128::MIN (negative) must be rejected with InvalidPrice.
+#[test]
+fn test_submit_min_i128_rejected() {
+    let env = Env::default();
+    let aggregator_id = env.register(OracleAggregator, ());
+    let (ok_100, _, _, _, _) = register_sources(&env);
+    let result = env.as_contract(&aggregator_id, || {
+        OracleAggregator::submit_price(env.clone(), ok_100, i128::MIN)
+    });
+    assert_eq!(result, Err(Error::InvalidPrice));
+}
+
+/// An empty source list (len < 3) must return NotEnoughSources without
+/// panicking — the contract must not reach any arithmetic before the guard.
+#[test]
+fn test_empty_source_list_rejected_before_arithmetic() {
+    let env = Env::default();
+    let aggregator_id = env.register(OracleAggregator, ());
+    let sources: Vec<Address> = Vec::new(&env);
+    let result = env.as_contract(&aggregator_id, || {
+        OracleAggregator::aggregate_price(env.clone(), sources)
+    });
+    assert_eq!(result, Err(Error::NotEnoughSources));
+}
+
+/// A list of exactly two sources must return NotEnoughSources.
+#[test]
+fn test_two_sources_rejected() {
+    let env = Env::default();
+    let (ok_100, ok_101, _, _, _) = register_sources(&env);
+    let aggregator_id = env.register(OracleAggregator, ());
+    let sources = Vec::from_array(&env, [ok_100, ok_101]);
+    let result = env.as_contract(&aggregator_id, || {
+        OracleAggregator::aggregate_price(env.clone(), sources)
+    });
+    assert_eq!(result, Err(Error::NotEnoughSources));
+}
+
+/// Three unresponsive sources (all return 0) must return NotEnoughValidPrices,
+/// not a panic or zero result.
+#[test]
+fn test_all_zero_sources_return_not_enough_valid_prices() {
+    let env = Env::default();
+    let (_, _, _, _, unresponsive) = register_sources(&env);
+    let aggregator_id = env.register(OracleAggregator, ());
+    // All three slots are the same zero-returning source.
+    let sources = Vec::from_array(&env, [unresponsive.clone(), unresponsive.clone(), unresponsive]);
+    let result = env.as_contract(&aggregator_id, || {
+        OracleAggregator::aggregate_price(env.clone(), sources)
+    });
+    assert_eq!(result, Err(Error::NotEnoughValidPrices));
+}
+
+/// abs_diff must not overflow for the extreme case (i128::MAX, 0).
+#[test]
+fn test_abs_diff_max_does_not_overflow() {
+    let result = OracleAggregator::abs_diff(i128::MAX, 0);
+    assert_eq!(result, i128::MAX);
+}
+
+/// abs_diff is symmetric for large values.
+#[test]
+fn test_abs_diff_symmetry_large_values() {
+    let a = 1_000_000_000_000i128;
+    let b = 1i128;
+    assert_eq!(
+        OracleAggregator::abs_diff(a, b),
+        OracleAggregator::abs_diff(b, a)
+    );
+}

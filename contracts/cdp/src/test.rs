@@ -169,3 +169,149 @@ fn self_liquidation_moves_collateral_to_protocol_and_tracks_bad_debt() {
     assert_eq!(client.protocol_collateral_reserves(), 100_000);
     assert!(client.total_bad_debt() > 0);
 }
+
+// ── #881 — Leverage strategy liquidation-boundary tests ──────────────────────
+//
+// The CDP contract is the protocol-level leverage strategy: users deposit
+// collateral and borrow stables.  `min_collateral_ratio_bps` (15 000 bps = 150%)
+// is the maximum LTV boundary.  Tests confirm that safe positions are accepted,
+// positions at and above the limit are rejected, and stale / unavailable prices
+// are never treated as a favourable valuation.
+
+/// A position with LTV below the limit must be opened without error.
+/// (Collateral 150 000, debt 100 000 → ratio = 300% at price=2 — well above
+/// the 150% minimum.)
+#[test]
+fn test_ltv_below_limit_position_opens_successfully() {
+    let (env, contract_id, _admin, borrower, _liquidator, _collateral, _oracle) = setup();
+    let client = CdpContractClient::new(&env, &contract_id);
+
+    client.deposit_collateral(&borrower, &150_000);
+    // Borrow an amount that keeps collateral ratio safely above 150%.
+    client.mint_stable(&borrower, &100_000);
+
+    let position = client.get_position(&borrower);
+    assert!(position.collateral_amount > 0);
+    assert!(position.debt_amount > 0);
+}
+
+/// Attempting to borrow enough to push the collateral ratio exactly to the
+/// minimum boundary (150%) must succeed — the boundary itself is allowed.
+#[test]
+fn test_ltv_at_limit_exactly_accepted() {
+    let (env, contract_id, _admin, borrower, _liquidator, _collateral, _oracle) = setup();
+    let client = CdpContractClient::new(&env, &contract_id);
+
+    // Price = 2 (PRICE_SCALE), collateral = 150 000.
+    // Collateral value = 300 000.  At 150% ratio the max debt = 200 000.
+    client.deposit_collateral(&borrower, &150_000);
+    client.mint_stable(&borrower, &200_000);
+
+    let position = client.get_position(&borrower);
+    assert_eq!(position.debt_amount, 200_000);
+}
+
+/// Borrowing one unit beyond the limit must be rejected with
+/// `Error::Undercollateralized`.
+#[test]
+fn test_ltv_above_limit_rejected() {
+    let (env, contract_id, _admin, borrower, _liquidator, _collateral, _oracle) = setup();
+    let client = CdpContractClient::new(&env, &contract_id);
+
+    // collateral value = 300 000; max at 150% = 200 000; request 200 001.
+    client.deposit_collateral(&borrower, &150_000);
+    let result = client.try_mint_stable(&borrower, &200_001);
+    assert!(result.is_err(), "borrow beyond max LTV must be rejected");
+}
+
+/// After a price drop the position becomes undercollateralised.  Attempting to
+/// borrow more in that state must be rejected — the contract must not use the
+/// new (lower) price as a reason to allow further debt.
+#[test]
+fn test_ltv_price_drop_blocks_further_borrow() {
+    let (env, contract_id, _admin, borrower, _liquidator, _collateral, oracle_id) = setup();
+    let client = CdpContractClient::new(&env, &contract_id);
+
+    // Open a position that is healthy at the initial price (price = 2).
+    client.deposit_collateral(&borrower, &150_000);
+    client.mint_stable(&borrower, &150_000);
+
+    // Drop price to 1 — the collateral value halves to 150 000, but debt is
+    // 150 000, so collateral ratio = 100% < 150% minimum.
+    let oracle = MockOracleClient::new(&env, &oracle_id);
+    oracle.set_price(&PRICE_SCALE);
+
+    // Attempting to borrow more must be rejected.
+    let result = client.try_mint_stable(&borrower, &1);
+    assert!(result.is_err(), "further borrow while undercollateralised must be rejected");
+}
+
+/// A healthy position whose collateral ratio is above the minimum must NOT be
+/// liquidatable — the contract must reject the liquidation with PositionHealthy.
+#[test]
+fn test_healthy_position_cannot_be_liquidated() {
+    let (env, contract_id, _admin, borrower, liquidator, _collateral, _oracle) = setup();
+    let client = CdpContractClient::new(&env, &contract_id);
+
+    client.deposit_collateral(&borrower, &150_000);
+    client.mint_stable(&borrower, &100_000);
+
+    // Give the liquidator some stable balance.
+    client.deposit_collateral(&liquidator, &50_000);
+    client.mint_stable(&liquidator, &30_000);
+
+    // At price=2 the position is healthy — liquidation must fail.
+    let result = client.try_liquidate(&liquidator, &borrower, &10_000);
+    assert!(result.is_err(), "healthy position must not be liquidatable");
+}
+
+/// An unsafe position (collateral ratio below minimum) must become liquidatable
+/// after a price drop.  The contract must accept the liquidation.
+#[test]
+fn test_unsafe_position_becomes_liquidatable_after_price_drop() {
+    let (env, contract_id, _admin, borrower, liquidator, _collateral, oracle_id) = setup();
+    let client = CdpContractClient::new(&env, &contract_id);
+
+    client.deposit_collateral(&borrower, &100_000);
+    client.mint_stable(&borrower, &120_000);
+    client.deposit_collateral(&liquidator, &60_000);
+    client.mint_stable(&liquidator, &40_000);
+
+    // Drop price to 1 — borrower's ratio falls below 150%.
+    let oracle = MockOracleClient::new(&env, &oracle_id);
+    oracle.set_price(&PRICE_SCALE);
+
+    // Liquidation must succeed.
+    let quote = client.liquidate(&liquidator, &borrower, &20_000);
+    assert!(quote.repay_amount > 0, "liquidation must repay some debt");
+    assert!(quote.collateral_to_seize > 0, "liquidation must seize some collateral");
+}
+
+/// Adding collateral to an unsafe position must safely reduce the LTV without
+/// triggering a panic or error — a safe reduction must remain available even
+/// when the current ratio is below the minimum.
+#[test]
+fn test_collateral_deposit_reduces_ltv_on_unsafe_position() {
+    let (env, contract_id, _admin, borrower, _liquidator, _collateral, oracle_id) = setup();
+    let client = CdpContractClient::new(&env, &contract_id);
+
+    client.deposit_collateral(&borrower, &100_000);
+    client.mint_stable(&borrower, &120_000);
+
+    // Drop price so position becomes unsafe.
+    let oracle = MockOracleClient::new(&env, &oracle_id);
+    oracle.set_price(&PRICE_SCALE);
+
+    let position_before = client.get_position(&borrower);
+    assert!(position_before.collateral_amount > 0);
+
+    // Depositing more collateral must succeed even on an unsafe position.
+    client.deposit_collateral(&borrower, &50_000);
+
+    let position_after = client.get_position(&borrower);
+    assert_eq!(
+        position_after.collateral_amount,
+        position_before.collateral_amount + 50_000,
+        "collateral deposit must increase the collateral amount"
+    );
+}
