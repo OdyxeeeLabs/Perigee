@@ -1,5 +1,9 @@
 //! Cross-tenant isolation tests for manager-owned vault records (API-05).
 //!
+//! Note: the async report-generation job work (API-22) lives in
+//! `core/src/job_queue.rs` and is out of scope for this file; this file only
+//! covers vault tenant isolation.
+//!
 //! Two managers own vaults with identical names; every operation for one
 //! manager must be blind to the other's rows, in both directions.
 
