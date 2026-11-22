@@ -195,6 +195,52 @@ pub enum JobPayload {
     },
 }
 
+/// Lifecycle state of a generated report artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ArtifactStatus {
+    /// Artifact is being generated; not yet downloadable.
+    Pending,
+    /// Artifact is ready for download.
+    Ready,
+    /// Retention window elapsed; artifact is no longer downloadable.
+    Expired,
+}
+
+/// Tenant-scoped status view returned to callers polling a report job.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ReportJobStatus {
+    pub job_id: JobId,
+    pub tenant_id: String,
+    pub status: JobStatus,
+    pub progress: Option<JobProgress>,
+    pub artifact_status: ArtifactStatus,
+    pub download_ready: bool,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
+}
+
+/// Returns the artifact status for a job given its retention window.
+/// Only completed jobs produce artifacts; expiry is measured from completion.
+pub fn artifact_status_at(
+    status: JobStatus,
+    completed_at: Option<DateTime<Utc>>,
+    retention_secs: u64,
+    now: DateTime<Utc>,
+) -> ArtifactStatus {
+    match (status, completed_at) {
+        (JobStatus::Completed, Some(done)) => {
+            let window = chrono::Duration::seconds(retention_secs as i64);
+            if now >= done + window {
+                ArtifactStatus::Expired
+            } else {
+                ArtifactStatus::Ready
+            }
+        }
+        _ => ArtifactStatus::Pending,
+    }
+}
+
 /// Progress information for a job
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct JobProgress {
@@ -339,6 +385,8 @@ impl From<JobError> for AppError {
 pub struct JobQueueConfig {
     pub job_timeout_secs: u64,
     pub cleanup_interval_secs: u64,
+    /// Retention window for completed job records and generated artifacts.
+    /// Artifacts are expired once `completed_at + retention_secs` has passed.
     pub retention_secs: u64,
     pub webhook_timeout_secs: u64,
     pub webhook_max_retries: u32,
