@@ -38,6 +38,36 @@ For clients, `RetrievalService` provides an asynchronous API:
 attaches an expiring download URL (24 hours); `GET /archive/retrievals/{id}` reports the state.
 Tenants can only see their own requests.
 
+## Restoring an archived record
+
+Support staff sometimes need to bring one archived record back into the active store, for
+example during a customer or reconciliation workflow. `RestoreService::restore` performs a
+controlled, auditable restore:
+
+* **Permission.** Only an administrator (`RestoreActor::admin`) may restore. Every other
+  principal is rejected with `ArchivalError::NotAuthorized` before any state changes.
+* **Reason.** The request must carry a non-empty reason (`ArchivalError::MissingReason`).
+* **Existence.** The archive key must be present in the `ArchiveManifest`
+  (`ArchivalError::UnknownArchive`).
+* **No overwrites of newer state.** If the active store already holds the record at the
+  archived version it is a duplicate (`ArchivalError::AlreadyRestored`). If the active version
+  is newer, the restore is refused (`ArchivalError::ActiveRecordNewer`) so a rollback can never
+  discard a later write. Only strictly older active state is replaced.
+* **Audit.** A successful restore appends a `RestoreAuditRecord` with the archive key, table,
+  tenant, vault, period, actor, reason, restored version, and timestamp. Denied and rejected
+  requests never appear as successful audit entries.
+
+The restored record is written with `version = archived version + 1`, so the next optimistic
+update detects the change.
+
+## Retention and restore semantics
+
+Hot and warm data stay queryable until the monthly job archives them. Once a partition is
+archived and detached it remains in cold storage for the archive retention period; the
+manifest and `/archive/retrievals` API are the source of truth for what can be restored.
+Restoring does not delete or mutate the cold object, so a record can be restored again only
+after its active copy is removed (or after a later archive supersedes it).
+
 ## GDPR
 
 * Hot and warm data is erased with the soft-delete purge (`SOFT_DELETES.md`).
