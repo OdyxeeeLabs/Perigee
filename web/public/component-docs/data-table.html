@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DataTable · Perigee Web Component Library</title>
+<meta name="description" content="Sortable, filterable, paginated tables of vault and invocation data." />
+<meta name="generator" content="scripts/docs/generate.mjs" />
+<link rel="stylesheet" href="assets/docs.css" />
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+<p class="site-title"><a href="index.html">Perigee Web Component Library</a></p>
+<p class="meta">Component library docs · generated from source</p>
+<div class="grow"></div>
+<div class="control">
+<label for="version-select">Version</label>
+<select id="version-select" data-navigate><option value="index.html" selected>v0.1.0 (current)</option></select>
+</div>
+<div class="control">
+<label for="docs-search">Search docs</label>
+<input id="docs-search" type="search" autocomplete="off" placeholder="Button, accessibility…" aria-describedby="search-status" />
+</div>
+</header>
+<div class="layout">
+<nav class="site-nav" aria-label="Component library">
+<h2>Overview</h2>
+<ul>
+<li><a href="index.html">All components</a></li>
+<li><a href="migrations.html">Migration guide</a></li>
+<li><a href="versions.html">Versions</a></li>
+</ul>
+<h2>Actions</h2><ul><li><a href="button.html">Button</a></li></ul><h2>Data display</h2><ul><li><a href="badge.html">Badge</a></li><li><a href="data-table.html" aria-current="page">DataTable</a></li></ul><h2>Feedback</h2><ul><li><a href="spinner.html">Spinner</a></li></ul><h2>Layout</h2><ul><li><a href="card.html">Card</a></li></ul><h2>Accessibility</h2><ul><li><a href="live-region.html">Live regions</a></li></ul><h2>Legacy</h2><ul><li><a href="common-button.html">CommonButton</a></li></ul>
+</nav>
+<main id="content" tabindex="-1">
+<div id="search-results" hidden data-base="">
+<strong>Search results</strong>
+<p id="search-status" role="status" aria-live="polite"></p>
+<ul id="search-results-list"></ul>
+</div>
+<nav class="toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#import">Import</a></li><li><a href="#props">Props</a></li><li><a href="#usage">Usage</a></li><li><a href="#accessibility">Accessibility</a></li><li><a href="#types">Types</a></li><li><a href="#column-def">ColumnDef</a></li><li><a href="#related">Related</a></li></ul></nav>
+<h1 id="data-table">DataTable</h1>
+<p><em>Data display · Sortable, filterable, paginated tables of vault and invocation data.</em></p>
+<p><strong>Page status:</strong> stable · Tracks WEB-33, WEB-34</p>
+<p><strong>Status:</strong> stable · <strong>Since:</strong> 0.1.0 · <strong>Source:</strong> <code>components/ui/DataTable.tsx:240</code></p>
+<p>DataTable — reusable table component with sorting, client-side filtering, and pagination. (WEB-33)</p>
+<h2 id="import">Import</h2>
+<pre tabindex="0"><code class="language-tsx">import { DataTable } from &#39;@/components/ui/DataTable&#39;;</code></pre>
+<h2 id="props">Props</h2>
+<div class="table-wrap"><table><thead><tr><th scope="col">Prop</th><th scope="col">Type</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">Description</th></tr></thead><tbody><tr><td><code>columns</code></td><td><code>ColumnDef&lt;T&gt;[]</code></td><td>—</td><td>Yes</td><td>Column definitions.</td></tr><tr><td><code>data</code></td><td><code>T[]</code></td><td>—</td><td>Yes</td><td>Row data.</td></tr><tr><td><code>rowKey</code></td><td><code>(row: T, index: number) =&gt; string | number</code></td><td>—</td><td>No</td><td>Optional row key extractor. Defaults to the row index. Providing a stable key (e.g. a unique <code>id</code> field) avoids reconciliation issues when sorting / filtering.</td></tr><tr><td><code>pageSize</code></td><td><code>number</code></td><td><code>0</code></td><td>No</td><td>Number of rows per page. Pass 0 or undefined to disable pagination.</td></tr><tr><td><code>filterKeys</code></td><td><code>(keyof T | string)[]</code></td><td>—</td><td>No</td><td>Keys of columns searched by the filter input. When omitted, all string/number cell values are included in the search.</td></tr><tr><td><code>filterPlaceholder</code></td><td><code>string</code></td><td><code>&#39;Filter…&#39;</code></td><td>No</td><td>Placeholder text for the filter input.</td></tr><tr><td><code>emptyMessage</code></td><td><code>React.ReactNode</code></td><td><code>&#39;No results found.&#39;</code></td><td>No</td><td>Message shown when the filtered result set is empty.</td></tr><tr><td><code>title</code></td><td><code>React.ReactNode</code></td><td>—</td><td>No</td><td>Optional title rendered in the table header bar.</td></tr><tr><td><code>subtitle</code></td><td><code>React.ReactNode</code></td><td>—</td><td>No</td><td>Optional subtitle rendered below the title.</td></tr><tr><td><code>className</code></td><td><code>string</code></td><td>—</td><td>No</td><td>Additional className for the outermost container.</td></tr><tr><td><code>&#39;data-testid&#39;</code></td><td><code>string</code></td><td>—</td><td>No</td><td>data-testid applied to the root element (WEB-34 compatibility).</td></tr></tbody></table></div>
+<h2 id="usage">Usage</h2>
+<pre tabindex="0"><code class="language-tsx">const columns: ColumnDef&lt;MyRow&gt;[] = [
+  { key: &#39;name&#39;, header: &#39;Name&#39;, sortable: true },
+  { key: &#39;value&#39;, header: &#39;Value&#39;, sortable: true, align: &#39;right&#39; },
+];
+&lt;DataTable columns={columns} data={rows} pageSize={10} /&gt;</code></pre>
+<h2 id="accessibility">Accessibility</h2>
+<ul><li>The filter input is labelled by a visually hidden <code>&lt;label&gt;</code> <strong>and</strong> an <code>aria-label</code>, so it is reachable both by visible text and by name.</li><li>Sortable headers are real <code>&lt;button&gt;</code> elements inside <code>&lt;th scope=&quot;col&quot;&gt;</code>, and the sorted column exposes <code>aria-sort</code> (<code>ascending</code> / <code>descending</code>).</li><li>Pagination controls carry explicit <code>aria-label</code>s (&quot;First page&quot;, &quot;Next page&quot;, …) and use <code>disabled</code>, so the current position is announced.</li><li>The empty state renders inside a single full-width cell, which keeps the table structure valid when there are no rows.</li></ul>
+<h2 id="types">Types</h2>
+<h3 id="column-def"><code>ColumnDef</code></h3>
+<p>Column definition — T is the row type.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Prop</th><th scope="col">Type</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">Description</th></tr></thead><tbody><tr><td><code>key</code></td><td><code>keyof T | string</code></td><td>—</td><td>Yes</td><td>Unique key matching a field in T (or a synthetic label for accessor cols).</td></tr><tr><td><code>header</code></td><td><code>React.ReactNode</code></td><td>—</td><td>Yes</td><td>Header label shown in &lt;th&gt;.</td></tr><tr><td><code>sortable</code></td><td><code>boolean</code></td><td>—</td><td>No</td><td>Whether this column is sortable. Defaults to false.</td></tr><tr><td><code>cell</code></td><td><code>(row: T) =&gt; React.ReactNode</code></td><td>—</td><td>No</td><td>Optional cell renderer. Receives the row and returns a React node. Falls back to <code>String(row[key])</code> when omitted.</td></tr><tr><td><code>align</code></td><td><code>&#39;left&#39; | &#39;center&#39; | &#39;right&#39;</code></td><td>—</td><td>No</td><td>Text alignment for both &lt;th&gt; and &lt;td&gt;. Defaults to &#39;left&#39;.</td></tr><tr><td><code>className</code></td><td><code>string</code></td><td>—</td><td>No</td><td>Additional className applied to every &lt;td&gt; in this column.</td></tr></tbody></table></div>
+<h2 id="related">Related</h2>
+<ul><li><a href="badge.html">Badge</a></li><li><a href="card.html">Card</a></li></ul>
+<hr />
+<p><a href="index.html">← All components</a> · <a href="migrations.html">Migration guide</a> · Documented at v0.1.0</p>
+<p class="page-footer">Generated from v0.1.0 by <code>npm run docs:build</code>. Edit the component source or <code>scripts/docs/registry.mjs</code>, never this file.</p>
+</main>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

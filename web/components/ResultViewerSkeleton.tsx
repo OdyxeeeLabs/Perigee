@@ -115,7 +115,7 @@ export function ResultViewerSkeleton() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr] gap-6">
-          <div className="grid grid-cols-6 gap-2 bg-[#0d1117] p-3 rounded-lg border border-[#30363d] w-fit">
+          <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 bg-[#0d1117] p-3 rounded-lg border border-[#30363d] w-full sm:w-fit justify-items-center">
             {heatmapCells.map((cell) => (
               <div
                 key={cell.id}
@@ -133,7 +133,7 @@ export function ResultViewerSkeleton() {
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
           <div className="h-14 rounded-lg bg-[#0d1117] border border-[#30363d]" />
           <div className="h-14 rounded-lg bg-[#0d1117] border border-[#30363d]" />
           <div className="h-14 rounded-lg bg-[#0d1117] border border-[#30363d]" />

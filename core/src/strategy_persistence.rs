@@ -63,29 +63,30 @@ impl StrategyStateManager {
             })
     }
 
-    pub fn persist_to_bytes(&self) -> Vec<u8> {
-        let state = self.serialized_state()
-            .expect("serialization of StrategyState map should not fail");
+    /// Serialize the current strategy state to bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if serialization fails (e.g. a field value
+    /// contains data that `serde_json` cannot represent).
+    pub fn persist_to_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        let state = self.serialized_state()?;
         serde_json::to_vec(&state)
-            .expect("serialization of StrategyState map should not fail")
     }
 
     pub fn restore_from_bytes(data: &[u8]) -> Result<Self, String> {
-        let persisted: PersistedState =
-            serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        let persisted: PersistedState = serde_json::from_slice(data).map_err(|e| e.to_string())?;
         Self::from_persisted(persisted)
     }
 
-    pub fn persist_to_path<P: AsRef<Path>>(
-        &self,
-        path: P,
-        max_backups: usize,
-    ) -> io::Result<()> {
+    pub fn persist_to_path<P: AsRef<Path>>(&self, path: P, max_backups: usize) -> io::Result<()> {
         let path = path.as_ref();
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
 
-        let data = self.persist_to_bytes();
+        let data = self
+            .persist_to_bytes()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
         temporary.write_all(&data)?;
         temporary.as_file().sync_all()?;
@@ -101,29 +102,22 @@ impl StrategyStateManager {
         sync_directory(parent)
     }
 
-    pub fn restore_from_path<P: AsRef<Path>>(
-        path: P,
-        max_backups: usize,
-    ) -> Result<Self, String> {
+    pub fn restore_from_path<P: AsRef<Path>>(path: P, max_backups: usize) -> Result<Self, String> {
         let path = path.as_ref();
         let mut last_error = None;
-        for candidate in
-            std::iter::once(path.to_path_buf()).chain(backup_paths(path, max_backups))
+        for candidate in std::iter::once(path.to_path_buf()).chain(backup_paths(path, max_backups))
         {
             match fs::read(&candidate) {
                 Ok(data) => match Self::restore_from_bytes(&data) {
                     Ok(state) => return Ok(state),
-                    Err(error) => {
-                        last_error = Some(format!("{}: {}", candidate.display(), error))
-                    }
+                    Err(error) => last_error = Some(format!("{}: {}", candidate.display(), error)),
                 },
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => last_error = Some(format!("{}: {}", candidate.display(), error)),
             }
         }
-        Err(last_error.unwrap_or_else(|| {
-            format!("strategy state file not found: {}", path.display())
-        }))
+        Err(last_error
+            .unwrap_or_else(|| format!("strategy state file not found: {}", path.display())))
     }
 
     fn serialized_state(&self) -> Result<PersistedState, serde_json::Error> {
@@ -176,11 +170,7 @@ fn rotate_backups(path: &Path, max_backups: usize) -> io::Result<()> {
     }
     for index in (1..=max_backups).rev() {
         let source = PathBuf::from(format!("{}.bak.{}", path.display(), index));
-        let destination = PathBuf::from(format!(
-            "{}.bak.{}",
-            path.display(),
-            index + 1
-        ));
+        let destination = PathBuf::from(format!("{}.bak.{}", path.display(), index + 1));
         if source.exists() {
             if index == max_backups {
                 fs::remove_file(&source)?;
@@ -208,7 +198,9 @@ fn replace_atomically(source: &Path, target: &Path) -> io::Result<()> {
 #[cfg(windows)]
 fn replace_atomically(source: &Path, target: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
 
     let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
     let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
@@ -264,7 +256,7 @@ mod tests {
             last_trigger: Some("crossed".into()),
             evaluation_count: 10,
         });
-        let bytes = mgr.persist_to_bytes();
+        let bytes = mgr.persist_to_bytes().unwrap();
         let restored = StrategyStateManager::restore_from_bytes(&bytes).unwrap();
         let s = restored.load_state("v1").unwrap();
         assert_eq!(s.evaluation_count, 10);
@@ -281,7 +273,7 @@ mod tests {
             last_trigger: None,
             evaluation_count: 1,
         });
-        let mut bytes = mgr.persist_to_bytes();
+        let mut bytes = mgr.persist_to_bytes().unwrap();
         let checksum_byte = bytes.len() - 3;
         bytes[checksum_byte] = b'0';
 
@@ -318,10 +310,10 @@ mod tests {
             StrategyStateManager::restore_from_bytes(
                 &fs::read(path.with_file_name("strategy-state.json.bak.1")).unwrap()
             )
-                .unwrap()
-                .load_state("v1")
-                .unwrap()
-                .current_phase,
+            .unwrap()
+            .load_state("v1")
+            .unwrap()
+            .current_phase,
             "bull"
         );
     }

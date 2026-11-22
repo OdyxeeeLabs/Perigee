@@ -1,0 +1,531 @@
+{
+  "library": "Perigee Web Component Library",
+  "version": "0.1.0",
+  "groups": [
+    {
+      "id": "actions",
+      "title": "Actions"
+    },
+    {
+      "id": "forms",
+      "title": "Forms & input"
+    },
+    {
+      "id": "data-display",
+      "title": "Data display"
+    },
+    {
+      "id": "feedback",
+      "title": "Feedback"
+    },
+    {
+      "id": "layout",
+      "title": "Layout"
+    },
+    {
+      "id": "accessibility",
+      "title": "Accessibility"
+    },
+    {
+      "id": "legacy",
+      "title": "Legacy"
+    }
+  ],
+  "components": [
+    {
+      "slug": "button",
+      "title": "Button",
+      "group": "actions",
+      "status": "stable",
+      "issue": "WEB-27 (#113)",
+      "source": "components/ui/Button.tsx",
+      "exports": [
+        {
+          "name": "Button",
+          "kind": "forwardRef",
+          "element": "button",
+          "propsType": "ButtonProps",
+          "since": "0.1.0",
+          "deprecated": null,
+          "accessibilityNotes": 1,
+          "examples": 2,
+          "inheritedFrom": [
+            "React.ButtonHTMLAttributes<HTMLButtonElement>"
+          ],
+          "props": [
+            {
+              "name": "variant",
+              "type": "\"default\" | \"destructive\" | \"outline\" | \"secondary\" | \"ghost\" | \"link\"",
+              "default": "\"default\"",
+              "required": false,
+              "description": "Visual treatment. `\"default\"` is the cyan brand action; `\"destructive\"` is reserved for irreversible actions; `\"link\"` renders text-only styling."
+            },
+            {
+              "name": "size",
+              "type": "\"default\" | \"sm\" | \"lg\" | \"icon\"",
+              "default": "\"default\"",
+              "required": false,
+              "description": "Control height and padding. `\"icon\"` is a square control for a single glyph."
+            },
+            {
+              "name": "asChild",
+              "type": "boolean",
+              "default": "false",
+              "required": false,
+              "description": "Accepted for Radix-style API parity but **not implemented** yet: the component always renders a `<button>`. Kept optional so callers migrating from shadcn-based snippets do not fail type checking."
+            }
+          ],
+          "types": []
+        }
+      ]
+    },
+    {
+      "slug": "badge",
+      "title": "Badge",
+      "group": "data-display",
+      "status": "stable",
+      "issue": "WEB-27 (#113), WEB-38 (#492)",
+      "source": "components/ui/Badge.tsx",
+      "exports": [
+        {
+          "name": "Badge",
+          "kind": "const",
+          "element": "span",
+          "propsType": "BadgeProps",
+          "since": "0.1.0",
+          "deprecated": null,
+          "accessibilityNotes": 1,
+          "examples": 1,
+          "inheritedFrom": [],
+          "props": [
+            {
+              "name": "variant",
+              "type": "BadgeVariant",
+              "default": "\"default\"",
+              "required": false,
+              "description": "Semantic colour pairing. Every variant is contrast-audited (see below)."
+            },
+            {
+              "name": "children",
+              "type": "React.ReactNode",
+              "default": null,
+              "required": true,
+              "description": "Short label text — keep it to one or two words so the pill stays compact."
+            },
+            {
+              "name": "className",
+              "type": "string",
+              "default": null,
+              "required": false,
+              "description": "Extra Tailwind classes merged after the variant classes."
+            }
+          ],
+          "types": [
+            {
+              "name": "BadgeVariant",
+              "values": [
+                "default",
+                "success",
+                "warning",
+                "danger",
+                "info"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "data-table",
+      "title": "DataTable",
+      "group": "data-display",
+      "status": "stable",
+      "issue": "WEB-33, WEB-34",
+      "source": "components/ui/DataTable.tsx",
+      "exports": [
+        {
+          "name": "DataTable",
+          "kind": "function",
+          "element": "div",
+          "propsType": "DataTableProps<T>",
+          "since": "0.1.0",
+          "deprecated": null,
+          "accessibilityNotes": 1,
+          "examples": 1,
+          "inheritedFrom": [],
+          "props": [
+            {
+              "name": "columns",
+              "type": "ColumnDef<T>[]",
+              "default": null,
+              "required": true,
+              "description": "Column definitions."
+            },
+            {
+              "name": "data",
+              "type": "T[]",
+              "default": null,
+              "required": true,
+              "description": "Row data."
+            },
+            {
+              "name": "rowKey",
+              "type": "(row: T, index: number) => string | number",
+              "default": null,
+              "required": false,
+              "description": "Optional row key extractor. Defaults to the row index. Providing a stable key (e.g. a unique `id` field) avoids reconciliation issues when sorting / filtering."
+            },
+            {
+              "name": "pageSize",
+              "type": "number",
+              "default": "0",
+              "required": false,
+              "description": "Number of rows per page. Pass 0 or undefined to disable pagination."
+            },
+            {
+              "name": "filterKeys",
+              "type": "(keyof T | string)[]",
+              "default": null,
+              "required": false,
+              "description": "Keys of columns searched by the filter input. When omitted, all string/number cell values are included in the search."
+            },
+            {
+              "name": "filterPlaceholder",
+              "type": "string",
+              "default": "'Filter…'",
+              "required": false,
+              "description": "Placeholder text for the filter input."
+            },
+            {
+              "name": "emptyMessage",
+              "type": "React.ReactNode",
+              "default": "'No results found.'",
+              "required": false,
+              "description": "Message shown when the filtered result set is empty."
+            },
+            {
+              "name": "title",
+              "type": "React.ReactNode",
+              "default": null,
+              "required": false,
+              "description": "Optional title rendered in the table header bar."
+            },
+            {
+              "name": "subtitle",
+              "type": "React.ReactNode",
+              "default": null,
+              "required": false,
+              "description": "Optional subtitle rendered below the title."
+            },
+            {
+              "name": "className",
+              "type": "string",
+              "default": null,
+              "required": false,
+              "description": "Additional className for the outermost container."
+            },
+            {
+              "name": "'data-testid'",
+              "type": "string",
+              "default": null,
+              "required": false,
+              "description": "data-testid applied to the root element (WEB-34 compatibility)."
+            }
+          ],
+          "types": [
+            {
+              "name": "ColumnDef",
+              "values": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "spinner",
+      "title": "Spinner",
+      "group": "feedback",
+      "status": "stable",
+      "issue": null,
+      "source": "components/ui/Spinner.tsx",
+      "exports": [
+        {
+          "name": "Spinner",
+          "kind": "const",
+          "element": "span",
+          "propsType": "SpinnerProps",
+          "since": "0.1.0",
+          "deprecated": null,
+          "accessibilityNotes": 1,
+          "examples": 1,
+          "inheritedFrom": [],
+          "props": [
+            {
+              "name": "size",
+              "type": "SpinnerSize",
+              "default": "\"md\"",
+              "required": false,
+              "description": "Controls the outer diameter of the spinner ring. Defaults to \"md\"."
+            },
+            {
+              "name": "color",
+              "type": "SpinnerColor",
+              "default": "\"primary\"",
+              "required": false,
+              "description": "Color token for the spinning arc. \"primary\" matches the Perigee brand cyan (#33C5E0). Defaults to \"primary\"."
+            },
+            {
+              "name": "label",
+              "type": "string",
+              "default": null,
+              "required": false,
+              "description": "Optional accessible label announced by screen readers. When omitted the spinner is purely decorative (aria-hidden=\"true\")."
+            },
+            {
+              "name": "className",
+              "type": "string",
+              "default": null,
+              "required": false,
+              "description": "Extra Tailwind classes forwarded to the root element."
+            }
+          ],
+          "types": [
+            {
+              "name": "SpinnerColor",
+              "values": [
+                "primary",
+                "white",
+                "muted",
+                "danger",
+                "success"
+              ]
+            },
+            {
+              "name": "SpinnerSize",
+              "values": [
+                "xs",
+                "sm",
+                "md",
+                "lg",
+                "xl"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "card",
+      "title": "Card",
+      "group": "layout",
+      "status": "stable",
+      "issue": null,
+      "source": "components/ui/card.tsx",
+      "exports": [
+        {
+          "name": "Card",
+          "kind": "forwardRef",
+          "element": "div",
+          "propsType": "React.HTMLAttributes<HTMLDivElement>",
+          "since": "0.1.0",
+          "deprecated": null,
+          "accessibilityNotes": 1,
+          "examples": 1,
+          "inheritedFrom": [
+            "React.HTMLAttributes<HTMLDivElement>"
+          ],
+          "props": [],
+          "types": []
+        },
+        {
+          "name": "CardHeader",
+          "kind": "forwardRef",
+          "element": "div",
+          "propsType": "React.HTMLAttributes<HTMLDivElement>",
+          "since": null,
+          "deprecated": null,
+          "accessibilityNotes": 0,
+          "examples": 0,
+          "inheritedFrom": [
+            "React.HTMLAttributes<HTMLDivElement>"
+          ],
+          "props": [],
+          "types": []
+        },
+        {
+          "name": "CardTitle",
+          "kind": "forwardRef",
+          "element": "h3",
+          "propsType": "React.HTMLAttributes<HTMLHeadingElement>",
+          "since": null,
+          "deprecated": null,
+          "accessibilityNotes": 0,
+          "examples": 0,
+          "inheritedFrom": [
+            "React.HTMLAttributes<HTMLHeadingElement>"
+          ],
+          "props": [],
+          "types": []
+        },
+        {
+          "name": "CardDescription",
+          "kind": "forwardRef",
+          "element": "p",
+          "propsType": "React.HTMLAttributes<HTMLParagraphElement>",
+          "since": null,
+          "deprecated": null,
+          "accessibilityNotes": 0,
+          "examples": 0,
+          "inheritedFrom": [
+            "React.HTMLAttributes<HTMLParagraphElement>"
+          ],
+          "props": [],
+          "types": []
+        },
+        {
+          "name": "CardContent",
+          "kind": "forwardRef",
+          "element": "div",
+          "propsType": "React.HTMLAttributes<HTMLDivElement>",
+          "since": null,
+          "deprecated": null,
+          "accessibilityNotes": 0,
+          "examples": 0,
+          "inheritedFrom": [
+            "React.HTMLAttributes<HTMLDivElement>"
+          ],
+          "props": [],
+          "types": []
+        },
+        {
+          "name": "CardFooter",
+          "kind": "forwardRef",
+          "element": "div",
+          "propsType": "React.HTMLAttributes<HTMLDivElement>",
+          "since": null,
+          "deprecated": null,
+          "accessibilityNotes": 0,
+          "examples": 0,
+          "inheritedFrom": [
+            "React.HTMLAttributes<HTMLDivElement>"
+          ],
+          "props": [],
+          "types": []
+        }
+      ]
+    },
+    {
+      "slug": "live-region",
+      "title": "Live regions",
+      "group": "accessibility",
+      "status": "stable",
+      "issue": "WEB-16 (#470)",
+      "source": "components/LiveRegion.tsx",
+      "exports": [
+        {
+          "name": "LiveStatus",
+          "kind": "function",
+          "element": "div",
+          "propsType": "LiveStatusProps",
+          "since": "0.1.0",
+          "deprecated": null,
+          "accessibilityNotes": 0,
+          "examples": 1,
+          "inheritedFrom": [],
+          "props": [
+            {
+              "name": "message",
+              "type": "string",
+              "default": null,
+              "required": true,
+              "description": "The current status message. Rendered inside the region; empty = silent."
+            },
+            {
+              "name": "label",
+              "type": "string",
+              "default": null,
+              "required": false,
+              "description": "Optional label naming the region (\"Status updates\") so screen-reader users can find it when browsing landmarks."
+            },
+            {
+              "name": "\"data-testid\"",
+              "type": "string",
+              "default": null,
+              "required": false,
+              "description": "Test hook."
+            }
+          ],
+          "types": []
+        },
+        {
+          "name": "LiveAlert",
+          "kind": "function",
+          "element": "div",
+          "propsType": "LiveAlertProps",
+          "since": "0.1.0",
+          "deprecated": null,
+          "accessibilityNotes": 1,
+          "examples": 1,
+          "inheritedFrom": [],
+          "props": [
+            {
+              "name": "message",
+              "type": "string",
+              "default": null,
+              "required": true,
+              "description": "The alert message. Rendered inside the region; empty = silent."
+            },
+            {
+              "name": "\"data-testid\"",
+              "type": "string",
+              "default": null,
+              "required": false,
+              "description": "Test hook."
+            }
+          ],
+          "types": []
+        }
+      ]
+    },
+    {
+      "slug": "common-button",
+      "title": "CommonButton",
+      "group": "legacy",
+      "status": "deprecated",
+      "issue": null,
+      "source": "components/common/Button/Button.tsx",
+      "exports": [
+        {
+          "name": "CommonButton",
+          "kind": "const",
+          "element": "button",
+          "propsType": "CommonButtonProps",
+          "since": "0.0.1",
+          "deprecated": "Superseded by `components/ui/Button`. The variant names changed\n(`primary` → `default`) and `loading` folded into the native `disabled`\nattribute. See the [migration guide](./migrations.md).",
+          "accessibilityNotes": 1,
+          "examples": 2,
+          "inheritedFrom": [
+            "React.ButtonHTMLAttributes<HTMLButtonElement>"
+          ],
+          "props": [
+            {
+              "name": "variant",
+              "type": "\"primary\" | \"secondary\" | \"outline\"",
+              "default": "\"primary\"",
+              "required": false,
+              "description": null
+            },
+            {
+              "name": "loading",
+              "type": "boolean",
+              "default": "false",
+              "required": false,
+              "description": null
+            }
+          ],
+          "types": []
+        }
+      ]
+    }
+  ]
+}

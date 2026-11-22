@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Perigee Web Component Library · Perigee Web Component Library</title>
+<meta name="description" content="Shared UI primitives for the Perigee web app — documented from source." />
+<meta name="generator" content="scripts/docs/generate.mjs" />
+<link rel="stylesheet" href="../../assets/docs.css" />
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+<p class="site-title"><a href="../../index.html">Perigee Web Component Library</a></p>
+<p class="meta">Component library docs · generated from source</p>
+<div class="grow"></div>
+<div class="control">
+<label for="version-select">Version</label>
+<select id="version-select" data-navigate><option value="../../index.html" selected>v0.1.0 (current)</option></select>
+</div>
+<div class="control">
+<label for="docs-search">Search docs</label>
+<input id="docs-search" type="search" autocomplete="off" placeholder="Button, accessibility…" aria-describedby="search-status" />
+</div>
+</header>
+<div class="layout">
+<nav class="site-nav" aria-label="Component library">
+<h2>Overview</h2>
+<ul>
+<li><a href="../../index.html" aria-current="page">All components</a></li>
+<li><a href="../../migrations.html">Migration guide</a></li>
+<li><a href="../../versions.html">Versions</a></li>
+</ul>
+<h2>Actions</h2><ul><li><a href="../../button.html">Button</a></li></ul><h2>Data display</h2><ul><li><a href="../../badge.html">Badge</a></li><li><a href="../../data-table.html">DataTable</a></li></ul><h2>Feedback</h2><ul><li><a href="../../spinner.html">Spinner</a></li></ul><h2>Layout</h2><ul><li><a href="../../card.html">Card</a></li></ul><h2>Accessibility</h2><ul><li><a href="../../live-region.html">Live regions</a></li></ul><h2>Legacy</h2><ul><li><a href="../../common-button.html">CommonButton</a></li></ul>
+</nav>
+<main id="content" tabindex="-1">
+<div id="search-results" hidden data-base="">
+<strong>Search results</strong>
+<p id="search-status" role="status" aria-live="polite"></p>
+<ul id="search-results-list"></ul>
+</div>
+<nav class="toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#components-by-group">Components by group</a></li><li><a href="#actions">Actions</a></li><li><a href="#data-display">Data display</a></li><li><a href="#feedback">Feedback</a></li><li><a href="#layout">Layout</a></li><li><a href="#accessibility">Accessibility</a></li><li><a href="#legacy">Legacy</a></li><li><a href="#composition-patterns">Composition patterns</a></li><li><a href="#loading-button">Loading button</a></li><li><a href="#table-inside-a-card">Table inside a card</a></li><li><a href="#status-pill-in-a-table-cell">Status pill in a table cell</a></li><li><a href="#announce-the-result-of-an-action">Announce the result of an action</a></li><li><a href="#accessibility-baseline">Accessibility baseline</a></li><li><a href="#versioning">Versioning</a></li></ul></nav>
+<h1 id="perigee-web-component-library">Perigee Web Component Library</h1>
+<p>Shared UI primitives for the Perigee web app — documented from source.</p>
+<p><strong>Library version:</strong> 0.1.0 · <strong>Components:</strong> 7 · <strong>Exports:</strong> 13</p>
+<p>Props, types, and defaults on every page below are extracted from the TypeScript source and its JSDoc by <code>npm run docs:build</code>. Nothing here is written twice.</p>
+<h2 id="components-by-group">Components by group</h2>
+<h3 id="actions">Actions</h3>
+<p>Things the user can press.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Component</th><th scope="col">Exports</th><th scope="col">Status</th><th scope="col">Used for</th></tr></thead><tbody><tr><td><a href="../../button.html">Button</a></td><td><code>Button</code></td><td>stable</td><td>Primary and secondary actions, form submits, toolbar controls.</td></tr></tbody></table></div>
+<h3 id="data-display">Data display</h3>
+<p>Read-only information surfaces.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Component</th><th scope="col">Exports</th><th scope="col">Status</th><th scope="col">Used for</th></tr></thead><tbody><tr><td><a href="../../badge.html">Badge</a></td><td><code>Badge</code></td><td>stable</td><td>Status pills, severity tags, resource budget indicators.</td></tr><tr><td><a href="../../data-table.html">DataTable</a></td><td><code>DataTable</code></td><td>stable</td><td>Sortable, filterable, paginated tables of vault and invocation data.</td></tr></tbody></table></div>
+<h3 id="feedback">Feedback</h3>
+<p>Progress, loading, and status signals.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Component</th><th scope="col">Exports</th><th scope="col">Status</th><th scope="col">Used for</th></tr></thead><tbody><tr><td><a href="../../spinner.html">Spinner</a></td><td><code>Spinner</code></td><td>stable</td><td>Inline and block loading states.</td></tr></tbody></table></div>
+<h3 id="layout">Layout</h3>
+<p>Structural containers and spacing.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Component</th><th scope="col">Exports</th><th scope="col">Status</th><th scope="col">Used for</th></tr></thead><tbody><tr><td><a href="../../card.html">Card</a></td><td><code>Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter</code></td><td>stable</td><td>Panels that group related content and actions.</td></tr></tbody></table></div>
+<h3 id="accessibility">Accessibility</h3>
+<p>Primitives that exist purely for assistive technology.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Component</th><th scope="col">Exports</th><th scope="col">Status</th><th scope="col">Used for</th></tr></thead><tbody><tr><td><a href="../../live-region.html">Live regions</a></td><td><code>LiveStatus, LiveAlert</code></td><td>stable</td><td>Announcing async progress and failures to screen readers.</td></tr></tbody></table></div>
+<h3 id="legacy">Legacy</h3>
+<p>Superseded components awaiting removal.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Component</th><th scope="col">Exports</th><th scope="col">Status</th><th scope="col">Used for</th></tr></thead><tbody><tr><td><a href="../../common-button.html">CommonButton</a></td><td><code>CommonButton</code></td><td>deprecated</td><td>Nothing new — migrate to Button.</td></tr></tbody></table></div>
+<h2 id="composition-patterns">Composition patterns</h2>
+<p>Library pieces are designed to be combined. These patterns are used across the app:</p>
+<h3 id="loading-button">Loading button</h3>
+<p>Buttons that trigger async work stay focusable and announce progress: set <code>aria-busy</code>, keep the label, and put a <code>Spinner</code> in the leading slot.</p>
+<pre tabindex="0"><code class="language-tsx">&lt;Button aria-busy={saving} disabled={saving}&gt;
+  {saving ? &lt;Spinner size=&quot;sm&quot; color=&quot;white&quot; /&gt; : null}
+  {saving ? &#39;Saving…&#39; : &#39;Save&#39;}
+&lt;/Button&gt;</code></pre>
+<h3 id="table-inside-a-card">Table inside a card</h3>
+<p><code>DataTable</code> owns its own border, so render it inside <code>CardContent</code> with the card chrome disabled by passing <code>className=&quot;border-0&quot;</code> — this keeps one border per surface.</p>
+<pre tabindex="0"><code class="language-tsx">&lt;Card&gt;
+  &lt;CardHeader&gt;
+    &lt;CardTitle&gt;Vaults&lt;/CardTitle&gt;
+  &lt;/CardHeader&gt;
+  &lt;CardContent&gt;
+    &lt;DataTable columns={columns} data={vaults} pageSize={10} className=&quot;border-0&quot; /&gt;
+  &lt;/CardContent&gt;
+&lt;/Card&gt;</code></pre>
+<h3 id="status-pill-in-a-table-cell">Status pill in a table cell</h3>
+<p>Use a <code>ColumnDef.cell</code> renderer to map a row value to a <code>Badge</code> variant instead of styling the cell directly.</p>
+<pre tabindex="0"><code class="language-tsx">const columns: ColumnDef&lt;Vault&gt;[] = [
+  { key: &#39;name&#39;, header: &#39;Name&#39;, sortable: true },
+  {
+    key: &#39;status&#39;,
+    header: &#39;Status&#39;,
+    cell: (vault) =&gt; (
+      &lt;Badge variant={vault.status === &#39;healthy&#39; ? &#39;success&#39; : &#39;warning&#39;}&gt;
+        {vault.status}
+      &lt;/Badge&gt;
+    ),
+  },
+];</code></pre>
+<h3 id="announce-the-result-of-an-action">Announce the result of an action</h3>
+<p>Keep a live region mounted for the lifetime of the screen and change only its message — a region that mounts with its text is frequently not announced.</p>
+<pre tabindex="0"><code class="language-tsx">&lt;LiveStatus message={status} /&gt;
+&lt;Button onClick={runAnalysis} aria-busy={running} disabled={running}&gt;
+  {running ? &#39;Analysing…&#39; : &#39;Analyse&#39;}
+&lt;/Button&gt;</code></pre>
+<h2 id="accessibility-baseline">Accessibility baseline</h2>
+<p>Every component below is documented with its own accessibility notes. The shared rules are:</p>
+<ul><li><strong>Native elements first</strong> — Interactive primitives render real <code>&lt;button&gt;</code>, <code>&lt;input&gt;</code>, <code>&lt;a&gt;</code>, and <code>&lt;table&gt;</code> elements so keyboard support, focus handling, and browser semantics come for free.</li><li><strong>Visible focus is never removed</strong> — Every focusable component paints a <code>focus-visible</code> ring in the brand cyan. Do not override <code>outline</code> when composing these primitives.</li><li><strong>Announce dynamic changes</strong> — Async results are announced through <code>LiveStatus</code> (polite) and <code>LiveAlert</code> (assertive) rather than relying on colour or layout changes.</li><li><strong>Colour is never the only signal</strong> — Status colour pairings are contrast-audited (≥ 4.5:1) and always paired with a text label.</li><li><strong>Reduced motion is respected</strong> — A global <code>prefers-reduced-motion</code> rule disables decorative animation, so animated components must also expose a non-motion cue.</li></ul>
+<h2 id="versioning">Versioning</h2>
+<p>These docs are versioned with the web app: this page describes v0.1.0, matching the <code>version</code> field in <code>web/package.json</code>.</p>
+<p><code>npm run docs:release</code> freezes the current output under <code>versions/&lt;version&gt;.json</code> and publishes a versioned snapshot of the docs site, so older releases stay browsable. Breaking changes are recorded per release in the <a href="../../migrations.html">migration guide</a>.</p>
+<h2 id="maintaining-these-docs">Maintaining these docs</h2>
+<p>Add the component to <code>scripts/docs/registry.mjs</code>, write JSDoc on the component and its props interface, then run <code>npm run docs:build</code>. The generated files live in <a href="https://github.com/OdyxeeeLabs/Perigee/tree/main/web/docs/components" rel="noreferrer noopener"><code>web/docs/components</code></a>.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Want to document</th><th scope="col">Write</th></tr></thead><tbody><tr><td>Prop description</td><td>JSDoc above the prop in the props interface</td></tr><tr><td>Default value</td><td>inline default in destructuring, or <code>@default</code></td></tr><tr><td>Usage example</td><td><code>@example</code> above the component</td></tr><tr><td>Accessibility notes</td><td><code>@accessibility</code> above the component</td></tr><tr><td>Composition guidance</td><td><code>@composition</code> above the component</td></tr><tr><td>Deprecation and replacement</td><td><code>@deprecated</code> above the component</td></tr><tr><td>Breaking change</td><td><code>scripts/docs/breaking-changes.json</code></td></tr></tbody></table></div>
+<p><code>npm run docs:check</code> fails when any generated file is stale, so these docs cannot silently drift from the code.</p>
+<hr />
+<p><a href="../../migrations.html">Migration guide</a> · <a href="../../versions.html">Versions</a></p>
+<p class="page-footer">Generated from v0.1.0 by <code>npm run docs:build</code>. Edit the component source or <code>scripts/docs/registry.mjs</code>, never this file.</p>
+</main>
+</div>
+<script src="../../assets/docs.js" defer></script>
+</body>
+</html>

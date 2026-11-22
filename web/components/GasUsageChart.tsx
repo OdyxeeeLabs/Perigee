@@ -40,7 +40,7 @@ const formatStroops = (stroops: number) => {
   return `${xlm.toFixed(7)} XLM`;
 };
 
-export const GasUsageChart: React.FC<GasUsageChartProps> = ({
+const GasUsageChartImpl: React.FC<GasUsageChartProps> = ({
   cpu_instructions,
   ram_bytes,
   ledger_read_bytes,
@@ -49,6 +49,8 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
   cost_stroops,
   testnetAverages,
 }) => {
+  const id = React.useId();
+  const summaryId = `${id}-summary`;
   const avg = testnetAverages ?? DEFAULT_TESTNET_AVERAGES;
 
   const metrics: GasMetric[] = [
@@ -104,9 +106,21 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
     1,
   );
 
+  const summary =
+    `Gas usage compared with testnet averages for ${metrics.length} metrics: ` +
+    metrics
+      .map(
+        (m) =>
+          `${m.label} ${formatCompact(m.simulated)} ${m.unit}, testnet average ${formatCompact(m.average)} ${m.unit}`,
+      )
+      .join('; ') +
+    (cost_stroops !== undefined
+      ? `. Total simulated cost ${formatStroops(cost_stroops)}.`
+      : '.');
+
   return (
     <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-6 font-mono">
-      <div className="border-b-2 border-[#30363d] pb-2 mb-4 flex justify-between items-end">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-2 border-b-2 border-[#30363d] pb-2">
         <div className="flex items-center gap-2">
           <BarChart3 size={18} className="text-[#8b949e]" />
           <h2 className="text-2xl font-black text-[#c9d1d9] uppercase tracking-wider">
@@ -116,8 +130,13 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
         <span className="text-xs text-[#8b949e]">Per Transaction</span>
       </div>
 
+      <p id={summaryId} className="sr-only" data-testid="gas-usage-chart-description">
+        {summary}
+      </p>
+
       {/* Legend */}
-      <div className="flex gap-6 mb-6 text-xs">
+      <div className="flex gap-6 mb-6 text-xs" aria-hidden="true">
+      <div className="mb-4 flex flex-wrap gap-x-4 gap-y-1 text-xs">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#00d9ff' }} />
           <span className="text-[#c9d1d9]">Simulated</span>
@@ -128,7 +147,12 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
         </div>
       </div>
 
-      <div className="space-y-5">
+      <div
+        className="space-y-5"
+        role="img"
+        aria-label="Gas usage compared with testnet averages"
+        aria-describedby={summaryId}
+      >
         {metrics.map((metric) => {
           const simulatedPct = (metric.simulated / maxValue) * 100;
           const averagePct = (metric.average / maxValue) * 100;
@@ -136,25 +160,30 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
           return (
             <div key={metric.key}>
               {/* Label Row */}
-              <div className="flex justify-between items-center mb-1">
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
                 <div className="flex items-center gap-2 text-[#c9d1d9]">
                   <metric.icon size={14} className="text-[#8b949e]" />
                   <span className="font-bold text-sm">{metric.label}</span>
                 </div>
-                <div className="flex gap-4 text-xs">
-                  <span className="text-[#00d9ff] font-semibold">
-                    {formatCompact(metric.simulated)}
-                    <span className="text-[#8b949e] font-normal ml-1">{metric.unit}</span>
-                  </span>
-                  <span className="text-[#8b949e]">
-                    avg {formatCompact(metric.average)}
-                    <span className="ml-1">{metric.unit}</span>
-                  </span>
-                </div>
+                  <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-0.5 text-xs">
+                    <span className="text-[#00d9ff] font-semibold">
+                      {formatCompact(metric.simulated)}
+                      <span className="text-[#8b949e] font-normal ml-1">{metric.unit}</span>
+                    </span>
+                    <span className="text-[#8b949e]">
+                      avg {formatCompact(metric.average)}
+                      <span className="ml-1">{metric.unit}</span>
+                    </span>
+                  </div>
               </div>
 
               {/* Simulated bar */}
-              <div className="h-3 w-full bg-[#0d1117] rounded-sm overflow-hidden border border-[#30363d] mb-0.5">
+              <div aria-hidden="true" className="h-3 w-full bg-[#0d1117] rounded-sm overflow-hidden border border-[#30363d] mb-0.5">
+              <div
+                role="img"
+                aria-label={`${metric.label} simulated: ${formatCompact(metric.simulated)} ${metric.unit}`}
+                className="mb-0.5 h-3 w-full overflow-hidden rounded-sm border border-[#30363d] bg-[#0d1117]"
+              >
                 <div
                   className="h-full rounded-sm transition-all duration-500 ease-out"
                   style={{
@@ -166,7 +195,12 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
               </div>
 
               {/* Testnet average bar */}
-              <div className="h-2 w-full bg-[#0d1117] rounded-sm overflow-hidden border border-[#30363d]">
+              <div aria-hidden="true" className="h-2 w-full bg-[#0d1117] rounded-sm overflow-hidden border border-[#30363d]">
+              <div
+                role="img"
+                aria-label={`${metric.label} testnet average: ${formatCompact(metric.average)} ${metric.unit}`}
+                className="h-2 w-full overflow-hidden rounded-sm border border-[#30363d] bg-[#0d1117]"
+              >
                 <div
                   className="h-full rounded-sm transition-all duration-500 ease-out"
                   style={{
@@ -183,10 +217,38 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
         })}
       </div>
 
+      <table className="sr-only" data-testid="gas-usage-chart-data">
+        <caption>Gas usage and testnet averages per transaction</caption>
+        <thead>
+          <tr>
+            <th scope="col">Metric</th>
+            <th scope="col">Simulated</th>
+            <th scope="col">Testnet average</th>
+            <th scope="col">Unit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {metrics.map((metric) => (
+            <tr key={metric.key}>
+              <th scope="row">{metric.label}</th>
+              <td>{formatCompact(metric.simulated)}</td>
+              <td>{formatCompact(metric.average)}</td>
+              <td>{metric.unit}</td>
+            </tr>
+          ))}
+          {cost_stroops !== undefined && (
+            <tr>
+              <th scope="row">Total simulated cost</th>
+              <td colSpan={3}>{formatStroops(cost_stroops)} ({formatCompact(cost_stroops)} stroops)</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
       {/* Cost Summary */}
       {cost_stroops !== undefined && (
         <div className="mt-6 pt-4 border-t-[4px] border-[#30363d]">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-[#c9d1d9]">
               <DollarSign size={16} className="text-[#00d9ff]" />
               <span className="font-bold text-sm">Total Simulated Cost</span>
@@ -211,3 +273,6 @@ export const GasUsageChart: React.FC<GasUsageChartProps> = ({
     </div>
   );
 };
+
+/** Memoised (#692): pure presentational component, re-renders only when props change. */
+export const GasUsageChart = React.memo(GasUsageChartImpl);

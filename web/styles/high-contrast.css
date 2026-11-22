@@ -1,0 +1,137 @@
+/* ===========================================================================
+   High contrast support — issue #701
+
+   Two separate needs share this file:
+
+   1. Windows High Contrast Mode / `forced-colors`. There the OS replaces
+      every colour with the user's chosen palette. Anything that relied on a
+      background *difference* to be visible — a card edge, a status pill, a
+      focus ring, a chart series — disappears. The rules below restate those
+      distinctions in system colours (`CanvasText`, `Highlight`, `Canvas`,
+      `LinkText`), which is the only way to stay visible under a palette we
+      do not control.
+
+   2. A manual high-contrast toggle, for everyone else. It is a data
+      attribute rather than a separate theme so the two paths share one set
+      of overrides, and it is exposed through `HighContrastToggle` so the
+      preference is a user choice rather than a media-query lottery.
+
+   Design tokens stay in `variables.css`; only the *mapping* changes here, so
+   there is one place to look when a colour is wrong.
+   =========================================================================== */
+
+/* ---------------------------------------------------------------------------
+   Forced colours
+   --------------------------------------------------------------------------- */
+
+@media (forced-colors: active) {
+  /*
+   * Let the system palette through. `forced-color-adjust: none` is applied
+   * only where a component genuinely needs to keep its own colours (the
+   * charts, which encode series in colour); everything else opts back in, so
+   * the OS palette wins by default.
+   */
+  body,
+  .card,
+  [data-surface] {
+    forced-color-adjust: auto;
+  }
+
+  /* Focus must survive HCM — the ring is the only way a keyboard user knows
+     where they are. System `Highlight` is guaranteed to contrast with
+     `Canvas`. */
+  :focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: 2px !important;
+  }
+
+  /* Any element that was only separated by a subtle border needs a real
+     one now. */
+  button,
+  input,
+  select,
+  textarea,
+  [role="button"],
+  [role="tab"],
+  a {
+    border: 1px solid CanvasText !important;
+  }
+
+  /* Status pills lose their background differentiation; the border and the
+     text carry the meaning. */
+  [data-status],
+  [role="status"],
+  [role="alert"] {
+    border: 1px solid CanvasText !important;
+  }
+
+  /* Charts and heat maps encode series in colour and are exempted, but even
+     then the surrounding chrome must not be repainted. */
+  [data-preserve-colors],
+  svg[data-chart] {
+    forced-color-adjust: none;
+  }
+
+  /* Images that carry information need a border so they do not blend into
+     the page. Decorative images are left alone. */
+  img[data-meaningful] {
+    border: 1px solid CanvasText;
+  }
+
+  /* Scrollbars and caret follow the system automatically; nothing to do. */
+}
+
+/* ---------------------------------------------------------------------------
+   Manual high-contrast toggle (data-contrast="high")
+   --------------------------------------------------------------------------- */
+
+[data-contrast="high"] {
+  /* Pure black on pure white is 21:1 — the maximum available contrast, and
+     the reason this mode is a toggle rather than a theme. */
+  --color-background: #000000;
+  --color-surface: #000000;
+  --color-text: #ffffff;
+  --color-text-muted: #e5e7eb;
+  --color-border: #ffffff;
+  --color-border-subtle: #d1d5db;
+  --color-primary: #7dd3fc;
+  --color-primary-hover: #bae6fd;
+  --color-primary-foreground: #000000;
+  --color-secondary: #e5e7eb;
+  --color-success: #86efac;
+  --color-warning: #fcd34d;
+  --color-danger: #fca5a5;
+
+  /* The ring flips to the light token so it is visible on black. */
+  --focus-ring-color: #93c5fd;
+  --focus-ring-color-dark: #93c5fd;
+
+  color: var(--color-text);
+  background: var(--color-background);
+}
+
+[data-contrast="high"] :focus-visible {
+  outline-color: var(--focus-ring-color);
+}
+
+/* Status colours that were a subtle tint on a light surface become full
+   saturation on black, otherwise "success" and "danger" converge. */
+[data-contrast="high"] [data-status="success"] {
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
+
+[data-contrast="high"] [data-status="warning"] {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+}
+
+[data-contrast="high"] [data-status="error"] {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+/* Underlines rather than colour-only links (WCAG 1.4.1 use of colour). */
+[data-contrast="high"] a {
+  text-decoration: underline;
+}

@@ -1,0 +1,21 @@
+{
+  "description": "Raw, uncompressed JavaScript bytes per route, measured from Next.js build manifests. Issue #842 / WEB-41.",
+  "routes": [
+    {
+      "name": "home",
+      "manifestKey": "/",
+      "maxBytes": 1500000
+    },
+    {
+      "name": "vault",
+      "manifestKey": "/vault/[id]",
+      "appManifestKey": "/vault/[id]/page",
+      "maxBytes": 1600000
+    },
+    {
+      "name": "analytics",
+      "manifestKey": "/analytics",
+      "maxBytes": 1400000
+    }
+  ]
+}

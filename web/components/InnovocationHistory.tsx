@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useTranslations } from 'next-intl';
+import { ConfirmDialog } from './ui/ConfirmDialog';
 import type { InvocationResult } from '../lib/sorobantypes';
 
 interface InvocationHistoryProps {
@@ -48,6 +50,8 @@ export function useInvocationHistory() {
 
 export function InvocationHistory({ onSelectResult }: InvocationHistoryProps) {
   const { history, clearHistory } = useInvocationHistory();
+  const t = useTranslations();
+  const [confirmClear, setConfirmClear] = useState(false);
 
   if (history.length === 0) {
     return (
@@ -61,7 +65,7 @@ export function InvocationHistory({ onSelectResult }: InvocationHistoryProps) {
           border: '1px solid #30363d',
         }}
       >
-        <p>No invocation history yet.</p>
+        <p>{t("history.noHistory")}</p>
       </div>
     );
   }
@@ -77,10 +81,10 @@ export function InvocationHistory({ onSelectResult }: InvocationHistoryProps) {
         }}
       >
         <h3 style={{ margin: '0', fontSize: '16px', fontWeight: '600', color: '#c9d1d9' }}>
-          Recent Invocations
+          {t("history.recent")}
         </h3>
         <button
-          onClick={clearHistory}
+          onClick={() => setConfirmClear(true)}
           style={{
             padding: '6px 12px',
             backgroundColor: '#161b22',
@@ -91,7 +95,7 @@ export function InvocationHistory({ onSelectResult }: InvocationHistoryProps) {
             color: '#8b949e',
           }}
         >
-          Clear History
+          {t("history.clear")}
         </button>
       </div>
 
@@ -143,15 +147,27 @@ export function InvocationHistory({ onSelectResult }: InvocationHistoryProps) {
               </div>
               <div style={{ textAlign: 'right', fontSize: '12px', color: '#8b949e' }}>
                 {item.error ? (
-                  <span style={{ color: '#fb8500' }}>Error</span>
+                  <span style={{ color: '#fb8500' }}>{t("history.error")}</span>
                 ) : (
-                  <span style={{ color: '#00d9ff' }}>Success</span>
+                  <span style={{ color: '#00d9ff' }}>{t("history.success")}</span>
                 )}
               </div>
             </div>
           </button>
         ))}
       </div>
+      <ConfirmDialog
+        open={confirmClear}
+        action={t('confirm.clearHistory')}
+        target={t('confirm.savedInvocations')}
+        consequence={t('confirm.clearHistoryConsequence')}
+        confirmLabel={t('history.clear')}
+        onConfirm={() => {
+          setConfirmClear(false);
+          clearHistory();
+        }}
+        onCancel={() => setConfirmClear(false)}
+      />
     </div>
   );
 }

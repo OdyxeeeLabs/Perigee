@@ -1,4 +1,4 @@
-use crate::fee_store::{FeeStore, LedgerFeeSample};
+use crate::fee::persistence::{FeeStore, LedgerFeeSample};
 use crate::rpc_provider::ProviderRegistry;
 use crate::stellar_service::{StellarService, StellarServiceConfig, StellarServiceError};
 use chrono::Utc;
@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tracing;
+use tokio_util::sync::CancellationToken;
 
 /// Errors that can occur during fee collection
 #[derive(Error, Debug)]
@@ -60,28 +61,40 @@ pub struct FeeCollector {
 
 impl FeeCollector {
     /// Create a new fee collector
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StellarServiceError`] if the internal HTTP client cannot be built.
     pub fn new(
         registry: Arc<ProviderRegistry>,
         store: Arc<FeeStore>,
         config: FeeCollectorConfig,
-    ) -> Self {
+    ) -> Result<Self, StellarServiceError> {
         let svc_config = StellarServiceConfig::default()
             .with_timeout(config.request_timeout)
             // Fee collection is a background probe — one retry is enough.
             .with_max_attempts(2);
-        let stellar_service = Arc::new(StellarService::new(Arc::clone(&registry), svc_config));
-        Self {
+        let stellar_service = Arc::new(StellarService::new(Arc::clone(&registry), svc_config)?);
+        Ok(Self {
             registry,
             store,
             stellar_service,
             config,
             last_collected_sequence: std::sync::atomic::AtomicU64::new(0),
             collecting: Arc::new(AtomicBool::new(false)),
-        }
+        })
     }
 
     /// Run the background collection loop
     pub async fn run_collection_loop(self: Arc<Self>) {
+        self.run_collection_loop_with_cancellation(CancellationToken::new())
+            .await;
+    }
+
+    pub async fn run_collection_loop_with_cancellation(
+        self: Arc<Self>,
+        cancellation: CancellationToken,
+    ) {
         let mut interval =
             tokio::time::interval(Duration::from_secs(self.config.collection_interval_secs));
 
@@ -91,12 +104,21 @@ impl FeeCollector {
         );
 
         loop {
-            interval.tick().await;
-
-            if let Err(e) = self.collect_latest_fees().await {
-                tracing::error!(error = %e, "Failed to collect fee data");
+            tokio::select! {
+                _ = cancellation.cancelled() => break,
+                _ = interval.tick() => {
+                    let result = tokio::select! {
+                        _ = cancellation.cancelled() => break,
+                        result = self.collect_latest_fees() => result,
+                    };
+                    if let Err(e) = result {
+                        tracing::error!(error = %crate::log_redaction::redact_display(&e), "Failed to collect fee data");
+                    }
+                }
             }
         }
+
+        tracing::debug!("Fee collector stopped");
     }
 
     /// Collect fee data from the latest ledger
@@ -201,7 +223,7 @@ impl FeeCollector {
         match self.fetch_from_get_ledgers(provider, sequence).await {
             Ok(sample) => Ok(sample),
             Err(e) => {
-                tracing::warn!(error = %e, "getLedgers not available, using fallback");
+                tracing::warn!(error = %crate::log_redaction::redact_display(&e), "getLedgers not available, using fallback");
                 self.fetch_from_get_transactions(provider, sequence).await
             }
         }

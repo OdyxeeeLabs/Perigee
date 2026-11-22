@@ -8,7 +8,9 @@ use std::time::Duration;
 
 /// Converts a [`StellarServiceError`] into the engine-level [`ProviderError`].
 fn map_err(e: StellarServiceError) -> ProviderError {
+    let message = e.to_string();
     match e {
+        StellarServiceError::CircuitOpen { .. } => ProviderError::CircuitBreakerOpen(message),
         StellarServiceError::Timeout { .. } => ProviderError::NodeTimeout,
         StellarServiceError::Network { source, .. } => {
             ProviderError::NetworkError(source.to_string())
@@ -16,7 +18,7 @@ fn map_err(e: StellarServiceError) -> ProviderError {
         StellarServiceError::HttpError { status, url } => {
             ProviderError::RpcRequestFailed(format!("HTTP {status} from {url}"))
         }
-        other => ProviderError::RpcRequestFailed(other.to_string()),
+        _ => ProviderError::RpcRequestFailed(message),
     }
 }
 
@@ -32,12 +34,20 @@ impl RealRpcProvider {
     /// internally.  When running inside a full application, prefer
     /// [`Self::with_registry`] so the process-wide pool and circuit-breaker
     /// scores are shared.
-    pub fn new(rpc_url: String) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StellarServiceError`] if the HTTP client cannot be built.
+    pub fn new(rpc_url: String) -> Result<Self, StellarServiceError> {
         Self::with_timeout(rpc_url, Duration::from_secs(30))
     }
 
     /// Same as [`Self::new`] but with a custom per-call timeout.
-    pub fn with_timeout(rpc_url: String, timeout: Duration) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StellarServiceError`] if the HTTP client cannot be built.
+    pub fn with_timeout(rpc_url: String, timeout: Duration) -> Result<Self, StellarServiceError> {
         let provider = RpcProvider {
             name: "default".to_string(),
             url: rpc_url.clone(),
@@ -47,25 +57,29 @@ impl RealRpcProvider {
         };
         let registry = ProviderRegistry::new(vec![provider.clone()]);
         let config = StellarServiceConfig::default().with_timeout(timeout);
-        let stellar_service = Arc::new(StellarService::new(registry, config));
-        Self {
+        let stellar_service = Arc::new(StellarService::new(registry, config)?);
+        Ok(Self {
             provider,
             stellar_service,
-        }
+        })
     }
 
     /// Construct a provider that shares the process-wide registry and service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StellarServiceError`] if the HTTP client cannot be built.
     pub fn with_registry(
         provider: RpcProvider,
         registry: Arc<ProviderRegistry>,
         timeout: Duration,
-    ) -> Self {
+    ) -> Result<Self, StellarServiceError> {
         let config = StellarServiceConfig::default().with_timeout(timeout);
-        let stellar_service = Arc::new(StellarService::new(registry, config));
-        Self {
+        let stellar_service = Arc::new(StellarService::new(registry, config)?);
+        Ok(Self {
             provider,
             stellar_service,
-        }
+        })
     }
 }
 

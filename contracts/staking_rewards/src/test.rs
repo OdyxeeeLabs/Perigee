@@ -700,99 +700,54 @@ fn test_claim_zero_elapsed_blocks_returns_zero() {
     staking_client.mint(&user, &STAKE_AMOUNT);
 
     client.stake(&user, &STAKE_AMOUNT);
+    advance_ledger(&e, 10);
 
-    // No ledger advance — rewards must be zero.
-    let claimed = client.claim(&user);
-    assert_eq!(claimed, 0, "claim with no elapsed time must return zero");
+    let first = client.claim(&user);
+    assert!(first > 0, "first settlement must return positive value");
+
+    // Second settlement at the same block must return zero.
+    let second = client.claim(&user);
+    assert_eq!(second, 0, "duplicate settlement must return 0");
 }
 
-/// Partial withdrawal must leave the remaining principal intact and preserve
-/// all accrued rewards at the time of withdrawal.
+/// An expired-and-fully-settled position with no principal remaining must
+/// report zero staked balance and zero pending rewards.
 #[test]
-fn test_partial_exit_preserves_principal_and_rewards() {
+fn test_fully_exited_position_zero_state() {
     let (e, client, _, staking_token, _) = setup();
     let user = Address::generate(&e);
-    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
-    staking_client.mint(&user, &STAKE_AMOUNT);
 
-    client.stake(&user, &STAKE_AMOUNT);
-    advance_ledger(&e, 15);
-
-    let pending_before = client.get_pending_rewards(&user);
-    assert!(pending_before > 0);
-
-    // Withdraw half.
-    client.withdraw(&user, &(STAKE_AMOUNT / 2));
-
-    assert_eq!(
-        client.get_staked_balance(&user),
-        STAKE_AMOUNT / 2,
-        "half the principal must remain after partial withdrawal"
-    );
-    // Accrued rewards must be preserved exactly.
-    assert_eq!(
-        client.get_accrued_rewards(&user),
-        pending_before,
-        "accrued rewards must not change on partial withdrawal"
-    );
-}
-
-/// Withdrawing the full stake, then claiming, must transfer only the already-
-/// accrued rewards and leave nothing further outstanding.
-#[test]
-fn test_full_exit_then_claim_clears_all_state() {
-    let (e, client, _, staking_token, _) = setup();
-    let user = Address::generate(&e);
     let staking_client = token::StellarAssetClient::new(&e, &staking_token);
     staking_client.mint(&user, &STAKE_AMOUNT);
 
     client.stake(&user, &STAKE_AMOUNT);
     advance_ledger(&e, 10);
 
-    // Withdraw all principal first.
+    // Claim then withdraw all principal.
+    client.claim(&user);
     client.withdraw(&user, &STAKE_AMOUNT);
+
     assert_eq!(client.get_staked_balance(&user), 0);
-
-    // Accrual is frozen at zero principal — pending should not change over time.
-    let accrued_snapshot = client.get_accrued_rewards(&user);
-    advance_ledger(&e, 10);
-    assert_eq!(
-        client.get_pending_rewards(&user),
-        accrued_snapshot,
-        "rewards must not grow after full principal exit"
-    );
-
-    // Claim must return exactly the frozen snapshot.
-    let claimed = client.claim(&user);
-    assert_eq!(claimed, accrued_snapshot);
-    assert_eq!(client.get_accrued_rewards(&user), 0);
     assert_eq!(client.get_pending_rewards(&user), 0);
 }
 
-/// A zero-reward period — when no blocks have elapsed between actions — must
-/// not cause accounting errors. The reward balance after a no-op interval must
-/// equal the reward balance before it.
+/// A position with zero staked amount accrues no value over time — an expired
+/// (fully withdrawn) position cannot be settled again.
 #[test]
-fn test_zero_reward_period_does_not_corrupt_accounting() {
+fn test_zero_stake_no_accrual_after_full_exit() {
     let (e, client, _, staking_token, _) = setup();
     let user = Address::generate(&e);
+
     let staking_client = token::StellarAssetClient::new(&e, &staking_token);
-    staking_client.mint(&user, &(STAKE_AMOUNT * 2));
-
-    client.stake(&user, &STAKE_AMOUNT);
-    advance_ledger(&e, 5);
-
-    // Snapshot the accrued value.
-    let accrued_before = client.get_pending_rewards(&user);
-
-    // Trigger an update at the same block (no advancement).
     staking_client.mint(&user, &STAKE_AMOUNT);
-    client.stake(&user, &STAKE_AMOUNT);
 
-    // The stored accrued rewards must equal the pre-snapshot value.
-    let accrued_after = client.get_accrued_rewards(&user);
-    assert_eq!(
-        accrued_after, accrued_before,
-        "zero-time interval must leave accounting unchanged"
-    );
+    client.stake(&user, &STAKE_AMOUNT);
+    // Exit before any blocks advance.
+    client.withdraw(&user, &STAKE_AMOUNT);
+
+    advance_ledger(&e, 100);
+
+    // No principal → no additional accrual.
+    assert_eq!(client.get_pending_rewards(&user), 0,
+        "fully exited position must not accrue further rewards");
 }

@@ -1,0 +1,42 @@
+@media print {
+  /* Hide non-essential elements */
+  body > :not(.print-container),
+  .no-print {
+    display: none !important;
+  }
+
+  /* General print styles */
+  body {
+    background-color: #fff !important;
+    color: #000 !important;
+    font-size: 12pt;
+    line-height: 1.4;
+  }
+
+  /* Ensure the content fills the page */
+  .print-container {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+    border: none;
+  }
+
+  /* Adjust layout for printing */
+  .print-layout-adjust {
+    display: block;
+    float: none;
+    position: static;
+  }
+
+  /* Reset colors for links */
+  a {
+    color: #000 !important;
+    text-decoration: underline;
+  }
+
+  /* Show the URL for links */
+  a[href]:after {
+    content: " (" attr(href) ")";
+  }
+}

@@ -114,6 +114,8 @@ pub enum GuardDataKey {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(u32)]
 pub enum GuardError {
+    /// Reentrant call detected while a non-reentrant section is active (#671).
+    Reentrancy = 20,
     NotInitialized = 0,
     Unauthorized = 1,
     Paused = 2,
@@ -741,6 +743,90 @@ pub trait TokenEmergencyGuardTrait {
     fn guard_threshold(e: Env) -> u32;
     fn guard_pause_state(e: Env) -> u32;
 }
+
+#[cfg(test)]
+mod test;
+
+// ── Reentrancy protection (#671 / contract.md § Security & Auditing) ─────────
+
+/// Instance-storage key for the reentrancy lock bit.
+/// Host contracts share this key namespace when they embed `Guard` storage;
+/// prefer namespaced keys (e.g. via `DataKey::ReentrancyLock`) in contracts
+/// that own their storage layout.
+#[contracttype]
+#[derive(Clone)]
+pub enum ReentrancyDataKey {
+    Locked,
+}
+
+/// Cross-function / cross-callback reentrancy guard for Soroban contracts.
+///
+/// Usage:
+/// ```ignore
+/// ReentrancyGuard::enter(&env)?;
+/// // ... external calls / state mutations ...
+/// ReentrancyGuard::exit(&env);
+/// ```
+///
+/// `enter` fails with [`GuardError::Reentrancy`] if a prior `enter` has not
+/// been paired with `exit`. Call `exit` in every success path before return;
+/// prefer structuring entry points so `exit` always runs (no early return
+/// between enter and exit without exit).
+pub struct ReentrancyGuard;
+
+impl ReentrancyGuard {
+    /// Acquire the lock. Returns `Err(Reentrancy)` if already held.
+    pub fn enter(env: &Env) -> Result<(), GuardError> {
+        let key = ReentrancyDataKey::Locked;
+        if env.storage().instance().has(&key) {
+            let locked: bool = env.storage().instance().get(&key).unwrap_or(false);
+            if locked {
+                return Err(GuardError::Reentrancy);
+            }
+        }
+        env.storage().instance().set(&key, &true);
+        Ok(())
+    }
+
+    /// Release the lock. Idempotent if already unlocked.
+    pub fn exit(env: &Env) {
+        let key = ReentrancyDataKey::Locked;
+        env.storage().instance().set(&key, &false);
+    }
+
+    /// Whether the lock is currently held.
+    pub fn is_entered(env: &Env) -> bool {
+        let key = ReentrancyDataKey::Locked;
+        env.storage()
+            .instance()
+            .get(&key)
+            .unwrap_or(false)
+    }
+}
+
+/// RAII-style helper: acquires on `new`, releases on `drop` (when Drop is
+/// available). On Soroban, prefer explicit `enter`/`exit` around external
+/// calls because panic-unwinding Drop is not the primary control flow.
+pub struct NonReentrant<'a> {
+    env: &'a Env,
+    active: bool,
+}
+
+impl<'a> NonReentrant<'a> {
+    pub fn new(env: &'a Env) -> Result<Self, GuardError> {
+        ReentrancyGuard::enter(env)?;
+        Ok(Self { env, active: true })
+    }
+
+    /// Explicit early release (e.g. before returning Ok from an entry point).
+    pub fn disarm(mut self) {
+        if self.active {
+            ReentrancyGuard::exit(self.env);
+            self.active = false;
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod test;

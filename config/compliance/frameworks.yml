@@ -1,0 +1,83 @@
+# Control-to-evidence mapping for Perigee.
+#
+# The single source of truth for what Perigee must evidence, consumed by
+# scripts/compliance/collect_evidence.py. A control with no matching artefact
+# fails collection, so the gap shows up in CI rather than in an audit.
+version: 1
+
+scope:
+  pci:
+    saq: A
+    rationale: >-
+      Perigee processes no cardholder data. Deposits are Stellar Classic Assets
+      or on-chain tokens; no PAN, CVV or track data is processed, stored or
+      transited. Re-confirm this whenever a fiat on-ramp is added — the
+      re-confirmation is itself a tracked control (PCI.SCOPE-01).
+
+frameworks:
+  soc2:
+    name: SOC 2 Type II
+    observation_window_days: 90
+    criteria:
+      CC6.1:
+        title: Logical access controls
+        evidence: "evidence/logs/access/**"
+      CC6.6:
+        title: Encryption in transit
+        evidence: "evidence/tls/*"
+      CC6.7:
+        title: Encryption at rest
+        evidence: "evidence/encryption/*"
+      CC7.2:
+        title: Anomaly monitoring
+        evidence: "evidence/logs/anomaly/**"
+      CC7.4:
+        title: Incident response
+        evidence: "evidence/incidents/**"
+      CC8.1:
+        title: Change management
+        evidence: "evidence/ci/scans/**"
+
+  gdpr:
+    name: GDPR
+    observation_window_days: 365
+    criteria:
+      ART30:
+        title: Records of processing activities
+        evidence: "evidence/gdpr/ropa.md"
+      ART32:
+        title: Security of processing
+        evidence: "evidence/encryption/*"
+      ART33:
+        title: Breach notification within 72 hours
+        evidence: "evidence/incidents/breach/*"
+      ART17:
+        title: Right to erasure
+        evidence: "evidence/gdpr/erasure/*"
+
+  pci:
+    name: PCI DSS
+    observation_window_days: 365
+    criteria:
+      PCI.SCOPE-01:
+        title: No cardholder data in scope
+        evidence: "evidence/pci/scope/*"
+      PCI.REQ-06:
+        title: Payment page scripts managed and inventoried
+        evidence: "evidence/security/headers/*"
+      PCI.REQ-11:
+        title: Quarterly ASV scans
+        evidence: "evidence/security/scans/*"
+
+# Controls that are declared but whose evidence producer does not exist yet.
+# Listed explicitly with an owner and a target so the gap is tracked rather than
+# silently producing a green run.
+known_gaps:
+  - control: ART17
+    reason: "Erasure workflow not yet automated; manual process documented in the privacy policy."
+    owner: platform
+    target: 2026-Q2
+  - control: PCI.REQ-11
+    reason: "ASV scan schedule agreed, first quarterly window has not elapsed."
+    owner: security
+    target: 2026-Q1

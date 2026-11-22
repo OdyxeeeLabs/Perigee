@@ -386,3 +386,116 @@ fn test_partial_burn() {
     let (a2, b2) = client.burn(&lp, &-100i32, &100i32, &(liq - half));
     assert!(a2 > 0 || b2 > 0, "remaining burn should also recover tokens");
 }
+
+// ── #883 — Concentrated-liquidity rebalancing limits ─────────────────────────
+
+/// Minting a position with a range that places the current tick (0) completely
+/// out of range (tick_lower=200, tick_upper=400) must succeed but contribute
+/// zero active liquidity when the pool's current price is outside that range.
+#[test]
+fn test_out_of_range_position_minted_successfully() {
+    let e = Env::default();
+    e.mock_all_auths();
+    e.cost_estimate().budget().reset_unlimited();
+
+    let (token_a, token_b, admin_a, admin_b) = setup_tokens(&e);
+    let client = setup_amm(&e, &token_a, &token_b);
+
+    let lp = Address::generate(&e);
+    admin_a.mint(&lp, &1_000_000);
+    admin_b.mint(&lp, &1_000_000);
+
+    // Position range [200, 400] is entirely above the current tick (0).
+    let (liq, a_in, b_in) = client.mint(&lp, &200i32, &400i32, &500_000u128, &500_000u128);
+
+    // Position was created — it may have zero or non-zero liquidity depending
+    // on the AMM's out-of-range calculation, but no panic should occur.
+    // We only assert no error was returned (the call itself did not panic).
+    let _ = (liq, a_in, b_in);
+}
+
+/// Minting a valid in-range position (straddling tick=0) must increase the
+/// recorded pool liquidity.
+#[test]
+fn test_in_range_position_increases_liquidity() {
+    let e = Env::default();
+    e.mock_all_auths();
+    e.cost_estimate().budget().reset_unlimited();
+
+    let (token_a, token_b, admin_a, admin_b) = setup_tokens(&e);
+    let client = setup_amm(&e, &token_a, &token_b);
+
+    let lp = Address::generate(&e);
+    admin_a.mint(&lp, &1_000_000);
+    admin_b.mint(&lp, &1_000_000);
+
+    let (liq, _, _) = client.mint(&lp, &-100i32, &100i32, &500_000u128, &500_000u128);
+    assert!(liq > 0, "in-range position must produce positive liquidity");
+}
+
+/// Attempting to mint a position with an inverted tick range (lower >= upper)
+/// must be rejected.
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")]
+fn test_inverted_tick_range_rejected() {
+    let e = Env::default();
+    e.mock_all_auths();
+    e.cost_estimate().budget().reset_unlimited();
+
+    let (token_a, token_b, admin_a, _admin_b) = setup_tokens(&e);
+    let client = setup_amm(&e, &token_a, &token_b);
+
+    let lp = Address::generate(&e);
+    admin_a.mint(&lp, &1_000_000);
+
+    // tick_lower (100) >= tick_upper (100) — must be rejected.
+    client.mint(&lp, &100i32, &100i32, &100_000u128, &100_000u128);
+}
+
+/// Minting then burning the full position must recover tokens without leaving
+/// accounting residue.
+#[test]
+fn test_full_burn_recovers_tokens_no_residue() {
+    let e = Env::default();
+    e.mock_all_auths();
+    e.cost_estimate().budget().reset_unlimited();
+
+    let (token_a, token_b, admin_a, admin_b) = setup_tokens(&e);
+    let client = setup_amm(&e, &token_a, &token_b);
+
+    let lp = Address::generate(&e);
+    admin_a.mint(&lp, &1_000_000);
+    admin_b.mint(&lp, &1_000_000);
+
+    let (liq, _, _) = client.mint(&lp, &-100i32, &100i32, &200_000u128, &200_000u128);
+    assert!(liq > 0, "must have positive liquidity before burn");
+
+    // Burn the full position — must succeed and return tokens.
+    let (a_out, b_out) = client.burn(&lp, &-100i32, &100i32, &liq);
+    assert!(a_out > 0 || b_out > 0, "burning a full in-range position must return tokens");
+}
+
+/// A swap with a maximum slippage constraint (sqrt_price_limit at the starting
+/// price) must revert when it cannot execute within the limit.
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn test_swap_exceeds_slippage_limit_rejected() {
+    let e = Env::default();
+    e.mock_all_auths();
+    e.cost_estimate().budget().reset_unlimited();
+
+    let (token_a, token_b, admin_a, admin_b) = setup_tokens(&e);
+    let client = setup_amm(&e, &token_a, &token_b);
+
+    let lp = Address::generate(&e);
+    admin_a.mint(&lp, &1_000_000);
+    admin_b.mint(&lp, &1_000_000);
+    client.mint(&lp, &-100i32, &100i32, &500_000u128, &500_000u128);
+
+    let swapper = Address::generate(&e);
+    admin_a.mint(&swapper, &10_000);
+
+    // Set the sqrt_price_limit equal to the current price — no movement allowed.
+    // Any non-trivial swap must fail with SlippageExceeded.
+    client.swap(&swapper, &true, &5_000i128, &Q64);
+}

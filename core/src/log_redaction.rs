@@ -72,6 +72,60 @@ impl LogRedactor {
     }
 }
 
+pub fn redact_endpoint(value: &str) -> String {
+    let Ok(mut url) = reqwest::Url::parse(value) else {
+        return "[REDACTED_ENDPOINT]".to_string();
+    };
+
+    if !url.username().is_empty() {
+        let _ = url.set_username("redacted");
+    }
+    if url.password().is_some() {
+        let _ = url.set_password(Some("redacted"));
+    }
+    if redact_sensitive_text(url.path()) != url.path() {
+        let _ = url.set_path("/[REDACTED]");
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
+}
+
+pub fn redact_sensitive_text(value: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    let sensitive_markers = [
+        "password",
+        "passphrase",
+        "secret",
+        "token",
+        "authorization",
+        "api-key",
+        "api_key",
+        "apikey",
+        "private_key",
+        "jwt",
+        "bearer",
+        "credential",
+        "access_token",
+        "refresh_token",
+        "cookie",
+        "://",
+    ];
+
+    if sensitive_markers
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        "[REDACTED]".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+pub fn redact_display(value: &impl std::fmt::Display) -> String {
+    redact_sensitive_text(&value.to_string())
+}
+
 fn extract_stellar_secret_keys(input: &str) -> Vec<String> {
     let mut keys = Vec::new();
     let chars: Vec<char> = input.chars().collect();

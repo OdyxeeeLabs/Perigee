@@ -1,17 +1,29 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { ChevronLeft, ChevronRight, Clock, CheckCircle, XCircle, Trash2 } from 'lucide-react';
-import { useTranslations } from 'next-intl';
-import { useInvocationHistory } from './InnovocationHistory';
-import type { InvocationResult } from '../lib/sorobantypes';
+import { useState } from "react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  CheckCircle,
+  XCircle,
+  Trash2,
+} from "lucide-react";
+import { useTranslations } from "next-intl";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
+import { CopyButton } from "./ui/CopyButton";
+import { useInvocationHistory } from "./InnovocationHistory";
+import type { InvocationResult } from "../lib/sorobantypes";
 
 interface InvocationHistorySidebarProps {
   onSelectResult: (result: InvocationResult) => void;
 }
 
 function formatTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function formatDate(timestamp: number, t: (key: string) => string): string {
@@ -20,36 +32,47 @@ function formatDate(timestamp: number, t: (key: string) => string): string {
   if (date.toDateString() === today.toDateString()) return t("history.today");
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
-  if (date.toDateString() === yesterday.toDateString()) return t("history.yesterday");
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  if (date.toDateString() === yesterday.toDateString())
+    return t("history.yesterday");
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-export function InvocationHistorySidebar({ onSelectResult }: InvocationHistorySidebarProps) {
+export function InvocationHistorySidebar({
+  onSelectResult,
+}: InvocationHistorySidebarProps) {
   const [isOpen, setIsOpen] = useState(true);
   const { history, clearHistory } = useInvocationHistory();
   const t = useTranslations();
+  const [confirmClear, setConfirmClear] = useState(false);
 
   return (
-    <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-start' }}>
+    <div
+      style={{
+        position: "relative",
+        display: "flex",
+        alignItems: "flex-start",
+      }}
+    >
       {/* Toggle button */}
       <button
+        id="invocation-history-toggle"
         onClick={() => setIsOpen((prev) => !prev)}
-        title={isOpen ? 'Hide history' : 'Show history'}
+        title={isOpen ? t("history.hide") : t("history.show")}
         style={{
-          position: 'absolute',
-          top: '16px',
-          left: '-14px',
+          position: "absolute",
+          top: "16px",
+          left: "-14px",
           zIndex: 10,
-          width: '28px',
-          height: '28px',
-          borderRadius: '50%',
-          backgroundColor: '#161b22',
-          border: '1px solid #30363d',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#8b949e',
+          width: "28px",
+          height: "28px",
+          borderRadius: "50%",
+          backgroundColor: "#161b22",
+          border: "1px solid #30363d",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#8b949e",
           flexShrink: 0,
         }}
       >
@@ -59,41 +82,47 @@ export function InvocationHistorySidebar({ onSelectResult }: InvocationHistorySi
       {isOpen && (
         <div
           style={{
-            width: '248px',
-            backgroundColor: '#161b22',
-            border: '1px solid #30363d',
-            borderRadius: '8px',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-            maxHeight: '680px',
+            width: "248px",
+            backgroundColor: "#161b22",
+            border: "1px solid #30363d",
+            borderRadius: "8px",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            maxHeight: "680px",
           }}
         >
           {/* Header */}
           <div
             style={{
-              padding: '12px 14px',
-              borderBottom: '1px solid #30363d',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
+              padding: "12px 14px",
+              borderBottom: "1px solid #30363d",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
               flexShrink: 0,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
               <Clock size={13} color="#8b949e" />
-              <span style={{ fontSize: '13px', fontWeight: '600', color: '#c9d1d9' }}>
+              <span
+                style={{
+                  fontSize: "13px",
+                  fontWeight: "600",
+                  color: "#c9d1d9",
+                }}
+              >
                 {t("history.title")}
               </span>
               {history.length > 0 && (
                 <span
                   style={{
-                    fontSize: '11px',
-                    backgroundColor: '#21262d',
-                    color: '#8b949e',
-                    borderRadius: '10px',
-                    padding: '1px 6px',
-                    lineHeight: '16px',
+                    fontSize: "11px",
+                    backgroundColor: "#21262d",
+                    color: "#8b949e",
+                    borderRadius: "10px",
+                    padding: "1px 6px",
+                    lineHeight: "16px",
                   }}
                 >
                   {history.length}
@@ -103,20 +132,26 @@ export function InvocationHistorySidebar({ onSelectResult }: InvocationHistorySi
 
             {history.length > 0 && (
               <button
-                onClick={clearHistory}
+                id="clear-history-button"
+                onClick={() => setConfirmClear(true)}
+                aria-label={t("history.clearAll")}
                 title={t("history.clearAll")}
                 style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: '#8b949e',
-                  padding: '2px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  borderRadius: '4px',
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "#8b949e",
+                  padding: "2px",
+                  display: "flex",
+                  alignItems: "center",
+                  borderRadius: "4px",
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = '#f85149'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = '#8b949e'; }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "#f85149";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "#8b949e";
+                }}
               >
                 <Trash2 size={12} />
               </button>
@@ -124,17 +159,21 @@ export function InvocationHistorySidebar({ onSelectResult }: InvocationHistorySi
           </div>
 
           {/* List */}
-          <div style={{ overflowY: 'auto', flex: 1 }}>
+          <div style={{ overflowY: "auto", flex: 1 }}>
             {history.length === 0 ? (
               <div
                 style={{
-                  padding: '40px 16px',
-                  textAlign: 'center',
-                  color: '#8b949e',
-                  fontSize: '12px',
+                  padding: "40px 16px",
+                  textAlign: "center",
+                  color: "#8b949e",
+                  fontSize: "12px",
                 }}
               >
-                <Clock size={22} color="#30363d" style={{ margin: '0 auto 10px', display: 'block' }} />
+                <Clock
+                  size={22}
+                  color="#30363d"
+                  style={{ margin: "0 auto 10px", display: "block" }}
+                />
                 {t("history.noAnalyses")}
               </div>
             ) : (
@@ -142,89 +181,139 @@ export function InvocationHistorySidebar({ onSelectResult }: InvocationHistorySi
                 const report = item.analysisReport ?? item.resourceCost;
 
                 return (
-                  <button
+                  <div
                     key={item.id}
-                    onClick={() => onSelectResult(item)}
+                    className="history-item-button"
                     style={{
-                      width: '100%',
-                      padding: '10px 14px',
-                      backgroundColor: 'transparent',
-                      border: 'none',
-                      borderBottom: index < history.length - 1 ? '1px solid #21262d' : 'none',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                      display: 'block',
-                      transition: 'background-color 0.12s',
+                      width: "100%",
+                      padding: "10px 14px",
+                      backgroundColor: "transparent",
+                      borderBottom:
+                        index < history.length - 1
+                          ? "1px solid #21262d"
+                          : "none",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "4px",
+                      transition: "background-color 0.12s",
                     }}
-                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#1c2128'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = "#1c2128";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = "transparent";
+                    }}
                   >
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-                      <div style={{ paddingTop: '1px', flexShrink: 0 }}>
-                        {item.success ? (
-                          <CheckCircle size={13} color="#3fb950" />
-                        ) : (
-                          <XCircle size={13} color="#f85149" />
-                        )}
-                      </div>
+                    <button
+                      type="button"
+                      onClick={() => onSelectResult(item)}
+                      aria-label={`${t("history.recent")}: ${item.functionName}`}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        padding: 0,
+                        background: "none",
+                        border: "none",
+                        textAlign: "left",
+                        cursor: "pointer",
+                        color: "inherit",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "8px",
+                          alignItems: "flex-start",
+                        }}
+                      >
+                        <div style={{ paddingTop: "1px", flexShrink: 0 }}>
+                          {item.success ? (
+                            <CheckCircle size={13} color="#3fb950" />
+                          ) : (
+                            <XCircle size={13} color="#f85149" />
+                          )}
+                        </div>
 
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <p
-                          style={{
-                            margin: '0 0 2px 0',
-                            fontSize: '12px',
-                            fontWeight: '500',
-                            color: '#c9d1d9',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {item.functionName}
-                        </p>
-
-                        <p style={{ margin: '0', fontSize: '11px', color: '#8b949e' }}>
-                          {formatDate(item.timestamp, t)} · {formatTime(item.timestamp)}
-                        </p>
-
-                        {report && item.success && (
+                        <div style={{ flex: 1, minWidth: 0 }}>
                           <p
                             style={{
-                              margin: '3px 0 0 0',
-                              fontSize: '11px',
-                              color: '#00d9ff',
-                              fontFamily: 'monospace',
+                              margin: "0 0 2px 0",
+                              fontSize: "12px",
+                              fontWeight: "500",
+                              color: "#c9d1d9",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
                             }}
                           >
-                            {(report.cpu_instructions / 1_000_000).toFixed(1)}M CPU
-                            {' · '}
-                            {(report.ram_bytes / 1024).toFixed(0)} KB
+                            {item.functionName}
                           </p>
-                        )}
 
-                        {item.error && (
                           <p
                             style={{
-                              margin: '3px 0 0 0',
-                              fontSize: '11px',
-                              color: '#f85149',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
+                              margin: "0",
+                              fontSize: "11px",
+                              color: "#8b949e",
                             }}
                           >
-                            {item.error}
+                            {formatDate(item.timestamp, t)} ·{" "}
+                            {formatTime(item.timestamp)}
                           </p>
-                        )}
+
+                          {report && item.success && (
+                            <p
+                              style={{
+                                margin: "3px 0 0 0",
+                                fontSize: "11px",
+                                color: "#00d9ff",
+                                fontFamily: "monospace",
+                              }}
+                            >
+                              {(report.cpu_instructions / 1_000_000).toFixed(1)}M{" "}
+                              {t("history.cpu")}
+                              {" · "}
+                              {(report.ram_bytes / 1024).toFixed(0)}{" "}
+                              {t("history.kb")}
+                            </p>
+                          )}
+
+                          {item.error && (
+                            <p
+                              style={{
+                                margin: "3px 0 0 0",
+                                fontSize: "11px",
+                                color: "#f85149",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {item.error}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                    <CopyButton value={item.id} label="transaction hash" />
+                  </div>
                 );
               })
             )}
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={confirmClear}
+        action={t("confirm.clearHistory")}
+        target={t("confirm.savedInvocations")}
+        consequence={t("confirm.clearHistoryConsequence")}
+        confirmLabel={t("history.clear")}
+        onConfirm={() => {
+          setConfirmClear(false);
+          clearHistory();
+        }}
+        onCancel={() => setConfirmClear(false)}
+      />
     </div>
   );
 }

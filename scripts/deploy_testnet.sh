@@ -77,6 +77,25 @@ for wasm in "$WASM_DIR"/*.wasm; do
     echo "$contract_name does not require initialization or requires arguments."
   fi
 
+  # Run the contract's bootstrapping self-test (perigee-bootstrap harness).
+  # A deployment is only accepted when the contract reports no failed checks;
+  # contracts without a self_test entry point are skipped with a warning.
+  self_test_out=$(stellar contract invoke \
+    --id "$CONTRACT_ID" \
+    --source-account "$SOURCE_ACCOUNT" \
+    --network "$NETWORK" \
+    -- self_test 2>/dev/null) || self_test_out=""
+
+  if [[ -z "$self_test_out" ]]; then
+    echo "warning: $contract_name exposes no self_test entry point; skipping bootstrap validation."
+  elif grep -q '"passed"[[:space:]]*:[[:space:]]*false' <<<"$self_test_out"; then
+    echo "error: $contract_name failed its bootstrap self-test:" >&2
+    echo "$self_test_out" >&2
+    exit 1
+  else
+    echo "$contract_name passed its bootstrap self-test."
+  fi
+
   deployed=$((deployed + 1))
 done
 

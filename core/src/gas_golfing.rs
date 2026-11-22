@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
@@ -18,10 +19,7 @@ pub struct GasGolfingSuggestion {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct GasGolfingReport {
     pub contract_name: String,
-    /// UTC Unix timestamp (seconds since 1970-01-01T00:00:00Z) of when
-    /// the analysis was generated. Standardised on UTC by project convention
-    /// (see CONTRIBUTING.md \u2014 Runtime conventions).
-    pub analysis_timestamp: u64,
+    pub analysis_timestamp: DateTime<Utc>,
     pub total_suggestions: usize,
     pub suggestions: Vec<GasGolfingSuggestion>,
     pub summary: HashMap<String, usize>, // pattern_type -> count
@@ -91,7 +89,7 @@ impl GasGolfingAnalyzer {
 
         GasGolfingReport {
             contract_name: contract_name.to_string(),
-            analysis_timestamp: chrono::Utc::now().timestamp() as u64,
+            analysis_timestamp: Utc::now(),
             total_suggestions: suggestions.len(),
             suggestions,
             summary,

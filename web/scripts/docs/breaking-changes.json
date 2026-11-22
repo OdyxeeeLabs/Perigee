@@ -1,0 +1,60 @@
+{
+  "$comment": "Hand-written source of truth for breaking changes. `from`/`to` name components that must resolve in the registry; the generator injects their props tables so the migration guide can never drift from the code.",
+  "releases": [
+    {
+      "version": "0.1.0",
+      "date": "2026-10-15",
+      "summary": "First published cut of the shared component library: the `ui/` primitives became the documented public surface.",
+      "changes": [
+        {
+          "id": "button-consolidation",
+          "title": "Button replaced CommonButton",
+          "severity": "breaking",
+          "component": "button",
+          "summary": "`components/common/Button` is superseded by `components/ui/Button`. `variant=\"primary\"` became `variant=\"default\"`, the `loading` prop folded into the native `disabled` attribute, and a `size` prop was added.",
+          "affects": ["common-button"],
+          "from": { "component": "CommonButton", "label": "Before — CommonButton" },
+          "to": { "component": "Button", "label": "After — Button" },
+          "mapping": [
+            { "from": "<CommonButton>Save</CommonButton>", "to": "<Button>Save</Button>" },
+            { "from": "<CommonButton variant=\"primary\">Save</CommonButton>", "to": "<Button variant=\"default\">Save</Button>" },
+            { "from": "<CommonButton variant=\"secondary\">Cancel</CommonButton>", "to": "<Button variant=\"secondary\">Cancel</Button>" },
+            { "from": "<CommonButton variant=\"outline\">Back</CommonButton>", "to": "<Button variant=\"outline\">Back</Button>" },
+            { "from": "<CommonButton loading>Saving…</CommonButton>", "to": "<Button disabled aria-busy>Saving…</Button>" }
+          ],
+          "notes": [
+            "`CommonButton` set `disabled` whenever `loading` was true, so the disabled mapping preserves behaviour exactly.",
+            "`size`, `ghost`, `link`, and `destructive` variants exist only on `Button`.",
+            "Update the import path as well as the JSX: `components/common/Button/Button` → `components/ui/Button`."
+          ],
+          "codemod": "sed -i \"s#components/common/Button/Button#components/ui/Button#g; s#\\bCommonButton\\b#Button#g\" $(git ls-files '*.tsx' '*.ts')"
+        }
+      ]
+    },
+    {
+      "version": "0.0.1",
+      "date": "2026-07-02",
+      "summary": "Pre-library baseline: status indicators were styled per screen and shared no API.",
+      "changes": [
+        {
+          "id": "badge-standardisation",
+          "title": "Ad-hoc status pills replaced by Badge",
+          "severity": "breaking",
+          "component": "badge",
+          "summary": "Per-screen pill markup was consolidated into `Badge`, which owns the colour variants and the audited contrast pairings. The previous `badge--green` / `badge--red` classes were removed.",
+          "affects": ["badge"],
+          "to": { "component": "Badge", "label": "After — Badge" },
+          "mapping": [
+            { "from": "<span className=\"badge--green\">Passed</span>", "to": "<Badge variant=\"success\">Passed</Badge>" },
+            { "from": "<span className=\"badge--red\">Over budget</span>", "to": "<Badge variant=\"danger\">Over budget</Badge>" },
+            { "from": "<span className=\"badge--amber\">Pending</span>", "to": "<Badge variant=\"warning\">Pending</Badge>" }
+          ],
+          "notes": [
+            "`Badge` has no `size` prop — density is inherited from the surrounding text.",
+            "Colour is never the only signal: keep a text label inside the pill (WEB-38 / #492)."
+          ]
+        }
+      ]
+    }
+  ]
+}

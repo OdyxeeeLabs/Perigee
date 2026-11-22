@@ -1,0 +1,174 @@
+name: Accessibility audit
+
+# Issue #705.
+#
+# Two jobs, and the split matters:
+#
+# 1. `static-audit` runs the dependency-free scanner. It is advisory by
+#    default — the repo has pre-existing findings that are baselined in
+#    docs/accessibility/audit-suite.md, and failing the build on them on the
+#    first run teaches everyone to ignore the check.
+#
+# 2. `declared-tooling` asserts that the accessibility tooling the codebase
+#    *claims* to have is actually installed. This exists because
+#    `pages/_app.tsx` imports `@axe-core/react`, which is in neither
+#    package.json nor yarn.lock; the import throws on every dev boot and the
+#    rejection is swallowed, so the dev-time axe integration has never run
+#    and nothing looked wrong. That failure mode is invisible, so it gets an
+#    explicit check.
+
+on:
+  pull_request:
+    paths:
+      - "web/**"
+      - ".github/workflows/a11y-audit.yml"
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a11y-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-audit:
+    name: Static accessibility audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Audit (advisory)
+        working-directory: web
+        # Advisory by design: reports, does not fail. Switch to --strict once
+        # the baselined findings below are cleared.
+        run: node scripts/a11y/static-audit.mjs --json > a11y-report.json
+
+      - name: Summarise
+        run: |
+          if [ ! -s web/a11y-report.json ]; then
+            echo "::warning::The audit produced no report; the scanner may have crashed."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, os
+          with open("web/a11y-report.json") as fh:
+              report = json.load(fh)
+          by_rule = report.get("byRule", {})
+          errors = report.get("errors", 0)
+          warnings = report.get("warnings", 0)
+          lines = [f"### Accessibility audit: {errors} error(s), {warnings} warning(s)", ""]
+          if by_rule:
+              lines += ["| rule | findings |", "| --- | --- |"]
+              lines += [f"| `{rule}` | {count} |" for rule, count in sorted(by_rule.items())]
+          else:
+              lines.append("No findings.")
+          summary = "\n".join(lines)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              fh.write(summary + "\n")
+          print(summary)
+          PY
+
+      - name: Fail on new violations (strict gate)
+        working-directory: web
+        # Opt-in gate: flip `STATIC_AUDIT_STRICT` to "true" in the repository
+        # variables once the baselined findings are fixed. Kept as a separate
+        # step so the report is published either way.
+        if: ${{ vars.STATIC_AUDIT_STRICT == 'true' }}
+        run: node scripts/a11y/static-audit.mjs --strict
+
+  a11y-unit-tests:
+    name: Accessibility logic tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # No install step here on purpose: every accessibility suite in
+      # web/lib/a11y is dependency-free `node:test`, so these run on the
+      # platform's own Node and cannot be broken by a lockfile change.
+      #
+      # The glob rather than a hardcoded list, so a suite added on one branch
+      # does not make this job fail on a branch that predates it.
+      - name: Run the accessibility suites
+        working-directory: web
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          suites=(./lib/a11y/*.test.cjs ./scripts/a11y/*.test.cjs)
+          if [ ${#suites[@]} -eq 0 ]; then
+            echo "::error::No accessibility suites found; the glob is wrong or they were deleted."
+            exit 1
+          fi
+          echo "Running ${#suites[@]} suite(s): ${suites[*]}"
+          node --test "${suites[@]}"
+
+  declared-tooling:
+    name: Accessibility tooling is declared
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report imported a11y tooling that is not declared
+        env:
+          # Advisory by default, for the same reason the static audit is: this
+          # gap exists on main and cannot be closed by a change that does not
+          # touch the lockfile, so a blocking check would sit red on every PR
+          # until someone regenerates it. The finding is still surfaced as an
+          # annotation on the PR and in the job log. Set
+          # `A11Y_TOOLING_STRICT=true` to make it blocking once the
+          # dependencies are actually added.
+          STRICT: ${{ vars.A11Y_TOOLING_STRICT }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys, pathlib
+
+          pkg = json.loads(pathlib.Path("web/package.json").read_text())
+          declared = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+
+          sources = list(pathlib.Path("web").rglob("*.ts")) + \
+                    list(pathlib.Path("web").rglob("*.tsx")) + \
+                    list(pathlib.Path("web").rglob("*.js")) + \
+                    list(pathlib.Path("web").rglob("*.mjs"))
+          sources = [p for p in sources if "node_modules" not in p.parts]
+
+          # Packages that are imported dynamically or statically and must be
+          # resolvable. Each maps to the issue that needs it.
+          wanted = {
+              "@axe-core/react": "#705 automated audit (dev-time axe)",
+              "@playwright/test": "#707 visual regression",
+          }
+
+          used = set()
+          for path in sources:
+              text = path.read_text(encoding="utf-8", errors="replace")
+              for name in wanted:
+                  if re.search(r"""["']""" + re.escape(name) + r"""["']""", text):
+                      used.add(name)
+
+          missing = sorted(n for n in used if n not in declared)
+          if not missing:
+              print("All imported accessibility tooling is declared.")
+              sys.exit(0)
+
+          level = "error" if os.environ.get("STRICT") == "true" else "warning"
+          print(f"::{level}::Imported but not declared in package.json:")
+          for name in missing:
+              owners = [k for k, v in wanted.items() if k == name][0]
+              print(f"  - {name} ({owners})")
+          print()
+          print("Either add the dependency and regenerate web/yarn.lock, or")
+          print("remove the import. An undeclared import that is caught and")
+          print("ignored looks identical to working tooling.")
+          if os.environ.get("STRICT") == "true":
+              sys.exit(1)
+          print()
+          print("Advisory: this gap predates the check and is closed by a")
+          print("lockfile change, which this job deliberately does not make.")
+          PY

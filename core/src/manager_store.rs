@@ -1,7 +1,13 @@
+use crate::auth::AuthenticatedUser;
+use crate::auth::Role;
+use crate::error_codes::ErrorCode;
+use crate::errors::{ApiJson, AppError};
 use crate::errors::AppError;
+use crate::input_sanitization::{SanitizedJson, SanitizedPath, SanitizedQuery};
 use crate::db;
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
+    extract::State,
     Json,
 };
 use chrono::Utc;
@@ -23,15 +29,33 @@ pub enum ManagerStoreError {
 
     #[error("Stellar address already registered: {0}")]
     DuplicateAddress(String),
+    #[error("Invalid manager state transition: {0}")]
+    InvalidTransition(String),
+    #[error("Unauthorized manager transition: {0}")]
+    UnauthorizedTransition(String),
 }
 
 impl From<ManagerStoreError> for AppError {
     fn from(err: ManagerStoreError) -> Self {
         match err {
-            ManagerStoreError::NotFound(msg) => AppError::NotFound(msg),
-            ManagerStoreError::InvalidData(msg) => AppError::BadRequest(msg),
-            ManagerStoreError::DuplicateAddress(msg) => AppError::Conflict(msg),
-            ManagerStoreError::Database(e) => AppError::Internal(e.to_string()),
+            ManagerStoreError::NotFound(msg) => {
+                AppError::with_code(ErrorCode::ManagerNotFound, msg)
+            }
+            ManagerStoreError::InvalidData(msg) => {
+                AppError::with_code(ErrorCode::InvalidInput, msg)
+            }
+            ManagerStoreError::DuplicateAddress(msg) => {
+                AppError::with_code(ErrorCode::ManagerAlreadyExists, msg)
+            }
+            ManagerStoreError::InvalidTransition(msg) => {
+                AppError::with_code(ErrorCode::StateMismatch, msg)
+            }
+            ManagerStoreError::UnauthorizedTransition(msg) => {
+                AppError::Forbidden(msg)
+            }
+            ManagerStoreError::Database(e) => {
+                AppError::with_code(ErrorCode::DatabaseError, e.to_string())
+            }
         }
     }
 }
@@ -134,15 +158,24 @@ impl ManagerStore {
         })
     }
 
+    /// All managers matching the status filter, for cursor pagination.
+    pub async fn list_all(
+        &self,
+        status_filter: Option<&str>,
+    ) -> Result<Vec<ManagerRecord>, ManagerStoreError> {
+        self.managers
+            .list(status_filter)
+            .await
+            .map_err(ManagerStoreError::Database)
+    }
+
     pub async fn approve(
         &self,
         id: &str,
         req: &ApproveManagerRequest,
     ) -> Result<ManagerRecord, ManagerStoreError> {
-        self.managers
-            .update_status(id, "approved", &req.notes, Utc::now())
+        self.transition(id, "approved", &Role::Admin, "system", req)
             .await
-            .map_err(ManagerStoreError::Database)
     }
 
     pub async fn reject(
@@ -150,10 +183,86 @@ impl ManagerStore {
         id: &str,
         req: &ApproveManagerRequest,
     ) -> Result<ManagerRecord, ManagerStoreError> {
-        self.managers
-            .update_status(id, "rejected", &req.notes, Utc::now())
+        self.transition(id, "rejected", &Role::Admin, "system", req)
             .await
-            .map_err(ManagerStoreError::Database)
+    }
+
+    pub async fn transition(
+        &self,
+        id: &str,
+        target_status: &str,
+        actor_role: &Role,
+        actor: &str,
+        req: &ApproveManagerRequest,
+    ) -> Result<ManagerRecord, ManagerStoreError> {
+        if *actor_role != Role::Admin {
+            return Err(ManagerStoreError::UnauthorizedTransition(
+                "Only administrators may approve or reject manager registrations".into(),
+            ));
+        }
+        if target_status != "approved" && target_status != "rejected" {
+            return Err(ManagerStoreError::InvalidTransition(format!(
+                "Unknown target status '{target_status}'"
+            )));
+        }
+
+        let reason = if !req.reason.trim().is_empty() {
+            req.reason.trim()
+        } else {
+            req.notes.trim()
+        };
+        if reason.chars().count() > 500 {
+            return Err(ManagerStoreError::InvalidData(
+                "administrative reason must be at most 500 characters".into(),
+            ));
+        }
+
+        let current = self.get(id).await?;
+        if current.status != "pending" {
+            return Err(ManagerStoreError::InvalidTransition(format!(
+                "Cannot transition manager from '{}' to '{}'",
+                current.status, target_status
+            )));
+        }
+
+        let result = self.managers
+            .update_status(id, "pending", target_status, reason, Utc::now())
+            .await
+            .map_err(ManagerStoreError::Database);
+
+        match result {
+            Ok(record) => {
+                let action = if target_status == "approved" {
+                    "manager.approved"
+                } else {
+                    "manager.rejected"
+                };
+                crate::audit_log::log_audit_event_with_reason(
+                    id,
+                    action,
+                    actor,
+                    (!reason.is_empty()).then_some(reason),
+                );
+                Ok(record)
+            }
+            Err(ManagerStoreError::Database(sqlx::Error::RowNotFound)) => {
+                Err(ManagerStoreError::InvalidTransition(format!(
+                    "Cannot transition manager from '{}' to '{}'",
+                    current.status, target_status
+                )))
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
+    if user.is_admin() {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "Administrator role is required".to_string(),
+        ))
     }
 }
 
@@ -170,7 +279,8 @@ impl ManagerStore {
 )]
 pub async fn register_manager_handler(
     State(state): State<Arc<crate::AppState>>,
-    Json(payload): Json<RegisterManagerRequest>,
+    ApiJson(payload): ApiJson<RegisterManagerRequest>,
+    SanitizedJson(payload): SanitizedJson<RegisterManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
     let manager = state.manager_store.register(&payload).await?;
     Ok(Json(manager))
@@ -180,33 +290,35 @@ pub async fn register_manager_handler(
     get,
     path = "/managers",
     params(
-        ("status" = Option<String>, Query, description = "Filter by status: pending, approved, rejected"),
-        ("page" = Option<u32>, Query, description = "Page number (1-indexed, default 1)"),
-        ("page_size" = Option<u32>, Query, description = "Records per page (default 50, max 200)")
+        ("filter[status]" = Option<String>, Query, description = "Filter by status: pending, approved, rejected"),
+        ("limit" = Option<u32>, Query, description = "Page size, 1-100 (default 25)"),
+        ("cursor" = Option<String>, Query, description = "Signed cursor from the previous page's next_cursor")
     ),
     responses(
-        (status = 200, description = "Paginated list of manager records", body = PagedResponse<ManagerRecord>)
+        (status = 200, description = "Cursor-paginated list of manager records"),
+        (status = 400, description = "Invalid limit, sort, filter or cursor")
     ),
     tag = "Managers"
 )]
 pub async fn list_managers_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Result<Json<crate::db::models::PagedResponse<ManagerRecord>>, AppError> {
-    let status_filter = params.get("status").map(|s| s.as_str());
+    SanitizedQuery(params): SanitizedQuery<std::collections::HashMap<String, String>>,
+) -> Result<Json<crate::pagination::Page<ManagerRecord>>, AppError> {
+    require_admin(&user)?;
+    let codec = crate::pagination::cursor_codec();
+    let pairs: Vec<(String, String)> = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let request = crate::pagination::PageRequest::parse(&crate::pagination::MANAGERS_LIST, codec, &pairs)?;
 
-    let page: u32 = params
-        .get("page")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
-    let page_size: u32 = params
-        .get("page_size")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50);
-
-    let pagination = crate::db::models::PaginationParams { page, page_size };
-    let result = state.manager_store.list(status_filter, &pagination).await?;
-    Ok(Json(result))
+    let rows = state
+        .manager_store
+        .list_all(request.filters.get("status").map(String::as_str))
+        .await?;
+    let page = crate::pagination::paginate_slice(&rows, &request, codec, |m| {
+        (m.created_at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true), m.id.clone())
+    })?;
+    Ok(Json(page))
 }
 
 #[utoipa::path(
@@ -221,8 +333,11 @@ pub async fn list_managers_handler(
 )]
 pub async fn get_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
 ) -> Result<Json<ManagerRecord>, AppError> {
+    require_admin(&user)?;
     let manager = state.manager_store.get(&id).await?;
     Ok(Json(manager))
 }
@@ -235,16 +350,25 @@ pub async fn get_manager_handler(
     responses(
         (status = 200, description = "Manager approved", body = ManagerRecord),
         (status = 400, description = "Invalid request"),
-        (status = 404, description = "Manager not found")
+        (status = 403, description = "Administrator role required"),
+        (status = 404, description = "Manager not found"),
+        (status = 409, description = "Invalid state transition")
     ),
     tag = "Managers"
 )]
 pub async fn approve_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
-    Json(payload): Json<ApproveManagerRequest>,
+    ApiJson(payload): ApiJson<ApproveManagerRequest>,
+    SanitizedPath(id): SanitizedPath<String>,
+    SanitizedJson(payload): SanitizedJson<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
-    let manager = state.manager_store.approve(&id, &payload).await?;
+    require_admin(&user)?;
+    let manager = state
+        .manager_store
+        .transition(&id, "approved", &Role::Admin, &user.stellar_address, &payload)
+        .await?;
     Ok(Json(manager))
 }
 
@@ -256,17 +380,48 @@ pub async fn approve_manager_handler(
     responses(
         (status = 200, description = "Manager rejected", body = ManagerRecord),
         (status = 400, description = "Invalid request"),
-        (status = 404, description = "Manager not found")
+        (status = 403, description = "Administrator role required"),
+        (status = 404, description = "Manager not found"),
+        (status = 409, description = "Invalid state transition")
     ),
     tag = "Managers"
 )]
 pub async fn reject_manager_handler(
     State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
-    Json(payload): Json<ApproveManagerRequest>,
+    ApiJson(payload): ApiJson<ApproveManagerRequest>,
+    SanitizedPath(id): SanitizedPath<String>,
+    SanitizedJson(payload): SanitizedJson<ApproveManagerRequest>,
 ) -> Result<Json<ManagerRecord>, AppError> {
-    let manager = state.manager_store.reject(&id, &payload).await?;
+    require_admin(&user)?;
+    let manager = state
+        .manager_store
+        .transition(&id, "rejected", &Role::Admin, &user.stellar_address, &payload)
+        .await?;
     Ok(Json(manager))
+}
+
+#[utoipa::path(
+    get,
+    path = "/managers/{id}/audit",
+    params(("id" = String, Path, description = "Manager ID")),
+    responses(
+        (status = 200, description = "Tamper-evident administrative transition audit entries", body = Vec<crate::audit_log::AuditEvent>),
+        (status = 403, description = "Administrator role required"),
+        (status = 404, description = "Manager not found")
+    ),
+    tag = "Managers"
+)]
+pub async fn manager_audit_handler(
+    State(state): State<Arc<crate::AppState>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
+) -> Result<Json<Vec<crate::audit_log::AuditEvent>>, AppError> {
+    require_admin(&user)?;
+    state.manager_store.get(&id).await?;
+    Ok(Json(crate::audit_log::global_entries_for_manager(&id)))
 }
 
 #[utoipa::path(
@@ -280,7 +435,7 @@ pub async fn reject_manager_handler(
 )]
 pub async fn check_manager_status_handler(
     State(state): State<Arc<crate::AppState>>,
-    Path(stellar_address): Path<String>,
+    SanitizedPath(stellar_address): SanitizedPath<String>,
 ) -> Result<Json<ManagerStatusResponse>, AppError> {
     let record = state
         .manager_store
@@ -340,7 +495,10 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        ManagerStore::new(db::schema::TypedSchema::new(std::sync::Arc::new(pool)).managers())
+        ManagerStore::new(
+            db::schema::TypedSchema::new(std::sync::Arc::new(db::MonitoredPool::from_inner(pool)))
+                .managers(),
+        )
     }
 
     #[tokio::test]
@@ -406,7 +564,7 @@ mod tests {
             .unwrap();
 
         let approved = store
-            .approve(&created.id, &ApproveManagerRequest { notes: "KYC verified".into() })
+            .approve(&created.id, &ApproveManagerRequest { notes: "KYC verified".into(), reason: "".into() })
             .await
             .unwrap();
         assert_eq!(approved.status, "approved");
@@ -429,12 +587,94 @@ mod tests {
             .unwrap();
 
         let rejected = store
-            .reject(&created.id, &ApproveManagerRequest { notes: "Failed KYC".into() })
+            .reject(&created.id, &ApproveManagerRequest { notes: "Failed KYC".into(), reason: "".into() })
             .await
             .unwrap();
         assert_eq!(rejected.status, "rejected");
 
         assert!(!store.is_approved("GABC123").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_manager_transitions() {
+        let store = test_store().await;
+        let created = store
+            .register(&RegisterManagerRequest {
+                stellar_address: "GTRANSITION".into(),
+                name: "Transition".into(),
+                email: "".into(),
+                kyc_document_ref: "".into(),
+            })
+            .await
+            .unwrap();
+
+        store
+            .approve(&created.id, &ApproveManagerRequest {
+                notes: "".into(),
+                reason: "KYC complete".into(),
+            })
+            .await
+            .unwrap();
+
+        let err = store
+            .reject(&created.id, &ApproveManagerRequest {
+                notes: "".into(),
+                reason: "Should not change approved status".into(),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, ManagerStoreError::InvalidTransition(_)));
+    }
+
+    #[tokio::test]
+    async fn rejects_non_admin_transitions_and_records_admin_audit() {
+        let store = test_store().await;
+        let created = store
+            .register(&RegisterManagerRequest {
+                stellar_address: "GAUDIT".into(),
+                name: "Audit".into(),
+                email: "".into(),
+                kyc_document_ref: "".into(),
+            })
+            .await
+            .unwrap();
+
+        let unauthorized = store
+            .transition(
+                &created.id,
+                "approved",
+                &Role::Manager,
+                "GMANAGER",
+                &ApproveManagerRequest {
+                    notes: "".into(),
+                    reason: "Not allowed".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(unauthorized, ManagerStoreError::UnauthorizedTransition(_)));
+
+        store
+            .transition(
+                &created.id,
+                "approved",
+                &Role::Admin,
+                "GADMIN",
+                &ApproveManagerRequest {
+                    notes: "".into(),
+                    reason: "Identity documents verified".into(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let entries = crate::audit_log::global_entries_for_manager(&created.id);
+        let entry = entries.last().expect("approval audit entry");
+        assert_eq!(entry.action, "manager.approved");
+        assert_eq!(entry.actor, "GADMIN");
+        assert_eq!(entry.reason.as_deref(), Some("Identity documents verified"));
+        assert!(crate::audit_log::verify_global_chain().is_ok());
     }
 
     #[tokio::test]
@@ -459,7 +699,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .approve(&m2.id, &ApproveManagerRequest { notes: "".into() })
+            .approve(&m2.id, &ApproveManagerRequest { notes: "".into(), reason: "".into() })
             .await
             .unwrap();
 

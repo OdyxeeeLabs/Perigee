@@ -8,7 +8,7 @@
 
 #![allow(clippy::unnecessary_cast)]
 
-use crate::fee_store::LedgerFeeSample;
+use crate::fee::persistence::LedgerFeeSample;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -477,7 +477,7 @@ pub(crate) fn integer_sqrt(n: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fee_store::LedgerFeeSample;
+    use crate::fee::persistence::LedgerFeeSample;
     use chrono::Utc;
 
     fn create_sample(ledger: i64, base_fee: i64) -> LedgerFeeSample {

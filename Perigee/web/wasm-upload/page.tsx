@@ -2,10 +2,16 @@ import WasmUpload from "../components/WasmUpload";
 
 export default function WasmUploadPage() {
   return (
-    <main className="min-h-screen bg-slate-50 py-12 px-4">
+    <main
+      className="min-h-screen bg-slate-50 py-12 px-4"
+      data-testid="wasm-upload-page"
+    >
       <div className="max-w-3xl mx-auto">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">
+          <h1
+            className="text-3xl font-bold text-slate-900 mb-2"
+            data-testid="wasm-upload-heading"
+          >
             Soroban Contract Upload
           </h1>
           <p className="text-slate-600">
@@ -28,7 +34,7 @@ export default function WasmUploadPage() {
                 size: f.file.size,
               }))
             );
-            // Here you'd navigate to the analysis dashboard or send to the core API
+            // Here you would navigate to the analysis dashboard or send to the core API
           }}
         />
       </div>

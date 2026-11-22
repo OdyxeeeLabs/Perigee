@@ -1,0 +1,81 @@
+name: Contracts — coverage
+
+# CONTRACT-41 (#535): generate a line-coverage report for every Soroban
+# contract crate in the workspace and fail the build when aggregate line
+# coverage drops below the threshold.
+#
+# The report is produced by `scripts/coverage.sh`, which drives
+# `cargo-tarpaulin` — the same coverage tool the existing fuzz workflow uses.
+# Report formats: cobertura XML (machine readable, drives the gate), LCOV, and
+# HTML. All three are uploaded as a workflow artefact.
+#
+# Threshold: defaults to 80% line coverage. Override it without touching code
+# by setting the repository variable `CONTRACT_COVERAGE_THRESHOLD`
+# (Settings → Secrets and variables → Actions → Variables).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/coverage.sh"
+      - ".github/workflows/contracts-coverage.yml"
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/coverage.sh"
+      - ".github/workflows/contracts-coverage.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contracts-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  contracts-coverage:
+    name: Contract coverage (≥ ${{ vars.CONTRACT_COVERAGE_THRESHOLD || '80' }}% lines)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      # Default threshold, overridable through a repository variable.
+      COVERAGE_THRESHOLD: ${{ vars.CONTRACT_COVERAGE_THRESHOLD || '80' }}
+      COVERAGE_OUTPUT_DIR: coverage-report
+      COVERAGE_PROFILE: coverage
+      COVERAGE_TIMEOUT: "300"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: contracts-coverage
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Generate coverage report & enforce threshold
+        run: bash scripts/coverage.sh
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contracts-coverage-report
+          path: coverage-report/
+          retention-days: 14

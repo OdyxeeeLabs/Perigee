@@ -1,0 +1,55 @@
+name: Contract resource budget
+
+# #886: report CPU-instruction and memory use of representative vault, strategy
+# and governance operations, and fail when one exceeds the committed baseline.
+# The numbers come from the Soroban host's deterministic cost model (no wall
+# clock), so a regression is reproducible and not flaky.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "scripts/resource_budget_guard.py"
+      - ".github/workflows/resource-budget.yml"
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "scripts/resource_budget_guard.py"
+      - ".github/workflows/resource-budget.yml"
+
+permissions:
+  contents: write # only used to commit a refreshed baseline back on `main`
+
+jobs:
+  budget:
+    name: Measure and guard resource use
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Measure and compare with baseline
+        # Prints one table (also written to the job summary) and exits non-zero
+        # when any operation is more than 5% over contracts/resource_budget/baseline.json.
+        run: python3 scripts/resource_budget_guard.py --tolerance 5
+
+      - name: Commit first baseline (main only, when none exists yet)
+        if: github.ref == 'refs/heads/main' && hashFiles('contracts/resource_budget/baseline.json') == ''
+        run: |
+          python3 scripts/resource_budget_guard.py --update
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add contracts/resource_budget/baseline.json
+          git commit -m "chore: record initial contract resource-budget baseline [skip ci]"
+          git push

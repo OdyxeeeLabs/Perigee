@@ -1,0 +1,6 @@
+# Generated component-library docs site (#709) — emitted by
+# `npm run docs:build`. Never edit these by hand, and never lint them.
+/public/component-docs/
+
+# Generated docs markdown + manifest.
+/docs/components/

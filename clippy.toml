@@ -1,0 +1,33 @@
+# clippy.toml — workspace-wide Clippy configuration
+#
+# These settings apply when running `cargo clippy` across the workspace.
+# CI should run: cargo clippy -- -D warnings
+#
+# Rules:
+#   clippy::unwrap_used  — prevents .unwrap() in production code; use
+#                          proper error propagation (? operator, map_err,
+#                          or unwrap_or_else with a descriptive message)
+#                          instead.  .unwrap() is still fine in tests.
+#
+#   clippy::expect_used  — same rationale as unwrap_used; replace .expect()
+#                          with explicit error propagation.  In the rare case
+#                          where a panic really is appropriate (e.g. programmer
+#                          invariants that cannot be violated), use
+#                          .unwrap_or_else(|e| panic!("context: {e}")) so the
+#                          message is always present in the panic output.
+#
+# To allow these lints on a per-expression basis (e.g. in tests) use the
+# inline attribute:
+#
+#   #[allow(clippy::unwrap_used)]
+#   let val = risky.unwrap();
+#
+# Or add a module-level allow at the top of a test module:
+#
+#   #[cfg(test)]
+#   #[allow(clippy::unwrap_used, clippy::expect_used)]
+#   mod tests { ... }
+
+# Applies to all crates that are linted via `cargo clippy` without
+# an explicit `--no-deps` flag.
+warn-by-default = true

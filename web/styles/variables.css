@@ -1,25 +1,45 @@
 :root {
   /* ==========================================
-     Brand Colors
+     Brand Colors — WCAG AA audited (WEB-38 / #492)
+     Normal text ≥ 4.5:1 · Large text / UI ≥ 3:1
      ========================================== */
 
-  --color-primary: #2563eb;
+  --color-primary: #2563eb; /* 5.17:1 on white with white text ✓ */
   --color-primary-hover: #1d4ed8;
+  /* Text/link color on dark surfaces (slate-950) — blue-400 ≈ 7.93:1 */
+  --color-primary-on-dark: #60a5fa;
 
-  --color-secondary: #64748b;
-  --color-secondary-hover: #475569;
+  --color-secondary: #475569; /* slate-600 — 7.58:1 on white ✓ */
+  --color-secondary-hover: #334155;
 
-  --color-success: #16a34a;
-  --color-warning: #f59e0b;
-  --color-danger: #dc2626;
+  /* green-700 — 5.02:1 on white (was green-600 @ 3.30:1 ✗) */
+  --color-success: #15803d;
+  /* amber-700 — 5.02:1 on white (was amber-500 @ 2.15:1 ✗) */
+  --color-warning: #b45309;
+  --color-danger: #b91c1c; /* red-700 — 6.47:1 on white ✓ */
+
+  /* On-dark semantic text (for badges / status on slate-950) */
+  --color-success-on-dark: #4ade80; /* green-400 */
+  --color-warning-on-dark: #fbbf24; /* amber-400 ≈ 12:1 */
+  --color-danger-on-dark: #f87171;  /* red-400 ≈ 7.3:1 */
 
   --color-background: #ffffff;
   --color-surface: #f8fafc;
 
-  --color-border: #e2e8f0;
+  /* slate-500 — 4.76:1 on white (UI non-text ≥ 3:1; was #e2e8f0 @ 1.23:1 ✗) */
+  --color-border: #64748b;
+  /* Was #94a3b8 — 2.56:1 on white, below the 3:1 non-text minimum.
+     gray-500 is 4.83:1 and still reads as a lighter divider. (#696) */
+  --color-border-subtle: #6b7280;
 
-  --color-text: #0f172a;
-  --color-text-muted: #64748b;
+  --color-text: #0f172a;       /* 17.85:1 on white ✓ */
+  --color-text-muted: #475569; /* 7.58:1 on white (was #64748b @ 4.76:1) */
+
+  /* Card tokens used by ui/card (`bg-card` / `text-card-foreground`) */
+  --color-card: #0f172a;            /* slate-900 — sits on slate-950 */
+  --color-card-foreground: #f1f5f9; /* slate-100 ≈ 18:1 on slate-900 ✓ */
+
+  --color-primary-foreground: #ffffff;
 
   /* ==========================================
      Radius
@@ -48,6 +68,21 @@
      Transition
      ========================================== */
 
+  /* ==========================================
+     Focus ring — WCAG 2.4.7 Focus Visible (#696)
+
+     The app shipped no :focus-visible styling at all, so keyboard users had
+     no indication of where they were. A single 2px ring token keeps the
+     indicator consistent and gives the high-contrast work (#701) one place
+     to override. The dark-surface ring is the on-dark counterpart, selected
+     by [data-theme="dark"].
+     ========================================== */
+
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color: #1d4ed8;      /* 8.2:1 on --color-background */
+  --focus-ring-color-dark: #93c5fd; /* 7.1:1 on slate-950 */
+
   --transition-fast: .15s ease;
 
   --transition-normal: .25s ease;
@@ -73,4 +108,55 @@
   --font-weight-semibold: 600;
 
   --font-weight-bold: 700;
+
+  /* ==========================================
+     Line Heights
+     ========================================== */
+
+  --line-height-tight: 1.25;
+
+  --line-height-snug: 1.375;
+
+  --line-height-normal: 1.5;
+
+  --line-height-relaxed: 1.625;
+
+  --line-height-loose: 2;
+
+  /* ==========================================
+     Spacing (layout-scale)
+     Referenced by tailwind.config.js spacing
+     extension — `space-section` / `space-component`.
+     ========================================== */
+
+  /* Major section padding / vertical rhythm between top-level sections */
+  --space-section: 4rem;
+
+  /* Padding / gap inside a component (card body, form group, etc.) */
+  --space-component: 1.5rem;
+
+  /* ==========================================
+     Z-Index
+     ========================================== */
+
+  /* Base stacking for sticky/pinned elements (table headers, side rails) */
+  --z-sticky: 10;
+
+  /* Dropdowns, tooltips, floating UI anchored to a trigger */
+  --z-dropdown: 100;
+
+  /* Fixed navigation bars, always-visible banners */
+  --z-navbar: 200;
+
+  /* Drawers / off-canvas side panels */
+  --z-drawer: 300;
+
+  /* Modal dialogs (overlay + panel) */
+  --z-modal: 400;
+
+  /* Toast / notification stack rendered above modals */
+  --z-toast: 500;
+
+  /* Absolute top: dev-tools, command palette overlay */
+  --z-top: 600;
 }

@@ -112,8 +112,10 @@ impl NoncePartition {
             .insert(candidate);
 
         if candidate >= NONCE_WARN_THRESHOLD {
+            let redacted_domain = crate::log_redaction::LogRedactor::new("perigee-log-redaction")
+                .redact_address(domain);
             tracing::warn!(
-                domain = domain,
+                domain = %redacted_domain,
                 nonce = candidate,
                 "Nonce range approaching exhaustion"
             );

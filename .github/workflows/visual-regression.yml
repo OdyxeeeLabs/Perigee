@@ -1,0 +1,106 @@
+name: Visual regression
+
+# Issue #707.
+#
+# Screenshots that protect accessibility states, not appearance: focus rings,
+# forced-colors, the high-contrast mapping, RTL, and the navigation layers
+# that trap focus.
+#
+# The job is gated on `@playwright/test` being declared. It is currently not in
+# package.json or yarn.lock — the same gap #705 found for `@axe-core/react`,
+# and `playwright.config.ts` already imports it undeclared. Rather than fail
+# with an opaque module-resolution error on every push, the gate explains the
+# situation and how to fix it.
+#
+# After `yarn add -D @playwright/test && yarn exec playwright install --with-deps chromium`
+# and `yarn playwright.visual:update` to record the baselines, flip
+# VISUAL_REGRESSION_REQUIRED to "true" in the repository variables to make this
+# job blocking.
+
+on:
+  pull_request:
+    paths:
+      - "web/**"
+      - ".github/workflows/visual-regression.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: visual-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Runner available
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: check
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+          pkg = json.loads(pathlib.Path("web/package.json").read_text())
+          declared = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+          if "@playwright/test" in declared:
+            print("available=true")
+          else:
+              print("available=false")
+              print("::notice::@playwright/test is not declared, so the visual suite is skipped. "
+                    "Add it with `yarn add -D @playwright/test`, then record baselines with "
+                    "`yarn playwright.visual:update`.")
+          PY
+
+  visual:
+    name: Visual baselines
+    needs: gate
+    if: needs.gate.outputs.available == 'true' && vars.VISUAL_REGRESSION_REQUIRED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Baselines are platform-specific by construction (see the
+      # snapshotPathTemplate comment), so the browser build is pinned to the
+      # one the baselines were recorded against.
+      - name: Install dependencies
+        working-directory: web
+        run: |
+          yarn install --immutable
+          yarn exec playwright install --with-deps chromium
+
+      - name: Build the app
+        working-directory: web
+        run: yarn build
+
+      - name: Start the server
+        working-directory: web
+        run: |
+          yarn start --port 3000 &
+          npx wait-on http://127.0.0.1:3000 --timeout 120000
+
+      - name: Run the visual suite
+        working-directory: web
+        env:
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+        run: yarn playwright playwright.visual.config.ts
+
+      - name: Upload diffs and the report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-diffs
+          path: |
+            web/playwright-report/
+            web/test-results/
+            web/e2e/visual/__screenshots__/**/*-diff.png
+            web/e2e/visual/__screenshots__/**/*-actual.png
+          retention-days: 7
+          if-no-files-found: ignore

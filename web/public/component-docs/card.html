@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Card · Perigee Web Component Library</title>
+<meta name="description" content="Panels that group related content and actions." />
+<meta name="generator" content="scripts/docs/generate.mjs" />
+<link rel="stylesheet" href="assets/docs.css" />
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+<p class="site-title"><a href="index.html">Perigee Web Component Library</a></p>
+<p class="meta">Component library docs · generated from source</p>
+<div class="grow"></div>
+<div class="control">
+<label for="version-select">Version</label>
+<select id="version-select" data-navigate><option value="index.html" selected>v0.1.0 (current)</option></select>
+</div>
+<div class="control">
+<label for="docs-search">Search docs</label>
+<input id="docs-search" type="search" autocomplete="off" placeholder="Button, accessibility…" aria-describedby="search-status" />
+</div>
+</header>
+<div class="layout">
+<nav class="site-nav" aria-label="Component library">
+<h2>Overview</h2>
+<ul>
+<li><a href="index.html">All components</a></li>
+<li><a href="migrations.html">Migration guide</a></li>
+<li><a href="versions.html">Versions</a></li>
+</ul>
+<h2>Actions</h2><ul><li><a href="button.html">Button</a></li></ul><h2>Data display</h2><ul><li><a href="badge.html">Badge</a></li><li><a href="data-table.html">DataTable</a></li></ul><h2>Feedback</h2><ul><li><a href="spinner.html">Spinner</a></li></ul><h2>Layout</h2><ul><li><a href="card.html" aria-current="page">Card</a></li></ul><h2>Accessibility</h2><ul><li><a href="live-region.html">Live regions</a></li></ul><h2>Legacy</h2><ul><li><a href="common-button.html">CommonButton</a></li></ul>
+</nav>
+<main id="content" tabindex="-1">
+<div id="search-results" hidden data-base="">
+<strong>Search results</strong>
+<p id="search-status" role="status" aria-live="polite"></p>
+<ul id="search-results-list"></ul>
+</div>
+<nav class="toc" aria-label="On this page"><h2>On this page</h2><ul><li><a href="#exports">Exports</a></li><li><a href="#card-2">Card</a></li><li><a href="#import">Import</a></li><li><a href="#props">Props</a></li><li><a href="#usage">Usage</a></li><li><a href="#composition">Composition</a></li><li><a href="#accessibility">Accessibility</a></li><li><a href="#card-header">CardHeader</a></li><li><a href="#import-2">Import</a></li><li><a href="#props-2">Props</a></li><li><a href="#card-title">CardTitle</a></li><li><a href="#import-3">Import</a></li><li><a href="#props-3">Props</a></li><li><a href="#card-description">CardDescription</a></li></ul></nav>
+<h1 id="card">Card</h1>
+<p><em>Layout · Panels that group related content and actions.</em></p>
+<p><strong>Page status:</strong> stable</p>
+<h2 id="exports">Exports</h2>
+<ul><li><a href="#component-card"><code>Card</code></a> — Surface container from the Perigee component library.</li><li><a href="#component-card-header"><code>CardHeader</code></a> — Header row of a — title and description, <code>p-6</code>.</li><li><a href="#component-card-title"><code>CardTitle</code></a> — Card heading.</li><li><a href="#component-card-description"><code>CardDescription</code></a> — Muted supporting text rendered directly below the .</li><li><a href="#component-card-content"><code>CardContent</code></a> — Body area of a ; <code>p-6</code> with the top padding removed.</li><li><a href="#component-card-footer"><code>CardFooter</code></a> — Action row at the bottom of a (buttons, links, metadata).</li></ul>
+<a id="component-card"></a>
+<h2 id="card-2"><code>Card</code></h2>
+<p><strong>Status:</strong> stable · <strong>Since:</strong> 0.1.0 · <strong>Source:</strong> <code>components/ui/card.tsx:47</code></p>
+<p>Surface container from the Perigee component library.</p>
+<p><code>Card</code> is a <em>layout</em> primitive only: it owns the border, radius, and background, and has no opinion about content. Compose it with the header / content / footer parts below so every panel in the app has identical spacing.</p>
+<h3 id="import">Import</h3>
+<pre tabindex="0"><code class="language-tsx">import { Card } from &#39;@/components/ui/card&#39;;</code></pre>
+<h3 id="props">Props</h3>
+<p><code>Card</code> declares no props of its own: every prop is forwarded to the underlying <code>&lt;div&gt;</code> element.</p>
+<h4 id="inherited-attributes">Inherited attributes</h4>
+<p><code>React.HTMLAttributes&lt;HTMLDivElement&gt;</code> — everything not listed above is spread onto the underlying <code>&lt;div&gt;</code>, including <code>id</code>, <code>style</code>, <code>onClick</code>, <code>aria-*</code>, and <code>data-*</code> attributes.</p>
+<h3 id="usage">Usage</h3>
+<pre tabindex="0"><code class="language-tsx">// Standard composed card
+&lt;Card&gt;
+  &lt;CardHeader&gt;
+    &lt;CardTitle&gt;Vault performance&lt;/CardTitle&gt;
+    &lt;CardDescription&gt;Since inception, net of fees.&lt;/CardDescription&gt;
+  &lt;/CardHeader&gt;
+  &lt;CardContent&gt;{children}&lt;/CardContent&gt;
+  &lt;CardFooter&gt;
+    &lt;Button variant=&quot;ghost&quot;&gt;View details&lt;/Button&gt;
+  &lt;/CardFooter&gt;
+&lt;/Card&gt;</code></pre>
+<h3 id="composition">Composition</h3>
+<p>The card is a compound component: every part is a plain <code>&lt;div&gt;</code> (or heading / paragraph for the title and description) that renders in order. Only <code>Card</code> itself adds visual chrome, so you can skip any part you do not need:</p>
+<ul><li><code>CardHeader</code> — flex column, <code>p-6</code>, tight vertical rhythm.</li><li><code>CardTitle</code> — renders an <code>&lt;h3&gt;</code>; keep one per card for a clean outline.</li><li><code>CardDescription</code> — muted paragraph that sits under the title.</li><li><code>CardContent</code> — body area, <code>p-6</code> with the top padding removed.</li><li><code>CardFooter</code> — horizontal row for actions, <code>p-6</code> with the top padding removed.</li></ul>
+<h3 id="accessibility">Accessibility</h3>
+<ul><li><code>Card</code> accepts focus styling (<code>focus-visible:ring-2</code>) but is not focusable by default: only add <code>tabIndex</code> when the card itself is interactive, and prefer putting a real <code>&lt;button&gt;</code> inside <code>CardFooter</code>.</li><li>Parts are plain containers, so heading order comes from your page, not from the component — <code>CardTitle</code> renders <code>&lt;h3&gt;</code>; do not skip heading levels.</li><li>Cards are <code>role=&quot;group&quot;</code>-free by default. When a card forms a labelled region, pass <code>role=&quot;group&quot;</code> and <code>aria-labelledby</code> pointing at the title.</li></ul>
+<a id="component-card-header"></a>
+<h2 id="card-header"><code>CardHeader</code></h2>
+<p><strong>Status:</strong> stable · <strong>Source:</strong> <code>components/ui/card.tsx:64</code></p>
+<p>Header row of a  — title and description, <code>p-6</code>.</p>
+<h3 id="import-2">Import</h3>
+<pre tabindex="0"><code class="language-tsx">import { CardHeader } from &#39;@/components/ui/card&#39;;</code></pre>
+<h3 id="props-2">Props</h3>
+<p><code>CardHeader</code> declares no props of its own: every prop is forwarded to the underlying <code>&lt;div&gt;</code> element.</p>
+<h4 id="inherited-attributes-2">Inherited attributes</h4>
+<p><code>React.HTMLAttributes&lt;HTMLDivElement&gt;</code> — everything not listed above is spread onto the underlying <code>&lt;div&gt;</code>, including <code>id</code>, <code>style</code>, <code>onClick</code>, <code>aria-*</code>, and <code>data-*</code> attributes.</p>
+<a id="component-card-title"></a>
+<h2 id="card-title"><code>CardTitle</code></h2>
+<p><strong>Status:</strong> stable · <strong>Source:</strong> <code>components/ui/card.tsx:77</code></p>
+<p>Card heading. Renders an <code>&lt;h3&gt;</code>; use one per card to keep the outline valid.</p>
+<h3 id="import-3">Import</h3>
+<pre tabindex="0"><code class="language-tsx">import { CardTitle } from &#39;@/components/ui/card&#39;;</code></pre>
+<h3 id="props-3">Props</h3>
+<p><code>CardTitle</code> declares no props of its own: every prop is forwarded to the underlying <code>&lt;h3&gt;</code> element.</p>
+<h4 id="inherited-attributes-3">Inherited attributes</h4>
+<p><code>React.HTMLAttributes&lt;HTMLHeadingElement&gt;</code> — everything not listed above is spread onto the underlying <code>&lt;h3&gt;</code>, including <code>id</code>, <code>style</code>, <code>onClick</code>, <code>aria-*</code>, and <code>data-*</code> attributes.</p>
+<a id="component-card-description"></a>
+<h2 id="card-description"><code>CardDescription</code></h2>
+<p><strong>Status:</strong> stable · <strong>Source:</strong> <code>components/ui/card.tsx:93</code></p>
+<p>Muted supporting text rendered directly below the .</p>
+<h3 id="import-4">Import</h3>
+<pre tabindex="0"><code class="language-tsx">import { CardDescription } from &#39;@/components/ui/card&#39;;</code></pre>
+<h3 id="props-4">Props</h3>
+<p><code>CardDescription</code> declares no props of its own: every prop is forwarded to the underlying <code>&lt;p&gt;</code> element.</p>
+<h4 id="inherited-attributes-4">Inherited attributes</h4>
+<p><code>React.HTMLAttributes&lt;HTMLParagraphElement&gt;</code> — everything not listed above is spread onto the underlying <code>&lt;p&gt;</code>, including <code>id</code>, <code>style</code>, <code>onClick</code>, <code>aria-*</code>, and <code>data-*</code> attributes.</p>
+<a id="component-card-content"></a>
+<h2 id="card-content"><code>CardContent</code></h2>
+<p><strong>Status:</strong> stable · <strong>Source:</strong> <code>components/ui/card.tsx:102</code></p>
+<p>Body area of a ; <code>p-6</code> with the top padding removed.</p>
+<h3 id="import-5">Import</h3>
+<pre tabindex="0"><code class="language-tsx">import { CardContent } from &#39;@/components/ui/card&#39;;</code></pre>
+<h3 id="props-5">Props</h3>
+<p><code>CardContent</code> declares no props of its own: every prop is forwarded to the underlying <code>&lt;div&gt;</code> element.</p>
+<h4 id="inherited-attributes-5">Inherited attributes</h4>
+<p><code>React.HTMLAttributes&lt;HTMLDivElement&gt;</code> — everything not listed above is spread onto the underlying <code>&lt;div&gt;</code>, including <code>id</code>, <code>style</code>, <code>onClick</code>, <code>aria-*</code>, and <code>data-*</code> attributes.</p>
+<a id="component-card-footer"></a>
+<h2 id="card-footer"><code>CardFooter</code></h2>
+<p><strong>Status:</strong> stable · <strong>Source:</strong> <code>components/ui/card.tsx:111</code></p>
+<p>Action row at the bottom of a  (buttons, links, metadata).</p>
+<h3 id="import-6">Import</h3>
+<pre tabindex="0"><code class="language-tsx">import { CardFooter } from &#39;@/components/ui/card&#39;;</code></pre>
+<h3 id="props-6">Props</h3>
+<p><code>CardFooter</code> declares no props of its own: every prop is forwarded to the underlying <code>&lt;div&gt;</code> element.</p>
+<h4 id="inherited-attributes-6">Inherited attributes</h4>
+<p><code>React.HTMLAttributes&lt;HTMLDivElement&gt;</code> — everything not listed above is spread onto the underlying <code>&lt;div&gt;</code>, including <code>id</code>, <code>style</code>, <code>onClick</code>, <code>aria-*</code>, and <code>data-*</code> attributes.</p>
+<h2 id="related">Related</h2>
+<ul><li><a href="button.html">Button</a></li><li><a href="data-table.html">DataTable</a></li></ul>
+<hr />
+<p><a href="index.html">← All components</a> · <a href="migrations.html">Migration guide</a> · Documented at v0.1.0</p>
+<p class="page-footer">Generated from v0.1.0 by <code>npm run docs:build</code>. Edit the component source or <code>scripts/docs/registry.mjs</code>, never this file.</p>
+</main>
+</div>
+<script src="assets/docs.js" defer></script>
+</body>
+</html>

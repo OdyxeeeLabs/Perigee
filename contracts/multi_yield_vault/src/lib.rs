@@ -2,7 +2,9 @@
 //! # Multi-Yield Aggregator Vault
 //!
 //! Accepts a single deposit token and splits/rebalances it across up to
-//! `MAX_POOLS` registered Soroban AMM pools to maximise yield.
+//! `MAX_POOLS` registered Soroban AMM pools to maximise yield. Deposits must be
+//! at least [`MIN_DEPOSIT`] units of the deposit token, where units are the
+//! token's smallest indivisible denomination.
 //!
 //! ## APR estimation
 //! Each registered pool exposes `reserve_a`, `reserve_b`, and `fee_bps`.
@@ -107,6 +109,8 @@ pub enum DataKey {
 
 pub const MAX_POOLS: u32 = 8;
 pub const TTL_LEDGERS: u32 = 17_280;
+/// Minimum accepted deposit, in the deposit token's smallest units.
+pub const MIN_DEPOSIT: i128 = 1_000;
 pub const DEFAULT_SLIPPAGE_BPS: i128 = 100; // 1 %
 pub const DEFAULT_VOLUME_PROXY_BPS: i128 = 10_000; // 100 % of reserve
 
@@ -239,10 +243,10 @@ impl MultiYieldVault {
 
     // ── User deposit / withdraw ───────────────────────────────────────────────
 
-    /// Deposit `amount` of the deposit token.  Funds are routed to the
-    /// highest-APR registered pool.  Returns vault shares minted.
+    /// Deposit at least [`MIN_DEPOSIT`] units of the deposit token. Funds are
+    /// routed to the highest-APR registered pool. Returns vault shares minted.
     pub fn deposit(e: Env, from: Address, amount: i128) -> Result<i128, Error> {
-        if amount <= 0 {
+        if amount < MIN_DEPOSIT {
             return Err(Error::InvalidAmount);
         }
         from.require_auth();

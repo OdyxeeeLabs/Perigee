@@ -6,13 +6,16 @@
 
 use crate::auth::AuthenticatedUser;
 use crate::db;
+use crate::error_codes::ErrorCode;
+use crate::errors::{ApiJson, AppError};
 use crate::errors::AppError;
+use crate::input_sanitization::{SanitizedJson, SanitizedPath, SanitizedQuery};
 use axum::{
-    extract::{Extension, Path, Query, State},
+    extract::{Extension, State},
     Json,
 };
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
 use utoipa::ToSchema;
@@ -34,6 +37,12 @@ pub enum VaultStoreError {
 
     #[error("Invalid data: {0}")]
     InvalidData(String),
+
+    /// The policy configuration failed BE-033 validation (issue #270):
+    /// structured so the caller can branch on the specific rule that broke
+    /// instead of parsing a message.
+    #[error("Invalid vault policy configuration: {0}")]
+    InvalidPolicy(#[from] crate::vault_validation::VaultValidationError),
 }
 
 impl From<crate::policy_expiry::PolicyExpiryError> for AppError {
@@ -56,15 +65,31 @@ impl From<crate::policy_expiry::PolicyExpiryError> for AppError {
 impl From<VaultStoreError> for AppError {
     fn from(err: VaultStoreError) -> Self {
         match err {
-            VaultStoreError::NotFound(msg) => AppError::NotFound(msg),
+            VaultStoreError::NotFound(msg) => {
+                AppError::with_code(ErrorCode::VaultNotFound, msg)
+            }
             VaultStoreError::Conflict {
                 vault_id,
                 expected_version,
-            } => AppError::Conflict(format!(
-                "Vault '{vault_id}' was updated by another request (expected version {expected_version}); reload and retry"
-            )),
-            VaultStoreError::InvalidData(msg) => AppError::BadRequest(msg),
-            VaultStoreError::Database(e) => AppError::Internal(e.to_string()),
+            } => AppError::with_code(
+                ErrorCode::Conflict,
+                format!(
+                    "Vault '{vault_id}' was updated by another request (expected version {expected_version}); reload and retry"
+                ),
+            ),
+            VaultStoreError::InvalidData(msg) => {
+                AppError::with_code(ErrorCode::InvalidInput, msg)
+            }
+
+            // BE-033 (#270): a policy that cannot be internally consistent is
+            // a 400 with a stable code appended, not a 500.
+            VaultStoreError::InvalidPolicy(err) => AppError::with_code(
+                ErrorCode::ValidationFailed,
+                format!("{err} [{}]", err.code()),
+            ),
+            VaultStoreError::Database(e) => {
+                AppError::with_code(ErrorCode::DatabaseError, e.to_string())
+            }
         }
     }
 }
@@ -97,25 +122,16 @@ impl VaultStore {
             ));
         }
 
-        // Idempotency: if a key is provided and non-empty, return the existing vault
-        // for the same (manager_id, idempotency_key) pair.
+        // BE-033 (#270): a policy is only worth storing if it is internally
+        // consistent — allowed assets present, fee in range, high-water mark
+        // seeded from the deposit. Rejected before the row is written.
+        crate::vault_validation::validate_policy_config(req.config_json.trim())?;
+
         let idempotency_key = req
             .idempotency_key
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty());
-
-        if let Some(key) = idempotency_key {
-            if let Some(vault) = self
-                .vaults
-                .find_by_idempotency_key(req.manager_id.trim(), key)
-                .await
-                .map_err(VaultStoreError::Database)?
-            {
-                return Ok(vault);
-            }
-        }
-
         let id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let manager_id = req.manager_id.trim();
@@ -124,7 +140,7 @@ impl VaultStore {
         let config_json = req.config_json.trim();
 
         self.vaults
-            .insert(
+            .create_idempotent(
                 &id,
                 manager_id,
                 name,
@@ -164,6 +180,19 @@ impl VaultStore {
         })
     }
 
+    /// Active vaults of one manager (bounded at 10 000 rows) for cursor pagination.
+    pub async fn list_all_by_manager(
+        &self,
+        manager_id: &str,
+    ) -> Result<Vec<VaultRecord>, VaultStoreError> {
+        let (rows, _) = self
+            .vaults
+            .list_by_manager_paginated(manager_id, 10_000, 0)
+            .await
+            .map_err(VaultStoreError::Database)?;
+        Ok(rows)
+    }
+
     pub async fn get(&self, id: &str) -> Result<VaultRecord, VaultStoreError> {
         self.vaults
             .find_by_id(id)
@@ -193,6 +222,13 @@ impl VaultStore {
             .map(str::trim)
             .filter(|s| !s.is_empty());
         let config_json = req.config_json.as_deref();
+
+        // Same rule on the write path: an update that supplies a new config
+        // must supply a consistent one (BE-033 / #270).
+        if let Some(config_json) = config_json {
+            crate::vault_validation::validate_policy_config(config_json)?;
+        }
+
         let now = Utc::now();
 
         let result = self
@@ -280,6 +316,16 @@ async fn verify_ownership(
     user: &AuthenticatedUser,
     manager_id: &str,
 ) -> Result<(), AppError> {
+    if user.is_admin() {
+        return Ok(());
+    }
+
+    if (user.role == crate::auth::Role::Operator || user.role == crate::auth::Role::Viewer)
+        && !user.vault_scopes.is_empty()
+    {
+        return Ok(());
+    }
+
     let manager = state
         .manager_store
         .find_by_stellar_address(&user.stellar_address)
@@ -317,7 +363,7 @@ fn list_vaults_default_page_size() -> u32 {
     50
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct ListVaultsQuery {
     pub manager_id: String,
     #[serde(default = "list_vaults_default_page")]
@@ -333,12 +379,15 @@ pub struct ListVaultsQuery {
     path = "/vaults",
     params(
         ("manager_id" = String, Query, description = "Manager ID to list vaults for"),
-        ("page" = Option<u32>, Query, description = "Page number (1-indexed, default 1)"),
-        ("page_size" = Option<u32>, Query, description = "Records per page (default 50, max 200)")
+        ("limit" = Option<u32>, Query, description = "Page size, 1-100 (default 25)"),
+        ("cursor" = Option<String>, Query, description = "Signed cursor from the previous page's next_cursor"),
+        ("sort" = Option<String>, Query, description = "created_at or name; prefix - for descending")
     ),
     responses(
-        (status = 200, description = "Paginated list of vaults for the manager", body = PagedResponse<VaultRecord>),
-        (status = 401, description = "Unauthorized")
+        (status = 200, description = "Cursor-paginated list of vaults for the manager"),
+        (status = 400, description = "Invalid limit, sort, filter or cursor"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden")
     ),
     security(
         ("bearerAuth" = []),
@@ -349,18 +398,35 @@ pub struct ListVaultsQuery {
 pub async fn list_vaults_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Query(query): Query<ListVaultsQuery>,
-) -> Result<Json<crate::db::models::PagedResponse<VaultRecord>>, AppError> {
-    verify_ownership(&state, &user, &query.manager_id).await?;
-    let pagination = crate::db::models::PaginationParams {
-        page: query.page,
-        page_size: query.page_size,
-    };
-    let result = state
-        .vault_store
-        .list_by_manager(&query.manager_id, &pagination)
-        .await?;
-    Ok(Json(result))
+    SanitizedQuery(params): SanitizedQuery<std::collections::HashMap<String, String>>,
+) -> Result<Json<crate::pagination::Page<VaultRecord>>, AppError> {
+    user.authorize_vault_read("*")?;
+    let manager_id = params
+        .get("manager_id")
+        .ok_or_else(|| AppError::BadRequest("manager_id is required".into()))?;
+    verify_ownership(&state, &user, manager_id).await?;
+
+    let codec = crate::pagination::cursor_codec();
+    let pairs: Vec<(String, String)> = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let request = crate::pagination::PageRequest::parse(&crate::pagination::VAULTS_LIST, codec, &pairs)?;
+
+    let mut rows = state.vault_store.list_all_by_manager(manager_id).await?;
+    if let Some(status) = request.filters.get("status") {
+        rows.retain(|v| &v.status == status);
+    }
+    if !user.can_access_all_vaults() {
+        rows.retain(|v| user.can_access_vault(&v.id));
+    }
+    let by_name = request.sort.field == "name";
+    let page = crate::pagination::paginate_slice(&rows, &request, codec, |v| {
+        let value = if by_name {
+            v.name.clone()
+        } else {
+            v.created_at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+        };
+        (value, v.id.clone())
+    })?;
+    Ok(Json(page))
 }
 
 #[utoipa::path(
@@ -370,7 +436,8 @@ pub async fn list_vaults_handler(
     responses(
         (status = 200, description = "Vault created", body = VaultRecord),
         (status = 400, description = "Invalid request"),
-        (status = 401, description = "Unauthorized")
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden: Insufficient privileges or vault-scoped restriction")
     ),
     security(
         ("bearerAuth" = []),
@@ -381,15 +448,33 @@ pub async fn list_vaults_handler(
 pub async fn create_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Json(payload): Json<CreateVaultRequest>,
+    ApiJson(payload): ApiJson<CreateVaultRequest>,
+    SanitizedJson(payload): SanitizedJson<CreateVaultRequest>,
 ) -> Result<Json<VaultRecord>, AppError> {
+    if !user.can_manage_vaults() {
+        crate::audit_log::log_security_event(
+            crate::audit_log::SecurityEventType::VaultAccessDenied,
+            Some(&user.stellar_address),
+            None,
+            None,
+            Some("Role not authorized to create vaults"),
+        );
+        return Err(AppError::Forbidden(
+            format!("Role '{}' is not authorized to create vaults", user.role)
+        ));
+    }
+    if !user.can_access_all_vaults() {
+        return Err(AppError::Forbidden(
+            "Vault-scoped token is not authorized to create new vaults".into(),
+        ));
+    }
     verify_ownership(&state, &user, &payload.manager_id).await?;
     let approved = state
         .manager_store
         .is_approved(&user.stellar_address)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
-    if !approved {
+    if !approved && !user.is_admin() {
         crate::audit_log::log_security_event(
             crate::audit_log::SecurityEventType::VaultAccessDenied,
             Some(&user.stellar_address),
@@ -417,6 +502,7 @@ pub async fn create_vault_handler(
     responses(
         (status = 200, description = "Vault record", body = VaultRecord),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden: Vault scope not authorized"),
         (status = 404, description = "Vault not found")
     ),
     security(
@@ -428,8 +514,9 @@ pub async fn create_vault_handler(
 pub async fn get_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
 ) -> Result<Json<VaultRecord>, AppError> {
+    user.authorize_vault_read(&id)?;
     let vault = state.vault_store.get(&id).await?;
     verify_ownership(&state, &user, &vault.manager_id).await?;
     Ok(Json(vault))
@@ -443,6 +530,7 @@ pub async fn get_vault_handler(
     responses(
         (status = 200, description = "Vault updated (version bumped)", body = VaultRecord),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden: Insufficient privileges or vault scope not authorized"),
         (status = 404, description = "Vault not found"),
         (status = 409, description = "Optimistic lock conflict — reload and retry")
     ),
@@ -456,8 +544,11 @@ pub async fn update_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
-    Json(payload): Json<UpdateVaultRequest>,
+    ApiJson(payload): ApiJson<UpdateVaultRequest>,
+    SanitizedPath(id): SanitizedPath<String>,
+    SanitizedJson(payload): SanitizedJson<UpdateVaultRequest>,
 ) -> Result<Json<VaultRecord>, AppError> {
+    user.authorize_vault_write(&id)?;
     let vault = state.vault_store.get(&id).await?;
     verify_ownership(&state, &user, &vault.manager_id).await?;
 
@@ -477,23 +568,24 @@ pub async fn update_vault_handler(
 
 /// Gate a handler on admin privileges.
 ///
-/// There is no admin role in the JWT claims today, so admin authority is an
-/// allow-list of Stellar addresses sourced from the `PERIGEE_ADMIN_STELLAR_ADDRESSES`
-/// environment variable (comma-separated). Requests from any other address are
-/// rejected with `401 Unauthorized`. (BE-044 / issue #281.)
+/// Admin authority is determined by the `Admin` role in JWT claims or the
+/// `PERIGEE_ADMIN_STELLAR_ADDRESSES` environment variable (comma-separated).
+/// Requests without admin authority are rejected with `403 Forbidden`.
 fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
-    let allowed = std::env::var("PERIGEE_ADMIN_STELLAR_ADDRESSES").unwrap_or_default();
-    let is_admin = allowed
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .any(|addr| addr == user.stellar_address);
-    if is_admin {
+    if user.is_admin() {
         Ok(())
     } else {
-        Err(AppError::Unauthorized(
-            "Admin privileges required to perform this action".into(),
-        ))
+        // Authorization denial: the caller authenticated, but lacks the admin
+        // privilege this operation requires. Record it as a security audit
+        // event so privileged-access attempts are traceable (issue #399).
+        crate::audit_log::log_security_event(
+            crate::audit_log::SecurityEventType::AuthorizationDenied,
+            Some(&user.stellar_address),
+            None,
+            None,
+            Some("Admin privileges required to perform this action"),
+        );
+        crate::role_guard::require(user, crate::role_guard::Permission::ProtocolAdmin)
     }
 }
 
@@ -504,6 +596,7 @@ fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
     responses(
         (status = 200, description = "Vault soft-deleted", body = VaultRecord),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden: Insufficient privileges or vault scope not authorized"),
         (status = 404, description = "Vault not found")
     ),
     security(
@@ -515,8 +608,9 @@ fn require_admin(user: &AuthenticatedUser) -> Result<(), AppError> {
 pub async fn soft_delete_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
 ) -> Result<Json<VaultRecord>, AppError> {
+    user.authorize_vault_manage(&id)?;
     // Ownership is checked against the (possibly deleted) vault so the owner can
     // still delete their own vault.
     let vault = state.vault_store.get_including_deleted(&id).await?;
@@ -545,7 +639,7 @@ pub async fn soft_delete_vault_handler(
 pub async fn restore_vault_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(id): Path<String>,
+    SanitizedPath(id): SanitizedPath<String>,
 ) -> Result<Json<VaultRecord>, AppError> {
     require_admin(&user)?;
     let vault = state.vault_store.restore(&id).await?;
@@ -553,7 +647,7 @@ pub async fn restore_vault_handler(
     Ok(Json(vault))
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct ListDeletedVaultsQuery {
     /// Optional manager to scope the listing to.
     pub manager_id: Option<String>,
@@ -585,7 +679,7 @@ pub struct ListDeletedVaultsQuery {
 pub async fn list_deleted_vaults_handler(
     State(state): State<Arc<crate::AppState>>,
     Extension(user): Extension<AuthenticatedUser>,
-    Query(query): Query<ListDeletedVaultsQuery>,
+    SanitizedQuery(query): SanitizedQuery<ListDeletedVaultsQuery>,
 ) -> Result<Json<crate::db::models::PagedResponse<VaultRecord>>, AppError> {
     require_admin(&user)?;
     let pagination = crate::db::models::PaginationParams {
@@ -627,6 +721,7 @@ pub async fn list_deleted_vaults_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vault_validation::VaultValidationError;
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn test_store() -> VaultStore {
@@ -656,7 +751,43 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        VaultStore::new(db::schema::TypedSchema::new(std::sync::Arc::new(pool)).vaults())
+        VaultStore::new(
+            db::schema::TypedSchema::new(std::sync::Arc::new(db::MonitoredPool::from_inner(pool)))
+                .vaults(),
+        )
+    }
+
+    #[test]
+    fn require_admin_enforces_the_allowlist() {
+        // Env vars are process-global; serialize with the shared env guard.
+        let _env = crate::errors::env_guard();
+        let previous = std::env::var("PERIGEE_ADMIN_STELLAR_ADDRESSES").ok();
+        unsafe {
+            std::env::set_var("PERIGEE_ADMIN_STELLAR_ADDRESSES", "GADMIN, G2");
+        }
+
+        let admin = AuthenticatedUser {
+            stellar_address: "GADMIN".into(),
+        };
+        let non_admin = AuthenticatedUser {
+            stellar_address: "GOTHER".into(),
+        };
+
+        assert!(require_admin(&admin).is_ok(), "allow-listed caller passes");
+        // A denial must also be recorded as an authorization security event.
+        assert!(
+            require_admin(&non_admin).is_err(),
+            "non-admin caller is denied"
+        );
+
+        match previous {
+            Some(value) => unsafe {
+                std::env::set_var("PERIGEE_ADMIN_STELLAR_ADDRESSES", value);
+            },
+            None => unsafe {
+                std::env::remove_var("PERIGEE_ADMIN_STELLAR_ADDRESSES");
+            },
+        }
     }
 
     #[tokio::test]
@@ -855,9 +986,10 @@ mod tests {
         assert_eq!(first.name, second.name);
 
         // Only one vault should exist for this manager.
+        let mut connection = store.vaults.pool().acquire().await.unwrap();
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vaults WHERE manager_id = ?1")
             .bind("mgr-1")
-            .fetch_one(store.vaults.pool())
+            .fetch_one(&mut *connection)
             .await
             .unwrap();
         assert_eq!(count.0, 1);
@@ -893,9 +1025,10 @@ mod tests {
         assert_eq!(a.name, "Alpha");
         assert_eq!(b.name, "Beta");
 
+        let mut connection = store.vaults.pool().acquire().await.unwrap();
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vaults WHERE manager_id = ?1")
             .bind("mgr-1")
-            .fetch_one(store.vaults.pool())
+            .fetch_one(&mut *connection)
             .await
             .unwrap();
         assert_eq!(count.0, 2);
@@ -929,12 +1062,158 @@ mod tests {
 
         assert_ne!(a.id, b.id);
 
+        let mut connection = store.vaults.pool().acquire().await.unwrap();
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vaults WHERE manager_id = ?1")
             .bind("mgr-1")
-            .fetch_one(store.vaults.pool())
+            .fetch_one(&mut *connection)
             .await
             .unwrap();
         assert_eq!(count.0, 2);
+    }
+
+    // ── BE-033 (#270): policy configuration validated before storage ─────────
+
+    /// A policy that declares no assets to apply its constraints to is not
+    /// internally consistent, and must never reach the table.
+    #[tokio::test]
+    async fn create_rejects_a_policy_with_no_allowed_assets() {
+        let store = test_store().await;
+
+        let err = store
+            .create(&CreateVaultRequest {
+                manager_id: "mgr-policy".into(),
+                name: "Empty allow-list".into(),
+                status: "active".into(),
+                config_json: r#"{"policy":{"allowed_assets":[]}}"#.into(),
+                idempotency_key: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            VaultStoreError::InvalidPolicy(VaultValidationError::EmptyList {
+                field: "allowed_assets"
+            })
+        ));
+
+        // The rejected policy was not stored.
+        let listed = store
+            .list_by_manager("mgr-policy", &pagination(1, 50))
+            .await
+            .unwrap();
+        assert_eq!(listed.total_count, 0);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_fee_outside_zero_to_one_hundred_percent() {
+        let store = test_store().await;
+
+        let err = store
+            .create(&CreateVaultRequest {
+                manager_id: "mgr-policy".into(),
+                name: "Runaway fee".into(),
+                status: "active".into(),
+                config_json: r#"{"policy":{"allowed_assets":["XLM"],"fee_percent":400}}"#
+                    .into(),
+                idempotency_key: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            VaultStoreError::InvalidPolicy(VaultValidationError::OutOfRange { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_high_water_mark_that_is_not_the_deposit() {
+        let store = test_store().await;
+
+        let err = store
+            .create(&CreateVaultRequest {
+                manager_id: "mgr-policy".into(),
+                name: "Diverged HWM".into(),
+                status: "active".into(),
+                config_json: r#"{"policy":{"allowed_assets":["XLM"],"deposit_amount":1000,"high_water_mark":900}}"#
+                    .into(),
+                idempotency_key: None,
+            })
+            .await
+            .unwrap_err();
+
+        if let VaultStoreError::InvalidPolicy(VaultValidationError::HighWaterMarkMismatch {
+            high_water_mark,
+            deposit_amount,
+        }) = err
+        {
+            assert_eq!(high_water_mark, 900.0);
+            assert_eq!(deposit_amount, 1000.0);
+        } else {
+            panic!("expected InvalidPolicy(HighWaterMarkMismatch), got {err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn create_accepts_a_consistent_policy() {
+        let store = test_store().await;
+
+        let config = r#"{"policy":{"allowed_assets":["XLM","USDC"],"allowed_operations":["rebalance"],"fee_percent":1.5,"deposit_amount":1000,"high_water_mark":1000}}"#;
+        let created = store
+            .create(&CreateVaultRequest {
+                manager_id: "mgr-policy".into(),
+                name: "Consistent".into(),
+                status: "active".into(),
+                config_json: config.into(),
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+
+        let fetched = store.get(&created.id).await.unwrap();
+        assert_eq!(fetched.config_json, config);
+    }
+
+    /// The update path must apply the same rule as creation, and a rejected
+    /// config must leave the stored one untouched.
+    #[tokio::test]
+    async fn update_rejects_an_inconsistent_policy() {
+        let store = test_store().await;
+        let created = store
+            .create(&CreateVaultRequest {
+                manager_id: "mgr-policy".into(),
+                name: "Starts valid".into(),
+                status: "active".into(),
+                config_json: r#"{"policy":{"allowed_assets":["XLM"]}}"#.into(),
+                idempotency_key: None,
+            })
+            .await
+            .unwrap();
+
+        let err = store
+            .update(
+                &created.id,
+                &UpdateVaultRequest {
+                    version: created.version,
+                    name: None,
+                    status: None,
+                    config_json: Some(r#"{"policy":{"allowed_assets":[]}}"#.into()),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            VaultStoreError::InvalidPolicy(VaultValidationError::EmptyList {
+                field: "allowed_assets"
+            })
+        ));
+
+        let stored = store.get(&created.id).await.unwrap();
+        assert_eq!(stored.version, created.version, "no write happened");
+        assert!(stored.config_json.contains("[\"XLM\"]"));
     }
 
     // ── BE-023: policy expiry on vault operations ────────────────────────
