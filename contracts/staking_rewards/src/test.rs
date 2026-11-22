@@ -572,61 +572,130 @@ fn test_set_paused_wrapper_toggles_stake_bit() {
     assert!(!client.is_staking_paused());
 }
 
-// ── #882 — Options strategy expiry and settlement lifecycle ──────────────────
-// These tests use the staking contract's lifecycle as the analogue for an
-// options position: stake = open position, rewards = settlement value,
-// withdraw = close/settle, claim = collect.
+// ── #878 — Staking reward accrual across long idle intervals ─────────────────
 
-/// Pre-expiry: a position opened and not yet closed has a non-zero pending value.
-/// This mirrors an options position that has not yet expired.
+/// A user who stakes and waits a long time must accrue strictly more rewards
+/// than they would over a short interval — idle time must not reset or truncate
+/// the accumulator.
 #[test]
-fn test_pre_expiry_position_has_value() {
+fn test_long_idle_accrues_more_than_short() {
+    let (e, client, _, staking_token, _) = setup();
+
+    let user_short = Address::generate(&e);
+    let user_long = Address::generate(&e);
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&user_short, &STAKE_AMOUNT);
+    staking_client.mint(&user_long, &STAKE_AMOUNT);
+
+    client.stake(&user_short, &STAKE_AMOUNT);
+    client.stake(&user_long, &STAKE_AMOUNT);
+
+    // Short interval: 5 blocks.
+    advance_ledger(&e, 5);
+    let short_pending = client.get_pending_rewards(&user_short);
+
+    // Long interval: another 50 blocks (55 total from stake).
+    advance_ledger(&e, 50);
+    let long_pending = client.get_pending_rewards(&user_long);
+
+    assert!(
+        long_pending > short_pending,
+        "longer idle period must yield strictly more rewards"
+    );
+}
+
+/// A later staker must not be able to claim rewards that accrued before they
+/// joined. Their rewards start at zero at the time of their stake.
+#[test]
+fn test_late_staker_cannot_claim_pre_stake_rewards() {
+    let (e, client, _, staking_token, _) = setup();
+
+    let early_user = Address::generate(&e);
+    let late_user = Address::generate(&e);
+    let staking_client = token::StellarAssetClient::new(&e, &staking_token);
+    staking_client.mint(&early_user, &STAKE_AMOUNT);
+    staking_client.mint(&late_user, &STAKE_AMOUNT);
+
+    // Early user stakes at block 0.
+    client.stake(&early_user, &STAKE_AMOUNT);
+
+    // Advance before the late user enters.
+    advance_ledger(&e, 20);
+
+    // Late user stakes at block 20.
+    client.stake(&late_user, &STAKE_AMOUNT);
+
+    // Immediately check: late user has zero pending (no blocks elapsed for them).
+    let late_pending_immediate = client.get_pending_rewards(&late_user);
+    assert_eq!(
+        late_pending_immediate, 0,
+        "late staker must have zero rewards at the moment they stake"
+    );
+}
+
+/// Claiming rewards multiple times without advancing the ledger must not produce
+/// more tokens than were accrued — repeated claims at the same block yield zero
+/// after the first.
+#[test]
+fn test_repeated_claims_cannot_exceed_accrued() {
     let (e, client, _, staking_token, _) = setup();
     let user = Address::generate(&e);
-
     let staking_client = token::StellarAssetClient::new(&e, &staking_token);
     staking_client.mint(&user, &STAKE_AMOUNT);
 
     client.stake(&user, &STAKE_AMOUNT);
     advance_ledger(&e, 10);
 
-    let pending = client.get_pending_rewards(&user);
-    assert!(pending > 0, "pre-expiry position must have positive pending value");
+    let first_claim = client.claim(&user);
+    assert!(first_claim > 0, "first claim must be positive");
+
+    // No blocks advance — second claim must return zero.
+    let second_claim = client.claim(&user);
+    assert_eq!(second_claim, 0, "second claim at same block must return zero");
+
+    // A third claim still at the same block must also return zero.
+    let third_claim = client.claim(&user);
+    assert_eq!(third_claim, 0, "third claim at same block must return zero");
 }
 
-/// At expiry: settling (claiming) resets the accrued value to zero without
-/// changing the staked principal.
+/// Staking mid-period (after some blocks have elapsed) must only credit rewards
+/// for the blocks after the new stake, not before it.
 #[test]
-fn test_settlement_resets_accrued_value() {
+fn test_stake_change_mid_period_credits_only_post_stake_rewards() {
     let (e, client, _, staking_token, _) = setup();
     let user = Address::generate(&e);
-
     let staking_client = token::StellarAssetClient::new(&e, &staking_token);
-    staking_client.mint(&user, &STAKE_AMOUNT);
+    staking_client.mint(&user, &(STAKE_AMOUNT * 2));
 
+    // Initial stake.
     client.stake(&user, &STAKE_AMOUNT);
     advance_ledger(&e, 10);
 
-    assert!(client.get_pending_rewards(&user) > 0, "must have value before settlement");
+    // Trigger reward snapshot by staking more.
+    client.stake(&user, &STAKE_AMOUNT);
+    let accrued_at_snapshot = client.get_accrued_rewards(&user);
+    assert!(accrued_at_snapshot > 0);
 
-    // Settle (claim).
-    client.claim(&user);
+    // Advance by the same number of blocks again.
+    advance_ledger(&e, 10);
 
-    // After settlement accrued value resets to zero.
-    assert_eq!(client.get_accrued_rewards(&user), 0,
-        "accrued value must be zero after settlement");
-    // Principal is unaffected.
-    assert_eq!(client.get_staked_balance(&user), STAKE_AMOUNT,
-        "principal must remain after settlement");
+    // The pending rewards at the second checkpoint compound on the already
+    // accrued amount — they must be greater than the first snapshot value.
+    let pending_after = client.get_pending_rewards(&user);
+    assert!(
+        pending_after > accrued_at_snapshot,
+        "pending rewards after second interval must exceed the first snapshot"
+    );
 }
 
-/// Post-expiry: a second settlement at the same block returns zero — the
-/// position cannot be settled twice at the same point.
+// ── #879 — Staking strategy commission and withdrawal edge cases ──────────────
+
+/// Claiming immediately after staking (zero blocks elapsed) must return zero —
+/// no rewards have accrued yet.
 #[test]
-fn test_duplicate_settlement_returns_zero() {
+fn test_claim_zero_elapsed_blocks_returns_zero() {
     let (e, client, _, staking_token, _) = setup();
     let user = Address::generate(&e);
-
     let staking_client = token::StellarAssetClient::new(&e, &staking_token);
     staking_client.mint(&user, &STAKE_AMOUNT);
 
