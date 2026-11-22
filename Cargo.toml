@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "core",
+    "tools/graphql-schema-check",
     "contracts/bootstrap",
     "contracts/error_codes",
     "contracts/math",

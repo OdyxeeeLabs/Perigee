@@ -90,6 +90,17 @@ cargo test -p perigee-policy-vault
 bash scripts/coverage.sh   # see docs/COVERAGE.md
 ```
 
+GraphQL schema checks run in their own small crate:
+
+```bash
+cargo test -p graphql-schema-check
+cargo run -p graphql-schema-check --bin graphql-schema-tools -- \
+  check docs/graphql/schema.baseline.graphql docs/graphql/schema.graphql
+```
+
+The baseline-update procedure is documented in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md#graphql-schema-compatibility).
+
 Contract tests live in `contracts/<crate>/src/test.rs` and use `Env::default()`,
 `env.mock_all_auths()` and generated `try_*` clients to assert deterministic
 errors. Any change to persistent contract state must document its storage keys

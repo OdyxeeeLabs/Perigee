@@ -1485,6 +1485,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "graphql-schema-check"
+version = "0.1.0"
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2535,6 +2539,7 @@ dependencies = [
 name = "perigee-fee-engine"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 
@@ -2584,6 +2589,16 @@ dependencies = [
 name = "perigee-referral"
 version = "0.1.0"
 dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "perigee-resource-budget"
+version = "0.1.0"
+dependencies = [
+ "perigee-cross-chain-governance",
+ "perigee-vault-guard",
+ "perigee-vault-strategy",
  "soroban-sdk",
 ]
 

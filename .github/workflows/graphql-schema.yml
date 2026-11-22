@@ -1,0 +1,46 @@
+name: GraphQL schema compatibility
+
+on:
+  pull_request:
+    paths:
+      - "tools/graphql-schema-check/**"
+      - "docs/graphql/**"
+      - "docs/GRAPHQL_GATEWAY.md"
+      - "CONTRIBUTING.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/graphql-schema.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tools/graphql-schema-check/**"
+      - "docs/graphql/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: graphql-schema-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Checker tests
+        run: cargo test --locked -p graphql-schema-check
+
+      - name: Build graphql-schema-tools
+        run: cargo build --locked -p graphql-schema-check --bin graphql-schema-tools
+
+      # `schema.baseline.graphql` is the reviewed public contract. Breaking
+      # changes fail here until the baseline is updated with an explicit,
+      # reviewed `graphql-schema-tools update --reason ...` change.
+      - name: Compare proposed schema with baseline
+        run: ./target/debug/graphql-schema-tools check docs/graphql/schema.baseline.graphql docs/graphql/schema.graphql --summary "$GITHUB_STEP_SUMMARY"

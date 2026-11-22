@@ -75,6 +75,36 @@ drift apart. See [`docs/ERROR_VARIANTS.md` → "Adding a new error code"](./docs
 for the steps: add the enum variant, add its HTTP status mapping, add a row to the docs table, then re-run the
 sync check.
 
+### GraphQL schema compatibility
+
+The public GraphQL schema has two committed SDL files:
+`docs/graphql/schema.graphql` is the proposed schema for the pull request, and
+`docs/graphql/schema.baseline.graphql` is the last reviewed client contract.
+CI runs `graphql-schema-tools` against both files and fails on removals,
+definition-kind changes, type changes, nullable-to-required changes, and
+input-default changes. Additive changes pass automatically.
+
+Local check:
+
+```bash
+cargo run -p graphql-schema-check --bin graphql-schema-tools -- \
+  check docs/graphql/schema.baseline.graphql docs/graphql/schema.graphql
+```
+
+For an intentional breaking change, confirm that clients have migrated, then
+record the approval in the baseline instead of editing it by hand:
+
+```bash
+cargo run -p graphql-schema-check --bin graphql-schema-tools -- \
+  update docs/graphql/schema.baseline.graphql docs/graphql/schema.graphql \
+  --reason "clients migrated in #123"
+```
+
+The `update` command writes an approval header with the reason into the
+baseline. Commit both SDL files in the same pull request, explain the client
+migration in the PR description, and treat the baseline diff as a
+review-required contract change. Never edit the baseline only to silence CI.
+
 ### Graceful shutdown
 
 The `core` HTTP server listens for `SIGINT` (Ctrl-C) and `SIGTERM` on Unix targets. On either signal it stops accepting new connections and drains in-flight requests before exiting. Any long-lived background task spawned from `main` should be cancelable via `tokio::select!` or `CancellationToken` so that the process exits cleanly within a few seconds of the signal.
