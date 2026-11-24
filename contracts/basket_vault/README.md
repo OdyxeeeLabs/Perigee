@@ -19,9 +19,11 @@ always expressed in the same unit regardless of how the components happen to be
 priced. **That is what makes a basket share comparable across time** — a share is
 worth a bundle, and the bundle's unit does not shift with its contents.
 
-`components_for(assets)` returns the per-leg payout, each leg rounded **down**, so
-the legs always sum to at most the requested amount and the rounding stays in the
-basket.
+`components_for(value)` allocates the requested basket value by weight, converts
+each allocation into that component's token units using its price, and rounds
+each leg **down**. A valuation or withdrawal is refused until the component
+weights sum to 10 000 bps; non-positive prices are rejected when added or
+updated.
 
 ## Weight discipline
 
@@ -85,7 +87,8 @@ the check compares a rebalance against zero and always fails.
 cargo test -p perigee-basket-vault
 ```
 
-Covers composite pricing and its response to component price moves, share
-valuation, per-leg payouts never over-committing, the weight ceiling, duplicate
-rejection, drift detection and the deadband, and every rebalance rejection path
-including the settlement check.
+Covers composite pricing and its response to component price and weight changes,
+share valuation, per-leg token payouts that never exceed requested value, and
+refusal to value incomplete weights or missing prices, as well as the weight
+ceiling, duplicate rejection, drift detection and the deadband, and every
+rebalance rejection path including the settlement check.
