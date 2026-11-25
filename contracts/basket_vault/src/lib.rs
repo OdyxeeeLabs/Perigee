@@ -457,6 +457,9 @@ impl BasketVault {
         if count == 0 {
             return Err(Error::EmptyBasket);
         }
+        if Self::total_weight(env.clone(), basket)? != BPS_DENOMINATOR {
+            return Err(Error::WeightsDoNotSum);
+        }
         let mut total: i128 = 0;
         for index in 0..count {
             let component: Component = env
@@ -464,6 +467,9 @@ impl BasketVault {
                 .persistent()
                 .get(&DataKey::Component(basket, index))
                 .ok_or(Error::EmptyBasket)?;
+            if component.price <= 0 {
+                return Err(Error::ZeroAmount);
+            }
             total = total
                 .checked_add(mul_bps_floor(component.price, component.weight_bps)?)
                 .ok_or(Error::MathOverflow)?;
@@ -496,6 +502,9 @@ impl BasketVault {
         if count == 0 {
             return Err(Error::EmptyBasket);
         }
+        if Self::total_weight(env.clone(), basket)? != BPS_DENOMINATOR {
+            return Err(Error::WeightsDoNotSum);
+        }
 
         let mut out = Vec::new(&env);
         for index in 0..count {
@@ -504,8 +513,12 @@ impl BasketVault {
                 .persistent()
                 .get(&DataKey::Component(basket, index))
                 .ok_or(Error::EmptyBasket)?;
-            // Round down per leg so the basket is never over-committed.
-            let amount = mul_bps_floor(assets, component.weight_bps)?;
+            if component.price <= 0 {
+                return Err(Error::ZeroAmount);
+            }
+            // Split value by weight, then convert each leg to token units.
+            let component_value = mul_bps_floor(assets, component.weight_bps)?;
+            let amount = component_value / component.price;
             out.push_back((component.asset, amount));
         }
         Ok(out)

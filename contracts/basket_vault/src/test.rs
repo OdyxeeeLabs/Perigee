@@ -70,6 +70,26 @@ fn the_composite_price_moves_with_its_components() {
 }
 
 #[test]
+fn share_valuation_and_withdrawals_follow_rebalanced_weights_and_prices() {
+    let (env, _cid, client, _admin, manager, basket, asset_a, asset_b) = setup!();
+
+    client.set_price(&manager, &basket, &0, &10);
+    client.set_price(&manager, &basket, &1, &30);
+    client.record_holding(&manager, &basket, &1_000);
+    client.rebalance_to(&manager, &basket, &weights(&env, &[7_000, 3_000]));
+
+    // 70% of 10 plus 30% of 30 is 16; five shares are worth 80.
+    assert_eq!(client.price_share(&basket), 16);
+    assert_eq!(client.price_shares(&basket, &5), 80);
+
+    // A 1,000-value withdrawal allocates 700 and 300 of value, then converts
+    // those values into 70 units of A and 10 units of B.
+    let payout = client.components_for(&basket, &1_000);
+    assert_eq!(payout.get(0), Some((asset_a, 70)));
+    assert_eq!(payout.get(1), Some((asset_b, 10)));
+}
+
+#[test]
 fn a_share_is_worth_its_price() {
     let (env, _cid, client, _admin, _manager, basket, _a, _b) = setup!();
 
@@ -108,18 +128,67 @@ fn components_for_returns_one_leg_per_component() {
     let legs = client.components_for(&basket, &1_000);
 
     assert_eq!(legs.len(), 2);
-    assert_eq!(legs.get(0), Some((asset_a, 500)));
-    assert_eq!(legs.get(1), Some((asset_b, 500)));
+    assert_eq!(legs.get(0), Some((asset_a, 250)));
+    assert_eq!(legs.get(1), Some((asset_b, 62)));
 }
 
 #[test]
 fn components_for_never_over_commits_the_basket() {
-    let (env, _cid, client, _admin, _manager, basket, _a, _b) = setup!();
+    let (_env, _cid, client, _admin, _manager, basket, _a, _b) = setup!();
 
     let legs = client.components_for(&basket, &999);
-    let total = legs.get(0).unwrap().1 + legs.get(1).unwrap().1;
+    let total_value = legs.get(0).unwrap().1 * 2 + legs.get(1).unwrap().1 * 8;
 
-    assert!(total <= 999, "legs summed to {total}, more than requested");
+    assert!(
+        total_value <= 999,
+        "payout value was {total_value}, more than requested"
+    );
+}
+
+#[test]
+fn an_incompletely_weighted_basket_cannot_be_valued_or_withdrawn() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let manager = Address::generate(&env);
+    let contract_id = env.register(BasketVault, ());
+    let client = BasketVaultClient::new(&env, &contract_id);
+    client.initialize(
+        &admin,
+        &BasketConfig {
+            base_bps: BPS_DENOMINATOR,
+            max_weight_bps: 8_000,
+            drift_tolerance_bps: 100,
+            max_assets: 8,
+        },
+    );
+    let basket = client.create_basket(&manager);
+    client.add_component(&manager, &basket, &Address::generate(&env), &5_000, &2);
+
+    assert_eq!(
+        client.try_price_share(&basket),
+        Err(Ok(Error::WeightsDoNotSum))
+    );
+    assert_eq!(
+        client.try_price_shares(&basket, &1),
+        Err(Ok(Error::WeightsDoNotSum))
+    );
+    assert_eq!(
+        client.try_components_for(&basket, &1_000),
+        Err(Ok(Error::WeightsDoNotSum))
+    );
+}
+
+#[test]
+fn a_zero_price_update_is_rejected_without_changing_share_value() {
+    let (env, _cid, client, _admin, manager, basket, _a, _b) = setup!();
+
+    assert_eq!(
+        client.try_set_price(&manager, &basket, &0, &0),
+        Err(Ok(Error::ZeroAmount))
+    );
+    assert_eq!(client.price_share(&basket), 5);
 }
 
 // ── Weight discipline ────────────────────────────────────────────────────────
