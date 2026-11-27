@@ -1,5 +1,3 @@
-"use server";
-
 import type { AppSettings } from "@/lib/settings";
 import {
   validateSettingsValues,

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import type { AnalyticsSectionState } from "../lib/analytics/sectionState";
+import type { AnalyticsSectionState } from "../../lib/analytics/sectionState";
 
 interface AnalyticsSectionProps<T> {
   title: string;

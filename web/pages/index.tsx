@@ -147,8 +147,8 @@ export default function Home() {
   }, []);
 
   // Derive the wasm-upload handler once; it only depends on stable setters.
-  const handleWasmUpload = useCallback((data: string) => {
-    setWasmData(data);
+  const handleWasmUpload = useCallback((file: File) => {
+    void file.text().then(setWasmData);
   }, []);
 
   // Compute the sidebar function list once — MOCK_CONTRACT_FUNCTIONS is a
@@ -190,13 +190,13 @@ export default function Home() {
             <aside>
               <FunctionSidebar
                 functions={functionList}
-                selected={selectedFunction}
+                selectedFunction={selectedFunction}
                 onSelect={handleSelectFunction}
               />
             </aside>
 
             <div className="flex flex-col gap-6">
-              <UploadZone onUpload={handleWasmUpload} />
+              <UploadZone onFileReady={handleWasmUpload} />
               <ContractInteraction
                 contractId={contractId}
                 onContractIdChange={setContractId}

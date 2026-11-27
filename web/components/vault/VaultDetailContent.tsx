@@ -31,9 +31,6 @@ export interface VaultDetailContentProps {
  * the `/vault/[id]` and `/vaults/[id]` page routes (full page), so the two
  * surfaces never drift out of sync.
  */
-export function VaultDetailContent({ vault, onDeposit, onWithdraw, onManage }: VaultDetailContentProps) {
-  const locale = useLocale();
-
 export function VaultDetailContent({
   vault,
   onDeposit,
@@ -42,6 +39,8 @@ export function VaultDetailContent({
   transactionsEnabled = true,
   disabledReason = null,
 }: VaultDetailContentProps) {
+  const locale = useLocale();
+
   return (
     <div className="flex flex-col gap-6">
       {/* Token info */}
@@ -58,8 +57,6 @@ export function VaultDetailContent({
               {shortenAddress(vault.tokenInfo.underlyingAddress)}
             </span>
             <CopyButton value={vault.tokenInfo.underlyingAddress} label="underlying token address" />
-          <dd className="text-end font-mono text-xs text-slate-400" title={vault.tokenInfo.underlyingAddress}>
-            {truncateAddress(vault.tokenInfo.underlyingAddress)}
           </dd>
           <dt className="text-slate-500">Share token</dt>
           <dd className="text-end font-mono text-slate-200">{vault.tokenInfo.shareToken}</dd>
@@ -69,8 +66,6 @@ export function VaultDetailContent({
               {shortenAddress(vault.tokenInfo.shareTokenAddress)}
             </span>
             <CopyButton value={vault.tokenInfo.shareTokenAddress} label="share token address" />
-          <dd className="text-end font-mono text-xs text-slate-400" title={vault.tokenInfo.shareTokenAddress}>
-            {truncateAddress(vault.tokenInfo.shareTokenAddress)}
           </dd>
           <dt className="text-slate-500">Decimals</dt>
           <dd className="text-end font-mono text-slate-200">{vault.tokenInfo.decimals}</dd>

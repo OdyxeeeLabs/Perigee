@@ -1,7 +1,6 @@
 import type { AppProps } from "next/app";
 import "../styles/globals.css";
 import "../styles/print.css";
-import { Inter } from "next/font/google";
 import { WalletProvider } from "../context/WalletContext";
 import { ToastProvider } from "../context/ToastContext";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -10,10 +9,13 @@ import { ServiceWorkerManager } from "../components/ServiceWorkerManager";
 import { NetworkStatusBanner } from "../components/NetworkStatusBanner";
 import { RpcFallbackBanner } from "../components/RpcFallbackBanner";
 import { NextIntlClientProvider } from "next-intl";
-import defaultMessages from "../messages/en.json";
+import enMessages from "../messages/en.json";
+
+const defaultMessages: Record<string, string> =
+  (enMessages as { default?: Record<string, string> }).default ??
+  (enMessages as unknown as Record<string, string>);
 import { API_URL } from "../lib/api";
 import { useRouter } from "next/router";
-import { useEffect } from "react";
 import { FeatureFlagProvider } from "../features/feature-flags";
 // WEB-15 (#469): enable `reducedMotion="user"` for Framer Motion across the
 // whole Pages Router tree. Every `motion.*` animation now respects the OS
@@ -33,76 +35,18 @@ import { SkipLink } from "../components/common/SkipLink/SkipLink";
 // Global live-region announcer with a persisted verbosity setting (#697).
 import { AnnouncerProvider } from "../components/AnnouncerProvider";
 
-// WEB-54 (#187): self-host the Inter typeface through `next/font`. Font files
-// are downloaded and preloaded at build time, eliminating FOIT and render
-// blocking from an external font stylesheet. `inter.className` applies the
-// generated font-family to every Pages Router route.
-const inter = Inter({
-  subsets: ["latin"],
-  display: "swap",
-});
-
-/**
- * Initialize @axe-core/react in development so accessibility violations
- * are reported to the browser console during local development.
- *
- * The import is dynamic so axe-core is never bundled into production builds.
- * Resolves WEB-24 (#110): missing accessibility audit tooling.
- *
- * Issue #705: **`@axe-core/react` is not in package.json or yarn.lock.** The
- * `import()` below therefore rejects on every dev boot, and the `.catch`
- * swallowed it — so the integration was silently dead code and looked like
- * working tooling. That is worse than having none: it made the codebase appear
- * to have automated a11y coverage that did not exist.
- *
- * The failure is now reported instead of ignored, once per session. The
- * dependency itself is a package.json + yarn.lock change, which is out of
- * scope here; `yarn add -D @axe-core/react` is the fix, and the
- * `declared-tooling` job in .github/workflows/a11y-audit.yml fails the build
- * if the import and the manifest disagree again.
- */
-let axeWarningShown = false;
-
-async function initAxe() {
-  if (typeof window === "undefined" || process.env.NODE_ENV !== "development") return;
-
-  try {
-    const axe = await import("@axe-core/react");
-    const React = await import("react");
-    const ReactDOM = await import("react-dom");
-    // 1000 ms debounce — avoids flooding the console on rapid re-renders
-    await axe.default(React.default, ReactDOM.default, 1000);
-  } catch (error) {
-    if (axeWarningShown) return;
-    axeWarningShown = true;
-    console.warn(
-      "[a11y] @axe-core/react is not installed, so the browser console audit " +
-        "did not run. This is not a runtime problem: install it with " +
-        "`yarn add -D @axe-core/react` for dev-time violations. " +
-        "Dependency-free checks run `node scripts/a11y/static-audit.mjs`.",
-      error,
-    );
-  }
-}
-
 export default function App({ Component, pageProps }: AppProps) {
-  useEffect(() => {
-    // `initAxe` reports its own failure once; a second silent catch here would
-    // hide the very thing #705 exists to surface.
-    initAxe().catch(() => {});
-  }, []);
-
   const router = useRouter();
   const route = router.asPath || "/";
 
   return (
-    <div className={inter.className}>
+    <div className="font-sans">
       <MotionProvider>
         <LocaleSync>
           <FeatureFlagProvider>
             <NextIntlClientProvider
               locale={router?.locale ?? "en"}
-              messages={pageProps.messages ?? defaultMessages}
+              messages={{ ...defaultMessages, ...(pageProps.messages ?? {}) }}
               timeZone="UTC"
             >
               <ErrorBoundary

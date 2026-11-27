@@ -25,18 +25,6 @@ mod billing_service {
     pub use crate::fee::service::*;
 }
 
-pub mod fee_analytics {
-    pub use crate::fee::analytics::*;
-}
-
-pub mod fee_collector {
-    pub use crate::fee::collector::*;
-}
-
-pub mod fee_store {
-    pub use crate::fee::persistence::*;
-}
-
 mod namespaced_errors;
 mod notification_preferences;
 mod notifications;

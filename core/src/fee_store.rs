@@ -350,47 +350,28 @@ impl FeeStore {
             Self::validate_sample(sample)?;
         }
 
-        let mut connection = self.pool.acquire().await?;
-        let mut tx = sqlx::Connection::begin(&mut *connection).await?;
-
+        let mut tx = self.pool.begin().await?;
         for sample in samples {
             sqlx::query(
                 r#"
                 INSERT INTO ledger_fee_samples (
-                    ledger_sequence, collected_at, base_reserve, base_fee, 
+                    ledger_sequence, collected_at, base_reserve, base_fee,
                     max_fee, fee_charged, transaction_count, ledger_close_time
-        let mut tx = self.pool.begin().await?;
-        let result: Result<(), sqlx::Error> = async {
-            for sample in samples {
-                sqlx::query(
-                    r#"
-                    INSERT INTO ledger_fee_samples (
-                        ledger_sequence, collected_at, base_reserve, base_fee,
-                        max_fee, fee_charged, transaction_count, ledger_close_time
-                    )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                    ON CONFLICT(ledger_sequence) DO NOTHING
-                    "#,
                 )
-                .bind(sample.ledger_sequence)
-                .bind(sample.collected_at)
-                .bind(sample.base_reserve)
-                .bind(sample.base_fee)
-                .bind(sample.max_fee)
-                .bind(sample.fee_charged)
-                .bind(sample.transaction_count)
-                .bind(sample.ledger_close_time)
-                .execute(&mut *tx)
-                .await?;
-            }
-
-            Ok(())
-        }
-        .await;
-
-        if let Err(error) = result {
-            let _ = tx.rollback().await;
-            return Err(error.into());
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ON CONFLICT(ledger_sequence) DO NOTHING
+                "#,
+            )
+            .bind(sample.ledger_sequence)
+            .bind(sample.collected_at)
+            .bind(sample.base_reserve)
+            .bind(sample.base_fee)
+            .bind(sample.max_fee)
+            .bind(sample.fee_charged)
+            .bind(sample.transaction_count)
+            .bind(sample.ledger_close_time)
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await?;

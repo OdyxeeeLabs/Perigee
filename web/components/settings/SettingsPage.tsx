@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useHydrateSettings, useSettingsStore } from "@/lib/settingsStore";
+import { useAnnouncer } from "@/components/AnnouncerProvider";
 import { FormSkeleton } from "@/components/FormSkeleton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorSummary, type FieldError } from "@/components/ErrorSummary";
@@ -13,7 +14,7 @@ import {
   SETTINGS_FIELDS,
   validateSettingsValues,
 } from "@/lib/settingsValidation";
-import { validateSettingsUpdate } from "@/app/settings/actions";
+import { validateSettingsUpdate } from "@/lib/settingsActions";
 import { NetworkSettingsTab } from "./NetworkSettingsTab";
 import { TradingSettingsTab } from "./TradingSettingsTab";
 import { DisplaySettingsTab } from "./DisplaySettingsTab";
@@ -52,11 +53,13 @@ export function SettingsPage() {
 }
 
 function SettingsPageContent() {
+  const hydrated = useHydrateSettings();
   const t = useTranslations();
   const settings = useSettingsStore((s) => s.settings);
   const resetSettings = useSettingsStore((s) => s.resetSettings);
   const pendingUndo = useSettingsStore((s) => s.pendingUndo);
   const validation = useSettingsValidation();
+  const { announceStatus } = useAnnouncer();
   const previousPendingUndo = useRef(pendingUndo);
   const [activeTab, setActiveTab] = useState<TabId>("network");
   const [resetStatus, setResetStatus] = useState<"idle" | "done">("idle");
@@ -143,40 +146,6 @@ function SettingsPageContent() {
         <FormSkeleton fields={5} label="Settings loading" />
       ) : (
         <div className="overflow-hidden rounded-xl border border-slate-800">
-          <div
-            role="tablist"
-            aria-label="Settings sections"
-            className="flex flex-wrap gap-1 border-b border-slate-800 bg-slate-900 px-2 pt-2"
-          >
-            {saveStatus === "saving"
-              ? t("settings.saving")
-              : saveStatus === "saved"
-                ? t("settings.saved")
-                : t("settings.save")}
-          </button>
-          <button
-            type="button"
-            onClick={handleReset}
-            className="rounded border border-slate-700 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
-          >
-            {resetStatus === "done" ? "Reset ✓" : "Reset to defaults"}
-          </button>
-        </div>
-      </header>
-
-      <div className="mb-4">
-        <ErrorSummary
-          errors={errorList}
-          title={t("settings.errorSummaryTitle")}
-          onDismiss={validation.clearErrors}
-          onNavigate={(id) => {
-            const tab = SETTINGS_FIELDS[id]?.tab;
-            if (tab) setActiveTab(tab);
-          }}
-        />
-      </div>
-
-      <div className="overflow-hidden rounded-xl border border-slate-800">
         <div
           role="tablist"
           aria-label="Settings sections"
@@ -209,6 +178,7 @@ function SettingsPageContent() {
           className="bg-slate-950 p-6"
         >
           <ActiveTabComponent />
+        </div>
         </div>
       )}
       <ConfirmDialog

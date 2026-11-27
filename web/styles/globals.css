@@ -18,6 +18,11 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* Fallback stack for the --font-inter token when next/font is not used. */
+  --font-inter: ui-sans-serif, system-ui, sans-serif;
+}
+
 body {
   @apply bg-slate-950 text-slate-100;
 }

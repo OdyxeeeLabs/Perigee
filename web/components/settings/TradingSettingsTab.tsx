@@ -10,6 +10,7 @@ import { useSettingsValidation } from "./SettingsValidationContext";
 
 /** Trading tab — issue #682: slippage, gas strategy, transaction deadline. */
 export function TradingSettingsTab() {
+  const locale = useLocale();
   const trading = useSettingsStore((s) => s.settings.trading);
   const settings = useSettingsStore((s) => s.settings);
   const updateTrading = useSettingsStore((s) => s.updateTrading);
