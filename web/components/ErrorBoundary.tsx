@@ -1,3 +1,5 @@
+"use client";
+
 import React from 'react';
 import { reportError, type ErrorBoundaryVariant, type ReportingContext } from '../lib/error-reporting';
 import { focusRecovery } from '../lib/a11y/focus';

@@ -16,6 +16,11 @@ import {
 import { SEO } from "@/components/SEO";
 import { useDataRefresh } from "@/hooks/useDataRefresh";
 import { useRouteChangePause } from "@/hooks/useRouteChangePause";
+import { useDateRange } from "@/hooks/useDateRange";
+import {
+  DATE_RANGE_PRESETS,
+  type DateRangeId,
+} from "@/lib/dateRange";
 import { useLocale } from "@/components/LocaleSync";
 import { FormattedAmount, FormattedPercent } from "@/components/ui/FormattedAmount";
 import {
@@ -174,7 +179,6 @@ function AssetBar({
     "bg-emerald-500",
     "bg-rose-500",
   ];
-  const locale = useLocale();
 
   if (breakdown.length === 0 || total <= 0) {
     return <p className="py-6 text-center text-xs text-slate-500">No assets to display yet.</p>;
@@ -324,8 +328,7 @@ export default function PortfolioOverviewPage() {
   useEffect(() => {
     void refreshVaults();
   }, [refreshVaults]);
-  // In production wire this to a real data-fetching hook / SWR call.
-  const [vaults] = useState<Vault[]>(MOCK_VAULTS);
+  const { range, setRange, label: rangeLabel, from, to } = useDateRange();
   const locale = useLocale();
 
   const totalBalance = useMemo(
@@ -517,11 +520,6 @@ export default function PortfolioOverviewPage() {
             >
               Top Vaults by Balance
             </h2>
-            <div className="space-y-2">
-              {topVaults.map((vault) => (
-                <TopVaultRow key={vault.id} vault={vault} locale={locale} />
-              ))}
-            </div>
             {hasVaults ? (
               <div className="space-y-2">
                 {topVaults.map((vault) => (

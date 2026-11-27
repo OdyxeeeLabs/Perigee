@@ -1,5 +1,4 @@
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import Mermaid from "@/components/Mermaid";
 
 import { strategyPhases } from "./strategyPhases";
 import { StrategyPhaseTable } from "./StrategyPhaseTable";
@@ -17,24 +16,22 @@ export function StrategyPhaseDiagram() {
     <section aria-labelledby="strategy-phases-heading">
       <h2 id="strategy-phases-heading">Strategy Phases</h2>
 
-      <figure>
+      <figure className="min-w-0">
         <ErrorBoundary
           variant="component"
           context={{ component: "StrategyPhaseDiagram" }}
           title="The strategy diagram could not be displayed"
           description="The table and phase summary below contain the same information."
         >
-          <Mermaid />
+          <div
+            className="responsive-scroll-region"
+            role="region"
+            aria-label="Strategy phase diagram — scroll horizontally for the full diagram"
+            tabIndex={0}
+          >
+            <p className="text-sm text-slate-400">Diagram unavailable; see the accessible table below.</p>
+          </div>
         </ErrorBoundary>
-      <figure className="min-w-0">
-        <div
-          className="responsive-scroll-region"
-          role="region"
-          aria-label="Strategy phase diagram — scroll horizontally for the full diagram"
-          tabIndex={0}
-        >
-          <Mermaid />
-        </div>
 
         <figcaption>
           Visual representation of the market strategy lifecycle. Time range:

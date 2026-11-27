@@ -196,12 +196,10 @@ function PaginationBar({
 
   return (
     <div className="flex items-center justify-between border-t border-[#30363d] px-4 py-2 text-xs text-[#8b949e]">
-      <span>
+      <span data-testid="data-table-result-count">
         {total === 0
           ? 'No results'
           : `${formatNumber(from, locale, { maximumFractionDigits: 0 })}–${formatNumber(to, locale, { maximumFractionDigits: 0 })} of ${formatNumber(total, locale, { maximumFractionDigits: 0 })}`}
-      <span data-testid="data-table-result-count">
-        {total === 0 ? 'No results' : `${from}–${to} of ${total}`}
       </span>
 
       <div className="flex items-center gap-1">
@@ -210,7 +208,6 @@ function PaginationBar({
           onClick={() => onPageChange(1)}
           disabled={page === 1}
           aria-label="First page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
           className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           «
@@ -220,7 +217,6 @@ function PaginationBar({
           onClick={() => onPageChange(page - 1)}
           disabled={page === 1}
           aria-label="Previous page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
           className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ‹
@@ -235,7 +231,6 @@ function PaginationBar({
           onClick={() => onPageChange(page + 1)}
           disabled={page >= pageCount}
           aria-label="Next page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
           className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           ›
@@ -245,7 +240,6 @@ function PaginationBar({
           onClick={() => onPageChange(pageCount)}
           disabled={page >= pageCount}
           aria-label="Last page"
-          className="rounded px-1.5 py-0.5 hover:bg-[#21262d] disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff]"
           className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded px-1.5 py-0.5 hover:bg-[#21262d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00d9ff] disabled:cursor-not-allowed disabled:opacity-40"
         >
           »
@@ -408,8 +402,7 @@ export function DataTable<T>({
       {/* ── Table ──────────────────────────────────────────────────────────── */}
       <div ref={resultsRef} className="overflow-x-auto">
         <table
-          className="min-w-full text-start text-sm"
-          className="min-w-[36rem] w-full text-left text-sm"
+          className="min-w-[36rem] w-full text-start text-sm"
           data-testid={dataTestId ? `${dataTestId}-table` : undefined}
         >
           {(caption ?? title) && <caption className="sr-only">{caption ?? title}</caption>}

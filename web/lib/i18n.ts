@@ -13,18 +13,32 @@ import { DEFAULT_LOCALE, normalizeLocale } from "./locale/locales";
 
 async function loadMessages(locale: string): Promise<Record<string, string>> {
   const resolvedLocale = normalizeLocale(locale);
-  const defaultMessages: Record<string, string> = (
-    await import(`../messages/${resolvedLocale}.json`)
+  const englishMessages: Record<string, string> = (
+    await import("../messages/en.json")
   ).default;
+  const localizedMessages: Record<string, string> =
+    resolvedLocale === DEFAULT_LOCALE
+      ? englishMessages
+      : (await import(`../messages/${resolvedLocale}.json`)).default;
+  // Fall back to English for keys a locale has not translated yet.
+  const defaultMessages: Record<string, string> = {
+    ...englishMessages,
+    ...localizedMessages,
+  };
 
   const managerLabel = process.env.NEXT_PUBLIC_MANAGER_LABEL?.trim();
   if (!managerLabel) return defaultMessages;
 
   try {
-    const managerOverrides: Partial<Record<string, string>> = (
+    const managerOverrides: Record<string, string | undefined> = (
       await import(`../messages/${managerLabel}.json`)
     ).default;
-    return { ...defaultMessages, ...managerOverrides };
+    const overrides = Object.fromEntries(
+      Object.entries(managerOverrides).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+    return { ...defaultMessages, ...overrides };
   } catch {
     console.warn(
       `[i18n] Manager override "${managerLabel}" messages file not found. Using defaults.`,

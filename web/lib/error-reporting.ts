@@ -30,7 +30,7 @@ export function reportError(error: unknown, context: ReportingContext = {}): voi
     message: normalizedError.message,
     name: normalizedError.name,
     stack: normalizedError.stack,
-    ...sanitizeForLog(context),
+    ...(sanitizeForLog(context) as Record<string, unknown>),
     route: context.route ?? getCurrentRoute(),
   };
 

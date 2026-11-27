@@ -57,7 +57,7 @@ export function createUseStore<T extends object>(store: StoreApi<T>) {
     selector: (state: T) => U,
     equalityFn: (a: U, b: U) => boolean = Object.is,
   ): U {
-    const cached = useRef<U>();
+    const cached = useRef<U | undefined>(undefined);
     const hasCached = useRef(false);
 
     const getSnapshot = () => {

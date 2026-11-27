@@ -8,7 +8,9 @@ const nextConfig = {
   // reverse proxy / CDN, see docs/compression.md.
   compress: true,
   transpilePackages: ["@creit.tech/stellar-wallets-kit"],
-  turbopack: {},
+  turbopack: {
+    root: require("path").resolve(__dirname, ".."),
+  },
 
   // Locale routing (issue #700). Without this block `router.locale` is
   // always undefined, `next-intl` always loads `messages/en.json`, and the
@@ -65,7 +67,7 @@ const nextConfig = {
      *
      * Resolves #686 — Optimize bundle size.
      */
-    optimizeCss: true,
+    optimizeCss: false,
   },
 
   /**

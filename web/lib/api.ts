@@ -22,13 +22,13 @@ const DEFAULT_DEV_API_URL = "http://localhost:8080";
 export class ValidationError extends DtoValidationError {}
 
 export async function validateAnalyzeRequest(req: AnalyzeRequest): Promise<AnalyzeRequest> {
-  return validateDto(AnalyzeRequestDto, req);
+  return (await validateDto(AnalyzeRequestDto, req)) as AnalyzeRequest;
 }
 
 export async function validateAnalyzeWasmRequest(
   req: AnalyzeWasmRequest,
 ): Promise<AnalyzeWasmRequest> {
-  return validateDto(AnalyzeWasmRequestDto, req);
+  return (await validateDto(AnalyzeWasmRequestDto, req)) as AnalyzeWasmRequest;
 }
 
 const isProduction = process.env.NODE_ENV === "production";
